@@ -115,6 +115,7 @@ export default function App() {
 
   // Strict Master Admin Verification
   const isSuperAdminUser = Boolean(currentUser?.email && isSuperAdmin(currentUser.email));
+  const isAdmin = isSuperAdminUser;
 
   // Derived capability flags
   const canAccessDailyEntry = isSuperAdminUser || Boolean(userPermissions.dailyEntry ?? userPermissions.canAccessDailyEntry);
@@ -1018,8 +1019,8 @@ export default function App() {
         </div>
       )}
 
-      {/* PWA Install Banner */}
-      <PWAInstallBanner variant="banner" />
+      {/* PWA Install Banner - Only visible to Master Admin */}
+      {isAdmin && <PWAInstallBanner variant="banner" />}
 
       {/* Top Application Header */}
       <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 shadow-sm">
@@ -1074,23 +1075,27 @@ export default function App() {
               </button>
             )}
 
-            {/* Download Backup Header Button */}
-            {canExportData && (
-              <button
-                id="header-download-backup-btn"
-                onClick={handleDownloadBackup}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95"
-                title="Download full JSON backup of all riders, deliveries, and settlements"
-              >
-                <Download className="w-3.5 h-3.5 text-blue-400" />
-                <span className="hidden sm:inline">Backup</span>
-                <span className="sm:hidden">Backup</span>
-              </button>
-            )}
+            {/* सिर्फ Master Admin को ही Backup, Restore, PWA और Sync दिखेगा */}
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                {/* PWA Button */}
+                <div className="btn-pwa">
+                  <PWAInstallBanner variant="button" />
+                </div>
 
-            {/* Direct Restore Backup Button right next to Backup */}
-            {canExportData && (
-              <>
+                {/* Backup Button */}
+                <button
+                  id="header-download-backup-btn"
+                  onClick={handleDownloadBackup}
+                  className="btn-backup flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+                  title="Download full JSON backup of all riders, deliveries, and settlements"
+                >
+                  <Download className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="hidden sm:inline">Backup</span>
+                  <span className="sm:hidden">Backup</span>
+                </button>
+
+                {/* Restore Button */}
                 <input
                   type="file"
                   id="header-restore-file-input"
@@ -1103,7 +1108,7 @@ export default function App() {
                   id="header-restore-backup-btn"
                   onClick={() => restoreFileInputRef.current?.click()}
                   disabled={isRestoringBackup}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn-restore flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                   title="Upload JSON backup file to load all riders and entries directly into the database"
                 >
                   {isRestoringBackup ? (
@@ -1115,22 +1120,19 @@ export default function App() {
                   <span className="sm:hidden">{isRestoringBackup ? '...' : 'Restore'}</span>
                 </button>
 
-                {/* Sync from Old App URL Header Button */}
+                {/* Sync Button */}
                 <button
                   id="header-sync-old-app-btn"
                   onClick={() => setIsSyncOldAppModalOpen(true)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-bold shadow-sm shadow-amber-600/20 border border-amber-500/40 transition active:scale-95 cursor-pointer"
+                  className="btn-sync flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-bold shadow-sm shadow-amber-600/20 border border-amber-500/40 transition active:scale-95 cursor-pointer"
                   title="Sync from Old App URL: Import all 13+ riders, delivery entries, and dues from your previous app"
                 >
                   <CloudDownload className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Sync Old App</span>
                   <span className="sm:hidden">Sync</span>
                 </button>
-              </>
+              </div>
             )}
-
-            {/* PWA Install Header Button */}
-            <PWAInstallBanner variant="button" />
 
             {/* User Account & Cloud Sync Menu */}
             <UserAccountMenu
@@ -1140,8 +1142,8 @@ export default function App() {
                 setAuthModalMode(mode || 'signin');
                 setIsAuthModalOpen(true);
               }}
-              onDownloadBackup={handleDownloadBackup}
-              onOpenSyncOldApp={() => setIsSyncOldAppModalOpen(true)}
+              onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
+              onOpenSyncOldApp={isAdmin ? () => setIsSyncOldAppModalOpen(true) : undefined}
             />
           </div>
         </div>
@@ -1367,7 +1369,7 @@ export default function App() {
           <AnalyticsReportsTab
             riders={dashboardRiders}
             entries={dashboardEntries}
-            onDownloadBackup={handleDownloadBackup}
+            onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
           />
         )}
 
@@ -1547,13 +1549,15 @@ export default function App() {
         initialMode={authModalMode}
       />
 
-      {/* Sync from Old App URL Modal */}
-      <SyncOldAppModal
-        isOpen={isSyncOldAppModalOpen}
-        onClose={() => setIsSyncOldAppModalOpen(false)}
-        onImportComplete={handleConfirmSyncOldApp}
-        currentOwnerEmail={inspectedUser ? inspectedUser.email : (currentUser?.email || null)}
-      />
+      {/* Sync from Old App URL Modal - Strictly for Master Admin */}
+      {isAdmin && isSyncOldAppModalOpen && (
+        <SyncOldAppModal
+          isOpen={isSyncOldAppModalOpen}
+          onClose={() => setIsSyncOldAppModalOpen(false)}
+          onImportComplete={handleConfirmSyncOldApp}
+          currentOwnerEmail={inspectedUser ? inspectedUser.email : (currentUser?.email || null)}
+        />
+      )}
     </div>
   );
 }
