@@ -36,9 +36,30 @@ import {
   FileText,
   ChevronDown,
   ExternalLink,
-  CloudDownload
+  CloudDownload,
+  CreditCard,
+  QrCode,
+  Upload,
+  Image as ImageIcon,
+  Trash2,
+  Calendar,
+  DollarSign,
+  Receipt,
+  X
 } from 'lucide-react';
-import { AppUser, UserPermissions, DEFAULT_USER_PERMISSIONS, Rider, DeliveryEntry, SettlementRecord } from '../types';
+import { 
+  AppUser, 
+  UserPermissions, 
+  DEFAULT_USER_PERMISSIONS, 
+  Rider, 
+  DeliveryEntry, 
+  SettlementRecord,
+  DefaultSubscriptionConfig,
+  DEFAULT_SUBSCRIPTION_CONFIG,
+  UserPlanType,
+  UserPaymentStatus,
+  UserSubscription
+} from '../types';
 import { 
   subscribeToAllUsers, 
   setUserStatus, 
@@ -50,15 +71,21 @@ import {
   unblockUser,
   fetchUserCounts,
   fetchUserWorkspaceData,
+  saveDefaultSubscriptionConfig,
+  subscribeToDefaultSubscriptionConfig,
+  updateUserSubscription,
   SUPER_ADMIN_EMAIL, 
   isSuperAdmin 
 } from '../services/firestoreSync';
+import { validateImageFile, compressAndEncodeImage } from '../utils/imageUpload';
 import { getAppShareUrl, copyAppShareLink, SHARE_SUCCESS_MESSAGE } from '../utils/shareLink';
 import { exportBulkRidersToCSV, exportSingleRiderToCSV } from '../utils/csvExport';
 import { generatePayoutPDF } from '../utils/pdfGenerator';
 import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
 import { UserManagementModal } from './UserManagementModal';
 import { SingleRiderDetailModal } from './SingleRiderDetailModal';
+import { AdminBillingExpiryAndSlips } from './AdminBillingExpiryAndSlips';
+import { FreeToPaidConversionModal } from './FreeToPaidConversionModal';
 
 interface AdminDashboardTabProps {
   currentAdminEmail?: string | null;
@@ -81,6 +108,31 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   
   // Managing user (opens UserManagementModal for full rider & rate controls)
   const [managingUser, setManagingUser] = useState<AppUser | null>(null);
+
+  // Configurable Default Subscription for New Users
+  const [defaultSubConfig, setDefaultSubConfig] = useState<DefaultSubscriptionConfig>(DEFAULT_SUBSCRIPTION_CONFIG);
+  const [tempSubConfig, setTempSubConfig] = useState<DefaultSubscriptionConfig>(DEFAULT_SUBSCRIPTION_CONFIG);
+  const [showSubConfigModal, setShowSubConfigModal] = useState(false);
+  const [savingSubConfig, setSavingSubConfig] = useState(false);
+
+  // Navigation between User Management and Subscription & Billing Management
+  const [activeAdminSection, setActiveAdminSection] = useState<'users' | 'subscriptions'>('users');
+
+  // Subscription filters & search
+  const [subFilter, setSubFilter] = useState<'all' | 'paid' | 'free' | 'verification_pending' | 'expired'>('all');
+  const [subSearchQuery, setSubSearchQuery] = useState('');
+
+  // Draft monthly fee per user for typing before saving
+  const [feeDrafts, setFeeDrafts] = useState<Record<string, number | string>>({});
+  // Loading state when uploading QR per user
+  const [uploadingQrUserId, setUploadingQrUserId] = useState<string | null>(null);
+
+  // QR Preview Modal
+  const [qrModalUser, setQrModalUser] = useState<AppUser | null>(null);
+  // Slip Review Modal
+  const [slipReviewUser, setSlipReviewUser] = useState<AppUser | null>(null);
+  // Free to Paid Conversion Modal
+  const [convertingToPaidUser, setConvertingToPaidUser] = useState<AppUser | null>(null);
 
   // Action loading state (per user uid or per permission)
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
@@ -122,6 +174,34 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
 
     return () => unsubscribe();
   }, [isAuthorizedAdmin]);
+
+  // Subscribe to real-time default subscription settings
+  useEffect(() => {
+    const unsubSub = subscribeToDefaultSubscriptionConfig((config) => {
+      setDefaultSubConfig(config);
+    });
+    return () => unsubSub();
+  }, []);
+
+  const handleOpenSubConfigModal = () => {
+    setTempSubConfig({ ...defaultSubConfig });
+    setShowSubConfigModal(true);
+  };
+
+  const handleSaveSubConfig = async () => {
+    setSavingSubConfig(true);
+    try {
+      await saveDefaultSubscriptionConfig(tempSubConfig);
+      setDefaultSubConfig(tempSubConfig);
+      setShowSubConfigModal(false);
+      showToast('Default subscription settings for new users saved successfully!', 'success');
+    } catch (err) {
+      console.error('Failed to save default subscription config:', err);
+      showToast('Failed to save subscription configuration.', 'error');
+    } finally {
+      setSavingSubConfig(false);
+    }
+  };
 
   const showToast = (text: string, type: 'success' | 'info' | 'error' = 'success') => {
     setFeedbackToast({ text, type });
@@ -279,6 +359,278 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
         entries: prev.entries.map((e) => (e.id === updatedEntry.id ? updatedEntry : e)),
       };
     });
+  };
+
+  // Subscription Statistics
+  const subStats = useMemo(() => {
+    const total = users.length;
+    let freeCount = 0;
+    let paidCount = 0;
+    let activePaidCount = 0;
+    let slipPendingCount = 0;
+    let expiredCount = 0;
+    let projectedMonthlyRevenue = 0;
+
+    const now = Date.now();
+
+    users.forEach((u) => {
+      const sub = u.subscription;
+      if (!sub || sub.planType === 'free') {
+        freeCount++;
+      } else {
+        paidCount++;
+        projectedMonthlyRevenue += (sub.monthlyFee || 0);
+
+        const isDateExpired = sub.validUntil ? new Date(sub.validUntil).getTime() < now : false;
+
+        if (sub.paymentStatus === 'verification_pending') {
+          slipPendingCount++;
+        } else if (sub.paymentStatus === 'expired' || isDateExpired) {
+          expiredCount++;
+        } else if (sub.paymentStatus === 'active') {
+          activePaidCount++;
+        }
+      }
+    });
+
+    return {
+      total,
+      freeCount,
+      paidCount,
+      activePaidCount,
+      slipPendingCount,
+      expiredCount,
+      projectedMonthlyRevenue,
+    };
+  }, [users]);
+
+  // Filtered Users for Subscription & Billing Table
+  const filteredSubUsers = useMemo(() => {
+    return users.filter((u) => {
+      const sub = u.subscription;
+      const isFree = !sub || sub.planType === 'free';
+      const isPaid = sub?.planType === 'paid';
+      const isSlipPending = sub?.paymentStatus === 'verification_pending';
+      const isExpired = sub?.paymentStatus === 'expired' || 
+        Boolean(isPaid && sub?.validUntil && new Date(sub.validUntil).getTime() < Date.now());
+
+      if (subFilter === 'free' && !isFree) return false;
+      if (subFilter === 'paid' && !isPaid) return false;
+      if (subFilter === 'verification_pending' && !isSlipPending) return false;
+      if (subFilter === 'expired' && !isExpired) return false;
+
+      if (subSearchQuery.trim()) {
+        const q = subSearchQuery.toLowerCase();
+        const matchesName = (u.displayName || u.name || '').toLowerCase().includes(q);
+        const matchesEmail = (u.email || '').toLowerCase().includes(q);
+        const matchesUid = (u.uid || '').toLowerCase().includes(q);
+        if (!matchesName && !matchesEmail && !matchesUid) return false;
+      }
+
+      return true;
+    });
+  }, [users, subFilter, subSearchQuery]);
+
+  // Switch Plan Type ('free' vs 'paid')
+  const handleToggleUserPlan = async (user: AppUser, targetPlan: 'free' | 'paid') => {
+    if (targetPlan === 'paid') {
+      // Open Free to Paid conversion modal to set monthly fee, QR code, and validity start date
+      setConvertingToPaidUser(user);
+      return;
+    }
+
+    // Switch back to FREE plan: Immediately clear all payment locks and alerts for that user
+    setActionLoadingId(`plan-${user.uid}`);
+    try {
+      const updatedSub = await updateUserSubscription(user.uid, {
+        planType: 'free',
+        paymentStatus: 'active',
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+
+      showToast(
+        `Switched ${user.displayName || user.email} to FREE plan. All payment locks and alerts have been immediately cleared.`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Failed to switch subscription plan to free:', err);
+      alert('Failed to switch subscription plan in Firestore: ' + (err?.message || err));
+      showToast('Failed to switch subscription plan to free.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Confirm Free-to-Paid Plan Conversion
+  const handleConfirmFreeToPaid = async (
+    targetUser: AppUser,
+    config: { monthlyFee: number; validUntil: string; qrCodeUrl: string }
+  ) => {
+    setActionLoadingId(`plan-${targetUser.uid}`);
+    try {
+      const updatedSub = await updateUserSubscription(targetUser.uid, {
+        planType: 'paid',
+        monthlyFee: config.monthlyFee,
+        validUntil: config.validUntil,
+        qrCodeUrl: config.qrCodeUrl,
+        paymentStatus: 'active',
+      });
+      setUsers(prev => prev.map(u => u.uid === targetUser.uid ? { ...u, subscription: updatedSub } : u));
+      showToast(
+        `Successfully converted ${targetUser.displayName || targetUser.email} to Paid Plan (₹${config.monthlyFee}/mo)!`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Failed to convert user to paid plan:', err);
+      alert('Failed to convert user to paid plan in Firestore: ' + (err?.message || err));
+      showToast('Failed to convert user to paid plan.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Update Custom Monthly Fee (₹)
+  const handleSaveMonthlyFee = async (user: AppUser, feeToSave?: number) => {
+    const rawValue = feeToSave !== undefined ? feeToSave : feeDrafts[user.uid];
+    const newFee = typeof rawValue === 'number' 
+      ? Math.max(0, rawValue) 
+      : typeof rawValue === 'string' && rawValue !== '' 
+      ? Math.max(0, parseInt(rawValue, 10) || 0)
+      : user.subscription?.monthlyFee || 499;
+
+    setActionLoadingId(`fee-${user.uid}`);
+    try {
+      const updatedSub = await updateUserSubscription(user.uid, {
+        monthlyFee: newFee,
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+      // Clear draft
+      setFeeDrafts(prev => {
+        const copy = { ...prev };
+        delete copy[user.uid];
+        return copy;
+      });
+      showToast(`Saved monthly fee ₹${newFee} for ${user.displayName || user.email}!`, 'success');
+    } catch (err: any) {
+      console.error('Failed to update monthly fee:', err);
+      alert('Failed to save monthly fee in Firestore: ' + (err?.message || err));
+      showToast('Failed to save monthly fee in Firestore.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Upload Custom UPI QR Code file for user
+  const handleUploadUserQrFile = async (user: AppUser, file: File) => {
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      showToast(validation.error || 'Please select a valid image file.', 'error');
+      return;
+    }
+
+    setUploadingQrUserId(user.uid);
+    try {
+      const dataUrl = await compressAndEncodeImage(file, 500, 500, 0.88);
+      const updatedSub = await updateUserSubscription(user.uid, {
+        qrCodeUrl: dataUrl,
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+      showToast(`Custom UPI QR Code saved for ${user.displayName || user.email}!`, 'success');
+    } catch (err: any) {
+      console.error('Failed to upload custom QR code:', err);
+      alert('Failed to upload custom QR code in Firestore: ' + (err?.message || err));
+      showToast('Failed to upload custom QR code. Please try another image.', 'error');
+    } finally {
+      setUploadingQrUserId(null);
+    }
+  };
+
+  // Remove QR Code
+  const handleRemoveUserQr = async (user: AppUser) => {
+    setActionLoadingId(`qr-${user.uid}`);
+    try {
+      const updatedSub = await updateUserSubscription(user.uid, {
+        qrCodeUrl: '',
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+      showToast(`Removed custom QR code for ${user.displayName || user.email}`, 'info');
+    } catch (err: any) {
+      console.error('Failed to remove QR code:', err);
+      alert('Failed to remove QR code in Firestore: ' + (err?.message || err));
+      showToast('Failed to remove QR code.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Quick Extend Subscription by 30 days
+  const handleExtendUserDays = async (user: AppUser, days = 30) => {
+    setActionLoadingId(`extend-${user.uid}`);
+    try {
+      const currentValidUntil = user.subscription?.validUntil;
+      const baseTime = currentValidUntil && new Date(currentValidUntil).getTime() > Date.now()
+        ? new Date(currentValidUntil).getTime()
+        : Date.now();
+      const newValidUntil = new Date(baseTime + days * 24 * 60 * 60 * 1000).toISOString();
+
+      const updatedSub = await updateUserSubscription(user.uid, {
+        validUntil: newValidUntil,
+        paymentStatus: 'active',
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+      showToast(`Extended ${user.displayName || user.email}'s plan by +${days} days (Active)!`, 'success');
+    } catch (err: any) {
+      console.error('Failed to extend plan:', err);
+      alert('Failed to extend subscription in Firestore: ' + (err?.message || err));
+      showToast('Failed to extend subscription in Firestore.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Approve Payment Slip
+  const handleApproveSlip = async (user: AppUser) => {
+    setActionLoadingId(`slip-${user.uid}`);
+    try {
+      const currentValidUntil = user.subscription?.validUntil;
+      const baseTime = currentValidUntil && new Date(currentValidUntil).getTime() > Date.now()
+        ? new Date(currentValidUntil).getTime()
+        : Date.now();
+      const newValidUntil = new Date(baseTime + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+      const updatedSub = await updateUserSubscription(user.uid, {
+        validUntil: newValidUntil,
+        paymentStatus: 'active',
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+      setSlipReviewUser(null);
+      showToast(`Payment slip approved for ${user.displayName || user.email}! Plan active for +30 days.`, 'success');
+    } catch (err: any) {
+      console.error('Failed to approve slip:', err);
+      alert('Failed to approve payment slip in Firestore: ' + (err?.message || err));
+      showToast('Failed to approve payment slip in Firestore.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Reject Payment Slip
+  const handleRejectSlip = async (user: AppUser) => {
+    setActionLoadingId(`slip-reject-${user.uid}`);
+    try {
+      const updatedSub = await updateUserSubscription(user.uid, {
+        paymentStatus: 'expired',
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+      setSlipReviewUser(null);
+      showToast(`Payment slip rejected. Status set to expired for ${user.displayName || user.email}`, 'info');
+    } catch (err: any) {
+      console.error('Failed to reject slip:', err);
+      alert('Failed to reject payment slip in Firestore: ' + (err?.message || err));
+      showToast('Failed to reject payment slip.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
   };
 
   // Instant 1-Click Approve User
@@ -529,9 +881,73 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
         </div>
       </div>
 
-      {/* SECTION: App Share Link on Display */}
-      <div 
-        id="admin-share-link-card"
+      {/* SECTION: Admin Section Tab Switcher */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-2 bg-slate-900/90 border border-slate-800 rounded-2xl shadow-lg">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            id="admin-nav-users-tab"
+            type="button"
+            onClick={() => setActiveAdminSection('users')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition cursor-pointer ${
+              activeAdminSection === 'users'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span>User Accounts & Permissions</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeAdminSection === 'users' ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300'
+            }`}>
+              {users.length}
+            </span>
+          </button>
+
+          <button
+            id="admin-nav-subscriptions-tab"
+            type="button"
+            onClick={() => setActiveAdminSection('subscriptions')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition relative cursor-pointer ${
+              activeAdminSection === 'subscriptions'
+                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>Subscription & Billing Management</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeAdminSection === 'subscriptions' ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-300'
+            }`}>
+              {subStats.paidCount} Paid / {subStats.freeCount} Free
+            </span>
+            {subStats.slipPendingCount > 0 && (
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            id="admin-quick-default-sub-btn"
+            onClick={handleOpenSubConfigModal}
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
+            title="Configure default subscription plan, fee, and status for newly registering users"
+          >
+            <Sliders className="w-3.5 h-3.5 text-amber-400" />
+            <span>New User Default ({defaultSubConfig.planType === 'paid' ? `₹${defaultSubConfig.monthlyFee}/mo` : 'Free'})</span>
+          </button>
+        </div>
+      </div>
+
+      {activeAdminSection === 'users' ? (
+        <div className="space-y-8">
+          {/* SECTION: App Share Link on Display */}
+          <div 
+            id="admin-share-link-card"
         className="bg-gradient-to-r from-blue-950/40 via-slate-900 to-indigo-950/40 border border-blue-500/30 rounded-2xl p-5 sm:p-6 shadow-xl relative overflow-hidden"
       >
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -578,6 +994,17 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
             >
               <Share2 className="w-4 h-4" />
               <span>Share App Link</span>
+            </button>
+
+            <button
+              type="button"
+              id="admin-default-subscription-btn"
+              onClick={handleOpenSubConfigModal}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/25 transition active:scale-95 flex items-center gap-2 shrink-0 cursor-pointer"
+              title="Configure default subscription plan, monthly fee, and trial duration for new users"
+            >
+              <CreditCard className="w-4 h-4" />
+              <span>New User Subscription ({defaultSubConfig.planType === 'paid' ? `₹${defaultSubConfig.monthlyFee}/mo` : 'Free'})</span>
             </button>
 
             {onOpenSyncOldApp && (
@@ -1361,6 +1788,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                   <th className="py-3.5 px-4 sm:px-6">User Name</th>
                   <th className="py-3.5 px-4">Email ID</th>
                   <th className="py-3.5 px-4 text-center">Status</th>
+                  <th className="py-3.5 px-4 text-center">Subscription</th>
                   <th className="py-3.5 px-4">Feature Permissions</th>
                   <th className="py-3.5 px-4 sm:px-6 text-right">Action Controls</th>
                 </tr>
@@ -1486,6 +1914,34 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                           }`} />
                           {isPending ? 'Pending' : isBlocked ? 'Blocked' : 'Approved'}
                         </span>
+                      </td>
+
+                      {/* 3b. Subscription Plan & Payment Status */}
+                      <td className="py-4 px-4 text-center">
+                        <div className="inline-flex flex-col items-center gap-1">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            user.subscription?.planType === 'paid'
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                              : 'bg-slate-800 text-slate-300 border-slate-700'
+                          }`}>
+                            <CreditCard className="w-2.5 h-2.5" />
+                            {user.subscription?.planType === 'paid' ? `Paid (₹${user.subscription.monthlyFee ?? 0})` : 'Free'}
+                          </span>
+
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-medium border ${
+                            user.subscription?.paymentStatus === 'active'
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                              : user.subscription?.paymentStatus === 'verification_pending'
+                              ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 animate-pulse'
+                              : user.subscription?.paymentStatus === 'expiring_soon'
+                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          }`}>
+                            {user.subscription?.paymentStatus === 'verification_pending'
+                              ? 'Slip Pending'
+                              : (user.subscription?.paymentStatus || 'Active').replace('_', ' ')}
+                          </span>
+                        </div>
                       </td>
 
                       {/* 4. Feature Permissions (Live Click to Toggle) */}
@@ -1793,6 +2249,27 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                       </div>
                     </div>
 
+                    {/* Subscription summary badge on mobile */}
+                    <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                      <div className="flex items-center gap-1.5">
+                        <CreditCard className="w-3.5 h-3.5 text-blue-400" />
+                        <span className="font-semibold text-slate-200 text-xs">
+                          {user.subscription?.planType === 'paid' ? `Paid (₹${user.subscription.monthlyFee ?? 0}/mo)` : 'Free Plan'}
+                        </span>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        user.subscription?.paymentStatus === 'active'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : user.subscription?.paymentStatus === 'verification_pending'
+                          ? 'bg-blue-500/20 text-blue-300 animate-pulse'
+                          : user.subscription?.paymentStatus === 'expiring_soon'
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : 'bg-rose-500/20 text-rose-300'
+                      }`}>
+                        {user.subscription?.paymentStatus === 'verification_pending' ? 'Verification Pending' : (user.subscription?.paymentStatus || 'Active').replace('_', ' ')}
+                      </span>
+                    </div>
+
                     {/* Action buttons on mobile */}
                     <div className="flex items-center gap-2 pt-2 border-t border-slate-850 flex-wrap">
                       {isPending && (
@@ -1869,6 +2346,726 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
           </div>
         )}
       </div>
+      </div>
+      ) : (
+        <div className="space-y-6 animate-in fade-in">
+          {/* Top-Level Expiry Alerts (48-Hour) & Pending Slips Approval Section */}
+          <AdminBillingExpiryAndSlips
+            users={users}
+            onApproveSlip={handleApproveSlip}
+            onRejectSlip={handleRejectSlip}
+            onExtendDays={handleExtendUserDays}
+            onOpenQrModal={(user) => setQrModalUser(user)}
+            onOpenSlipReviewModal={(user) => setSlipReviewUser(user)}
+            onManageUser={(user) => setManagingUser(user)}
+            actionLoadingId={actionLoadingId}
+          />
+
+          {/* Subscription KPI Metric Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+            {/* 1. Total Registered Accounts */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                <span>Total Users</span>
+                <Users className="w-4 h-4 text-blue-400" />
+              </div>
+              <div className="mt-2 text-2xl font-extrabold text-white">{users.length}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">Registered accounts</div>
+            </div>
+
+            {/* 2. Free Plan Accounts */}
+            <div className="bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between text-emerald-400 text-xs font-semibold uppercase tracking-wider">
+                <span>Free Plan</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              </div>
+              <div className="mt-2 text-2xl font-extrabold text-emerald-400">{subStats.freeCount}</div>
+              <div className="text-[11px] text-emerald-400/80 mt-0.5 font-medium">Never receives alerts or locks</div>
+            </div>
+
+            {/* 3. Paid Plan Accounts */}
+            <div className="bg-slate-900/90 border border-amber-500/30 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between text-amber-400 text-xs font-semibold uppercase tracking-wider">
+                <span>Paid Plan</span>
+                <CreditCard className="w-4 h-4 text-amber-400" />
+              </div>
+              <div className="mt-2 text-2xl font-extrabold text-amber-400">{subStats.paidCount}</div>
+              <div className="text-[11px] text-amber-400/80 mt-0.5">Custom monthly billing</div>
+            </div>
+
+            {/* 4. Active Subscriptions */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                <span>Active Subscriptions</span>
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div className="mt-2 text-2xl font-extrabold text-emerald-300">{subStats.activePaidCount}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">Paid and verified</div>
+            </div>
+
+            {/* 5. Slips Pending Verification */}
+            <div className={`rounded-2xl p-4 border transition shadow-sm ${
+              subStats.slipPendingCount > 0 
+                ? 'bg-amber-950/30 border-amber-500 shadow-amber-500/10' 
+                : 'bg-slate-900/90 border-slate-800'
+            }`}>
+              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
+                <span className={subStats.slipPendingCount > 0 ? 'text-amber-300 font-bold' : 'text-slate-400'}>
+                  Slips Pending
+                </span>
+                <Clock className={`w-4 h-4 ${subStats.slipPendingCount > 0 ? 'text-amber-400 animate-pulse' : 'text-slate-500'}`} />
+              </div>
+              <div className={`mt-2 text-2xl font-extrabold ${subStats.slipPendingCount > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
+                {subStats.slipPendingCount}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-0.5">
+                {subStats.slipPendingCount > 0 ? 'Review & approve slips' : 'All slips reviewed'}
+              </div>
+            </div>
+
+            {/* 6. Projected Monthly SaaS Revenue */}
+            <div className="bg-slate-900/90 border border-teal-500/30 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between text-teal-400 text-xs font-semibold uppercase tracking-wider">
+                <span>Monthly Revenue</span>
+                <span className="font-bold text-teal-400">₹</span>
+              </div>
+              <div className="mt-2 text-2xl font-extrabold text-teal-300">
+                ₹{subStats.projectedMonthlyRevenue.toLocaleString('en-IN')}
+              </div>
+              <div className="text-[11px] text-teal-400/80 mt-0.5">Sum of active fees</div>
+            </div>
+          </div>
+
+          {/* Search, Filter Bar & Global Defaults */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-sm">
+            {/* Search Input */}
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                id="admin-sub-search-input"
+                type="text"
+                value={subSearchQuery}
+                onChange={(e) => setSubSearchQuery(e.target.value)}
+                placeholder="Search users by name, email, or UID..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500 transition"
+              />
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                { id: 'all', label: 'All Users', count: users.length },
+                { id: 'paid', label: 'Paid Plan', count: subStats.paidCount },
+                { id: 'free', label: 'Free Plan', count: subStats.freeCount },
+                { id: 'verification_pending', label: 'Slip Pending', count: subStats.slipPendingCount, alert: subStats.slipPendingCount > 0 },
+                { id: 'expired', label: 'Expired', count: subStats.expiredCount }
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setSubFilter(tab.id as any)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                    subFilter === tab.id
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    tab.alert
+                      ? 'bg-amber-500 text-slate-950 font-bold animate-pulse'
+                      : subFilter === tab.id
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}>
+                    {tab.count}
+                  </span>
+                </button>
+              ))}
+
+              <button
+                type="button"
+                id="sub-global-default-btn"
+                onClick={handleOpenSubConfigModal}
+                className="px-3.5 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition flex items-center gap-1.5 ml-auto cursor-pointer"
+                title="Configure default plan, monthly fee, and trial duration for newly registering users"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>New User Defaults</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Table / List of all registered users with their current subscription status */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-emerald-400" />
+                  <span>Subscription & Billing Registry</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Set plan type, custom monthly fees (₹), upload custom UPI QR codes, and approve payment slips. Settings save directly to Firestore.
+                </p>
+              </div>
+
+              <span className="text-xs text-slate-400 font-mono">
+                Showing {filteredSubUsers.length} of {users.length} users
+              </span>
+            </div>
+
+            {filteredSubUsers.length === 0 ? (
+              <div className="p-12 text-center text-slate-400 text-sm">
+                <CreditCard className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                <span>No registered users match the selected subscription filter.</span>
+              </div>
+            ) : (
+              <>
+                {/* Desktop Table View */}
+                <div className="hidden lg:block overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-950/70 border-b border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                        <th className="py-3 px-4">User Details</th>
+                        <th className="py-3 px-4">Plan Selector (Free vs Paid)</th>
+                        <th className="py-3 px-4">Monthly Fee (₹)</th>
+                        <th className="py-3 px-4">Custom UPI QR Code</th>
+                        <th className="py-3 px-4">Validity & Payment Status</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-xs">
+                      {filteredSubUsers.map((user) => {
+                        const sub = user.subscription;
+                        const planType = sub?.planType || 'free';
+                        const isFree = planType === 'free';
+                        const paymentStatus = sub?.paymentStatus || 'active';
+                        const qrCodeUrl = sub?.qrCodeUrl;
+                        const monthlyFee = sub?.monthlyFee ?? 499;
+                        const feeDraft = feeDrafts[user.uid];
+                        const displayFee = (feeDraft !== undefined && feeDraft !== null) ? feeDraft : (monthlyFee ?? 499);
+                        const isFeeLoading = actionLoadingId === `fee-${user.uid}`;
+                        const isPlanLoading = actionLoadingId === `plan-${user.uid}`;
+                        const isExtendLoading = actionLoadingId === `extend-${user.uid}`;
+                        const isUploadingQr = uploadingQrUserId === user.uid;
+
+                        return (
+                          <tr key={user.uid} className="hover:bg-slate-850/60 transition">
+                            {/* 1. User Details */}
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-3">
+                                {user.photoURL ? (
+                                  <img
+                                    src={user.photoURL}
+                                    alt={user.displayName || user.email}
+                                    className="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                ) : (
+                                  <div className="w-9 h-9 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs shrink-0">
+                                    {(user.displayName || user.name || user.email || 'U').charAt(0).toUpperCase()}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <div className="font-bold text-white truncate flex items-center gap-1.5">
+                                    <span>{user.displayName || user.name || user.email.split('@')[0]}</span>
+                                    {isSuperAdmin(user.email) && (
+                                      <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                        MASTER ADMIN
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-slate-400 text-[11px] truncate">{user.email}</div>
+                                  <div className="flex items-center gap-1 text-[10px] text-slate-500 font-mono mt-0.5">
+                                    <span>UID: {user.uid.slice(0, 8)}...</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(user.uid);
+                                        setCopiedUid(user.uid);
+                                        setTimeout(() => setCopiedUid(null), 2000);
+                                      }}
+                                      className="text-slate-400 hover:text-white"
+                                      title="Copy UID"
+                                    >
+                                      {copiedUid === user.uid ? <Check className="w-2.5 h-2.5 text-emerald-400" /> : <Copy className="w-2.5 h-2.5" />}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 2. Plan Selector Toggle ('Free' vs 'Paid') */}
+                            <td className="py-3.5 px-4">
+                              <div className="space-y-1">
+                                <div className="inline-flex p-0.5 rounded-xl bg-slate-950 border border-slate-800">
+                                  {/* Free Button */}
+                                  <button
+                                    type="button"
+                                    disabled={isPlanLoading}
+                                    onClick={() => handleToggleUserPlan(user, 'free')}
+                                    className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                      isFree
+                                        ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30'
+                                        : 'text-slate-400 hover:text-white'
+                                    }`}
+                                  >
+                                    {isFree && <Check className="w-3 h-3" />}
+                                    <span>Free</span>
+                                  </button>
+
+                                  {/* Paid Button */}
+                                  <button
+                                    type="button"
+                                    disabled={isPlanLoading}
+                                    onClick={() => handleToggleUserPlan(user, 'paid')}
+                                    className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                      !isFree
+                                        ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/30'
+                                        : 'text-slate-400 hover:text-white'
+                                    }`}
+                                  >
+                                    {!isFree && <Check className="w-3 h-3" />}
+                                    <span>Paid</span>
+                                  </button>
+                                </div>
+
+                                <div className="text-[10px] font-medium">
+                                  {isFree ? (
+                                    <span className="text-emerald-400 flex items-center gap-1">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      <span>Never sees alerts or locks</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-amber-400 flex items-center gap-1">
+                                      <CreditCard className="w-3 h-3" />
+                                      <span>Monthly billing enabled</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 3. Editable Monthly Fee (₹) + Preset Chips */}
+                            <td className="py-3.5 px-4">
+                              <div className="space-y-1.5 w-44">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="relative flex-1">
+                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={displayFee}
+                                      onChange={(e) => setFeeDrafts(prev => ({ ...prev, [user.uid]: e.target.value }))}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          handleSaveMonthlyFee(user);
+                                        }
+                                      }}
+                                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-6 pr-2 py-1 text-xs text-white font-bold focus:outline-none focus:border-amber-500 transition"
+                                      placeholder="Fee"
+                                    />
+                                  </div>
+
+                                  {feeDraft !== undefined && (
+                                    <button
+                                      type="button"
+                                      disabled={isFeeLoading}
+                                      onClick={() => handleSaveMonthlyFee(user)}
+                                      className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow transition cursor-pointer"
+                                      title="Save custom monthly fee to Firestore"
+                                    >
+                                      {isFeeLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                    </button>
+                                  )}
+                                </div>
+
+                                {/* Quick Click Preset Chips */}
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  {[199, 299, 499, 999, 1499, 1999].map((preset) => (
+                                    <button
+                                      key={preset}
+                                      type="button"
+                                      onClick={() => handleSaveMonthlyFee(user, preset)}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition border cursor-pointer ${
+                                        monthlyFee === preset && feeDraft === undefined
+                                          ? 'bg-amber-500 text-slate-950 font-bold border-amber-400'
+                                          : 'bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white border-slate-800'
+                                      }`}
+                                      title={`Set fee to ₹${preset} and save directly to Firestore`}
+                                    >
+                                      ₹{preset}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 4. Custom UPI QR Code Image Uploader */}
+                            <td className="py-3.5 px-4">
+                              <div className="space-y-1.5">
+                                {/* Hidden File Input */}
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  id={`qr-upload-${user.uid}`}
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      handleUploadUserQrFile(user, file);
+                                    }
+                                  }}
+                                />
+
+                                {qrCodeUrl ? (
+                                  <div className="flex items-center gap-2">
+                                    {/* Thumbnail Preview */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setQrModalUser(user)}
+                                      className="w-10 h-10 rounded-lg bg-white p-0.5 border border-slate-700 shadow-sm shrink-0 hover:scale-105 transition cursor-pointer"
+                                      title="Click to preview full-size QR Code"
+                                    >
+                                      <img
+                                        src={qrCodeUrl}
+                                        alt="UPI QR Code"
+                                        className="w-full h-full object-contain"
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    </button>
+
+                                    {/* Action Buttons */}
+                                    <div className="flex items-center gap-1">
+                                      <label
+                                        htmlFor={`qr-upload-${user.uid}`}
+                                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                                        title="Upload new QR Image"
+                                      >
+                                        <Upload className="w-3.5 h-3.5" />
+                                      </label>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveUserQr(user)}
+                                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/50 text-slate-400 hover:text-rose-400 transition cursor-pointer"
+                                        title="Remove custom QR"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <label
+                                    htmlFor={`qr-upload-${user.uid}`}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer border ${
+                                      isUploadingQr
+                                        ? 'bg-slate-800 text-slate-400 border-slate-700'
+                                        : 'bg-slate-950 hover:bg-slate-800 text-blue-300 border-blue-500/30 hover:border-blue-500/60'
+                                    }`}
+                                  >
+                                    {isUploadingQr ? (
+                                      <>
+                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                        <span>Uploading...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Upload className="w-3 h-3 text-blue-400" />
+                                        <span>Upload QR</span>
+                                      </>
+                                    )}
+                                  </label>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* 5. Validity & Payment Status */}
+                            <td className="py-3.5 px-4">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-1.5">
+                                  {isFree ? (
+                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                      LIFETIME FREE
+                                    </span>
+                                  ) : (
+                                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                                      paymentStatus === 'active'
+                                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                        : paymentStatus === 'verification_pending'
+                                        ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 animate-pulse'
+                                        : paymentStatus === 'expiring_soon'
+                                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                                        : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                                    }`}>
+                                      {paymentStatus.replace('_', ' ').toUpperCase()}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                                  <span>
+                                    {isFree ? (
+                                      'Never expires'
+                                    ) : sub?.validUntil ? (
+                                      `Expires: ${new Date(sub.validUntil).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                                    ) : (
+                                      'No date set'
+                                    )}
+                                  </span>
+
+                                  {!isFree && (
+                                    <button
+                                      type="button"
+                                      disabled={isExtendLoading}
+                                      onClick={() => handleExtendUserDays(user, 30)}
+                                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-semibold border border-slate-700 transition cursor-pointer"
+                                      title="Add +30 days and mark active"
+                                    >
+                                      +30d
+                                    </button>
+                                  )}
+                                </div>
+
+                                {sub?.lastSubmittedSlip && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSlipReviewUser(user)}
+                                    className="px-2 py-0.5 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 text-[10px] font-bold border border-blue-500/30 flex items-center gap-1 transition cursor-pointer"
+                                  >
+                                    <Receipt className="w-3 h-3 text-blue-400" />
+                                    <span>Review Slip (₹{sub.lastSubmittedSlip.amountPaid})</span>
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* 6. Actions */}
+                            <td className="py-3.5 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setManagingUser(user)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition cursor-pointer flex items-center gap-1"
+                                  title="Open full user management modal"
+                                >
+                                  <Sliders className="w-3 h-3 text-amber-400" />
+                                  <span>Manage</span>
+                                </button>
+
+                                {onInspectUser && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onInspectUser(user)}
+                                    className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition cursor-pointer"
+                                    title="Inspect Workspace"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Responsive Cards View */}
+                <div className="lg:hidden divide-y divide-slate-800/80">
+                  {filteredSubUsers.map((user) => {
+                    const sub = user.subscription;
+                    const planType = sub?.planType || 'free';
+                    const isFree = planType === 'free';
+                    const paymentStatus = sub?.paymentStatus || 'active';
+                    const qrCodeUrl = sub?.qrCodeUrl;
+                    const monthlyFee = sub?.monthlyFee ?? 499;
+                    const feeDraft = feeDrafts[user.uid];
+                    const displayFee = (feeDraft !== undefined && feeDraft !== null) ? feeDraft : (monthlyFee ?? 499);
+                    const isFeeLoading = actionLoadingId === `fee-${user.uid}`;
+                    const isPlanLoading = actionLoadingId === `plan-${user.uid}`;
+                    const isExtendLoading = actionLoadingId === `extend-${user.uid}`;
+                    const isUploadingQr = uploadingQrUserId === user.uid;
+
+                    return (
+                      <div key={user.uid} className="p-4 space-y-3 bg-slate-950/40">
+                        {/* Header: User details */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {user.photoURL ? (
+                              <img
+                                src={user.photoURL}
+                                alt={user.displayName || user.email}
+                                className="w-8 h-8 rounded-full object-cover border border-slate-700"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs">
+                                {(user.displayName || user.name || user.email || 'U').charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <h4 className="font-bold text-white text-xs truncate">
+                                {user.displayName || user.name || user.email.split('@')[0]}
+                              </h4>
+                              <p className="text-[11px] text-slate-400 truncate">{user.email}</p>
+                            </div>
+                          </div>
+
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            isFree
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                          }`}>
+                            {isFree ? 'FREE' : 'PAID'}
+                          </span>
+                        </div>
+
+                        {/* Plan Toggle */}
+                        <div className="flex items-center justify-between p-2 rounded-xl bg-slate-900 border border-slate-800">
+                          <span className="text-xs font-medium text-slate-300">Plan Type</span>
+                          <div className="inline-flex p-0.5 rounded-lg bg-slate-950 border border-slate-800">
+                            <button
+                              type="button"
+                              disabled={isPlanLoading}
+                              onClick={() => handleToggleUserPlan(user, 'free')}
+                              className={`px-3 py-1 rounded-md text-xs font-bold transition ${
+                                isFree ? 'bg-emerald-600 text-white' : 'text-slate-400'
+                              }`}
+                            >
+                              Free
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isPlanLoading}
+                              onClick={() => handleToggleUserPlan(user, 'paid')}
+                              className={`px-3 py-1 rounded-md text-xs font-bold transition ${
+                                !isFree ? 'bg-amber-600 text-white' : 'text-slate-400'
+                              }`}
+                            >
+                              Paid
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Monthly Fee */}
+                        <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-medium text-slate-300">Monthly Fee (₹)</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-slate-400 text-xs font-bold">₹</span>
+                              <input
+                                type="number"
+                                min="0"
+                                value={displayFee}
+                                onChange={(e) => setFeeDrafts(prev => ({ ...prev, [user.uid]: e.target.value }))}
+                                className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-bold text-center"
+                              />
+                              {feeDraft !== undefined && (
+                                <button
+                                  type="button"
+                                  disabled={isFeeLoading}
+                                  onClick={() => handleSaveMonthlyFee(user)}
+                                  className="p-1 rounded bg-emerald-600 text-white text-xs"
+                                >
+                                  <Check className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {[199, 299, 499, 999, 1499, 1999].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => handleSaveMonthlyFee(user, preset)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
+                                  monthlyFee === preset && feeDraft === undefined
+                                    ? 'bg-amber-500 text-slate-950 font-bold border-amber-400'
+                                    : 'bg-slate-950 text-slate-400 border-slate-800'
+                                }`}
+                              >
+                                ₹{preset}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* QR Code & Actions */}
+                        <div className="flex items-center justify-between pt-1">
+                          {/* QR Upload */}
+                          <div>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              id={`qr-upload-mobile-${user.uid}`}
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  handleUploadUserQrFile(user, file);
+                                }
+                              }}
+                            />
+                            {qrCodeUrl ? (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setQrModalUser(user)}
+                                  className="w-8 h-8 rounded-lg bg-white p-0.5 border border-slate-700 shadow shrink-0"
+                                >
+                                  <img src={qrCodeUrl} alt="QR" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                                </button>
+                                <label
+                                  htmlFor={`qr-upload-mobile-${user.uid}`}
+                                  className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px] font-medium"
+                                >
+                                  Change QR
+                                </label>
+                              </div>
+                            ) : (
+                              <label
+                                htmlFor={`qr-upload-mobile-${user.uid}`}
+                                className="px-2.5 py-1 rounded-lg bg-slate-800 text-blue-300 text-xs font-semibold flex items-center gap-1"
+                              >
+                                <Upload className="w-3 h-3" />
+                                <span>Upload QR</span>
+                              </label>
+                            )}
+                          </div>
+
+                          {/* Quick Extend or Manage */}
+                          <div className="flex items-center gap-1.5">
+                            {!isFree && (
+                              <button
+                                type="button"
+                                disabled={isExtendLoading}
+                                onClick={() => handleExtendUserDays(user, 30)}
+                                className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold"
+                              >
+                                +30d
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setManagingUser(user)}
+                              className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold"
+                            >
+                              Manage
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* User Management Modal */}
       {managingUser && (
@@ -1877,6 +3074,10 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
           onClose={() => setManagingUser(null)}
           currentAdminEmail={currentAdminEmail}
           onInspectUser={onInspectUser}
+          onUserUpdated={(updatedUser) => {
+            setUsers(prev => prev.map(u => u.uid === updatedUser.uid ? updatedUser : u));
+            setManagingUser(updatedUser);
+          }}
         />
       )}
 
@@ -1893,6 +3094,341 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
           onEntryUpdated={handleWorkspaceEntryUpdated}
         />
       )}
+
+      {/* Default Subscription Config Modal for Master Admin */}
+      {showSubConfigModal && (
+        <div 
+          id="default-subscription-config-modal"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+        >
+          <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-lg w-full shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Default Subscription Settings</h3>
+                  <p className="text-xs text-slate-400">Configures default plan assigned to new user signups</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSubConfigModal(false)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto flex-1">
+              {/* Default Plan Type */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300">Default Plan Type</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTempSubConfig(prev => ({ ...prev, planType: 'free' }))}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 ${
+                      tempSubConfig.planType === 'free'
+                        ? 'bg-blue-600/20 text-blue-300 border-blue-500/60 shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>Free Plan</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTempSubConfig(prev => ({ ...prev, planType: 'paid' }))}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 ${
+                      tempSubConfig.planType === 'paid'
+                        ? 'bg-emerald-600/20 text-emerald-300 border-emerald-500/60 shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>Paid Plan</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Monthly Fee */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300">Default Monthly Fee (₹ INR)</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 text-xs font-bold">₹</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={tempSubConfig.monthlyFee ?? 0}
+                    onChange={(e) => setTempSubConfig(prev => ({ ...prev, monthlyFee: Math.max(0, Number(e.target.value) || 0) }))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
+                    placeholder="e.g. 499"
+                  />
+                </div>
+              </div>
+
+              {/* Default Validity Days */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300">Initial Trial / Validity Days</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="3650"
+                  step="1"
+                  value={tempSubConfig.trialDays ?? 30}
+                  onChange={(e) => setTempSubConfig(prev => ({ ...prev, trialDays: Math.max(1, Number(e.target.value) || 30) }))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
+                  placeholder="e.g. 30"
+                />
+                <p className="text-[11px] text-slate-400">
+                  New users will automatically receive this many days of access starting from registration.
+                </p>
+              </div>
+
+              {/* Default Payment QR Code URL */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300">Default Payment QR Code URL (UPI)</label>
+                <input
+                  type="url"
+                  value={tempSubConfig.qrCodeUrl || ''}
+                  onChange={(e) => setTempSubConfig(prev => ({ ...prev, qrCodeUrl: e.target.value.trim() }))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
+                  placeholder="https://example.com/upi-qr-code.png"
+                />
+                {tempSubConfig.qrCodeUrl && (
+                  <div className="flex items-center gap-3 p-2 bg-slate-950 rounded-lg border border-slate-800">
+                    <img
+                      src={tempSubConfig.qrCodeUrl}
+                      alt="QR Preview"
+                      referrerPolicy="no-referrer"
+                      className="w-14 h-14 object-contain rounded bg-white p-1"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                    <div className="text-xs text-slate-400">
+                      <span className="text-slate-300 font-medium block">Default QR Preview</span>
+                      <span className="text-[11px] text-slate-500">Will be shown on payment screens</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Default Payment Status */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300">Default Payment Status for New Accounts</label>
+                <select
+                  value={tempSubConfig.paymentStatus}
+                  onChange={(e) => setTempSubConfig(prev => ({ ...prev, paymentStatus: e.target.value as UserPaymentStatus }))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                >
+                  <option value="active">Active (Instant Access)</option>
+                  <option value="verification_pending">Verification Pending (Requires Payment Slip)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowSubConfigModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition border border-slate-700"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={savingSubConfig}
+                onClick={handleSaveSubConfig}
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
+              >
+                {savingSubConfig ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save Default Settings</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Fullscreen Preview Modal */}
+      {qrModalUser && qrModalUser.subscription?.qrCodeUrl && (
+        <div
+          id="qr-preview-modal-backdrop"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in"
+          onClick={() => setQrModalUser(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-sm w-full shadow-2xl p-6 text-center space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="text-left">
+                <h4 className="text-sm font-bold text-white">UPI Payment QR Code</h4>
+                <p className="text-xs text-slate-400 truncate max-w-[220px]">
+                  {qrModalUser.displayName || qrModalUser.email}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQrModalUser(null)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-white rounded-2xl shadow-inner inline-block mx-auto border-2 border-slate-200">
+              <img
+                src={qrModalUser.subscription.qrCodeUrl}
+                alt="UPI QR Code"
+                className="w-60 h-60 object-contain mx-auto"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+
+            <div className="text-xs text-slate-300">
+              Monthly Fee: <span className="font-bold text-amber-400">₹{qrModalUser.subscription.monthlyFee || 499}/month</span>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <a
+                href={qrModalUser.subscription.qrCodeUrl}
+                download={`upi-qr-${qrModalUser.uid.slice(0, 8)}.png`}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download QR</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => setQrModalUser(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Slip Review Modal */}
+      {slipReviewUser && slipReviewUser.subscription?.lastSubmittedSlip && (
+        <div
+          id="slip-review-modal-backdrop"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in"
+          onClick={() => setSlipReviewUser(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-blue-400" />
+                <div>
+                  <h4 className="text-sm font-bold text-white">Review Payment Slip</h4>
+                  <p className="text-xs text-slate-400">{slipReviewUser.displayName || slipReviewUser.email}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSlipReviewUser(null)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 overflow-y-auto flex-1">
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Amount Paid:</span>
+                  <span className="text-emerald-400 font-extrabold text-sm">
+                    ₹{slipReviewUser.subscription.lastSubmittedSlip.amountPaid}
+                  </span>
+                </div>
+                {slipReviewUser.subscription.lastSubmittedSlip.utrNumber && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">UTR / Ref Number:</span>
+                    <span className="text-white font-mono font-bold select-all">
+                      {slipReviewUser.subscription.lastSubmittedSlip.utrNumber}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Submitted At:</span>
+                  <span className="text-slate-300">
+                    {new Date(slipReviewUser.subscription.lastSubmittedSlip.submittedAt).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Screenshot Preview */}
+              <div className="space-y-1.5">
+                <span className="text-xs font-semibold text-slate-400">Uploaded Screenshot</span>
+                <div className="bg-slate-950 rounded-xl border border-slate-800 p-2 max-h-72 overflow-y-auto text-center">
+                  <img
+                    src={slipReviewUser.subscription.lastSubmittedSlip.slipUrl}
+                    alt="Payment Slip"
+                    className="max-w-full rounded-lg mx-auto object-contain"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => handleRejectSlip(slipReviewUser)}
+                className="px-3.5 py-2 rounded-xl bg-rose-900/30 hover:bg-rose-900/50 text-rose-300 border border-rose-800/40 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Reject</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSlipReviewUser(null)}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApproveSlip(slipReviewUser)}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Approve (+30 Days)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Free to Paid Plan Conversion Modal */}
+      <FreeToPaidConversionModal
+        user={convertingToPaidUser}
+        isOpen={Boolean(convertingToPaidUser)}
+        onClose={() => setConvertingToPaidUser(null)}
+        onConfirm={handleConfirmFreeToPaid}
+      />
     </div>
   );
 };

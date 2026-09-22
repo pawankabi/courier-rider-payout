@@ -27,21 +27,36 @@ import {
   Eye,
   Ban,
   Building2,
-  MessageCircle
+  MessageCircle,
+  CreditCard,
+  QrCode,
+  Calendar,
+  Receipt,
+  ExternalLink,
+  Upload,
+  Trash2,
+  Image as ImageIcon
 } from 'lucide-react';
+import { compressAndEncodeImage } from '../utils/imageUpload';
 import { 
   AppUser, 
   Rider, 
   UserPermissions, 
   UserRateConfig, 
+  UserSubscription,
+  UserPlanType,
+  UserPaymentStatus,
   DEFAULT_USER_PERMISSIONS, 
-  DEFAULT_USER_RATE_CONFIG 
+  DEFAULT_USER_RATE_CONFIG,
+  createDefaultUserSubscription 
 } from '../types';
 import { 
   subscribeToUserRiders, 
   updateUserPermissions, 
   updateUserRateConfig, 
   updateUserHubSignature,
+  updateUserSubscription,
+  normalizeUserSubscription,
   bulkUpdateRidersRates, 
   updateRiderRates, 
   setUserStatus,
@@ -54,15 +69,17 @@ interface Props {
   onClose: () => void;
   currentAdminEmail?: string | null;
   onInspectUser?: (user: AppUser) => void;
+  onUserUpdated?: (user: AppUser) => void;
 }
 
-type SubTab = 'riders_rates' | 'permissions' | 'account_rates';
+type SubTab = 'riders_rates' | 'permissions' | 'account_rates' | 'subscription';
 
 export const UserManagementModal: React.FC<Props> = ({
   user,
   onClose,
   currentAdminEmail,
   onInspectUser,
+  onUserUpdated,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('riders_rates');
   const [riders, setRiders] = useState<Rider[]>([]);
@@ -101,6 +118,68 @@ export const UserManagementModal: React.FC<Props> = ({
     user.rateConfig ? { ...DEFAULT_USER_RATE_CONFIG, ...user.rateConfig } : { ...DEFAULT_USER_RATE_CONFIG }
   );
   const [savingRateConfig, setSavingRateConfig] = useState(false);
+
+  // Subscription state
+  const [subscription, setSubscription] = useState<UserSubscription>(
+    user.subscription ? normalizeUserSubscription(user.subscription) : createDefaultUserSubscription()
+  );
+  const [savingSubscription, setSavingSubscription] = useState(false);
+  const [uploadingQr, setUploadingQr] = useState(false);
+  const [slipModalOpen, setSlipModalOpen] = useState(false);
+
+  const handleQrUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingQr(true);
+    try {
+      const dataUrl = await compressAndEncodeImage(file, {
+        maxDimension: 800,
+        quality: 0.85,
+        maxSizeBytes: 400 * 1024,
+      });
+      setSubscription(prev => ({
+        ...prev,
+        qrCodeUrl: dataUrl
+      }));
+      showToast('QR Code uploaded! Click "Save Subscription Configuration" to save.', 'success');
+    } catch (err: any) {
+      console.error('Failed to compress QR image:', err);
+      showToast(err.message || 'Failed to process QR image.', 'error');
+    } finally {
+      setUploadingQr(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleSaveSubscription = async () => {
+    setSavingSubscription(true);
+    try {
+      const updated = await updateUserSubscription(user.uid, subscription);
+      setSubscription(updated);
+      onUserUpdated?.({ ...user, subscription: updated });
+      showToast('Subscription updated successfully!', 'success');
+    } catch (err: any) {
+      console.error('Failed to update subscription:', err);
+      alert('Failed to update user subscription in Firestore: ' + (err?.message || err));
+      showToast('Failed to update user subscription.', 'error');
+    } finally {
+      setSavingSubscription(false);
+    }
+  };
+
+  const handleQuickExtendDays = (days: number) => {
+    const currentValid = subscription.validUntil ? new Date(subscription.validUntil).getTime() : Date.now();
+    const baseTime = !isNaN(currentValid) && currentValid > Date.now() ? currentValid : Date.now();
+    const nextTime = baseTime + days * 24 * 60 * 60 * 1000;
+    const d = new Date(nextTime);
+    d.setHours(23, 59, 59, 999);
+    setSubscription(prev => ({
+      ...prev,
+      validUntil: d.toISOString(),
+      paymentStatus: 'active',
+    }));
+  };
 
   // Bulk rate controls
   const [bulkBaseRateMode, setBulkBaseRateMode] = useState<'exact' | 'increase' | 'decrease'>('exact');
@@ -490,6 +569,23 @@ export const UserManagementModal: React.FC<Props> = ({
           >
             <Coins className="w-4 h-4" />
             <span>Default Rates & Slabs</span>
+          </button>
+
+          <button
+            id="subtab-subscription-btn"
+            type="button"
+            onClick={() => setActiveSubTab('subscription')}
+            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-2 transition relative ${
+              activeSubTab === 'subscription'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>Subscription & Billing</span>
+            {subscription.paymentStatus === 'verification_pending' && (
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse ml-0.5" title="Payment Verification Pending" />
+            )}
           </button>
         </div>
 
@@ -1158,7 +1254,7 @@ export const UserManagementModal: React.FC<Props> = ({
                       type="number"
                       step="0.5"
                       min="0"
-                      value={rateConfig.defaultBaseRate}
+                      value={rateConfig.defaultBaseRate ?? 13}
                       onChange={(e) =>
                         setRateConfig((prev) => ({
                           ...prev,
@@ -1184,7 +1280,7 @@ export const UserManagementModal: React.FC<Props> = ({
                       type="number"
                       step="0.5"
                       min="0"
-                      value={rateConfig.defaultIncentiveRate}
+                      value={rateConfig.defaultIncentiveRate ?? 2}
                       onChange={(e) =>
                         setRateConfig((prev) => ({
                           ...prev,
@@ -1249,6 +1345,463 @@ export const UserManagementModal: React.FC<Props> = ({
                     </>
                   )}
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: SUBSCRIPTION & BILLING */}
+          {activeSubTab === 'subscription' && (
+            <div className="space-y-6">
+              {/* Subscription Status Overview Card */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-blue-400" />
+                      Tenant Subscription & Access Plan
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Configure monthly SaaS fee, validity period, payment QR code, and verify user payment slips.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
+                      subscription.planType === 'paid'
+                        ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                        : 'bg-slate-800 text-slate-300 border-slate-700'
+                    }`}>
+                      {subscription.planType.toUpperCase()} PLAN
+                    </span>
+
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
+                      subscription.paymentStatus === 'active'
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : subscription.paymentStatus === 'verification_pending'
+                        ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 animate-pulse'
+                        : subscription.paymentStatus === 'expiring_soon'
+                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                        : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                    }`}>
+                      {subscription.paymentStatus.replace('_', ' ').toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Grid of subscription parameters */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {/* Plan Type */}
+                  <div className="bg-slate-900 border border-slate-800/90 rounded-xl p-4 space-y-2">
+                    <label className="text-xs font-medium text-slate-300 block">Plan Type</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubscription(prev => ({ 
+                            ...prev, 
+                            planType: 'free',
+                            paymentStatus: 'active' // Immediately clear all payment locks and alerts
+                          }));
+                        }}
+                        className={`px-3 py-2 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                          subscription.planType === 'free'
+                            ? 'bg-blue-600/20 text-blue-300 border-blue-500/50 shadow-sm'
+                            : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        Free Plan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubscription(prev => {
+                            const now = Date.now();
+                            const hasValidDate = prev.validUntil && new Date(prev.validUntil).getTime() > now;
+                            const defaultValidUntil = hasValidDate 
+                              ? prev.validUntil 
+                              : new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+                            return { 
+                              ...prev, 
+                              planType: 'paid',
+                              monthlyFee: prev.monthlyFee > 0 ? prev.monthlyFee : 499,
+                              validUntil: defaultValidUntil,
+                              paymentStatus: 'active',
+                            };
+                          });
+                        }}
+                        className={`px-3 py-2 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                          subscription.planType === 'paid'
+                            ? 'bg-amber-600/20 text-amber-300 border-amber-500/50 shadow-sm'
+                            : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        Paid Plan
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 pt-1">
+                      {subscription.planType === 'free'
+                        ? 'Free plan users never see any payment warnings, modals, or banners. Switching to Free clears all locks immediately.'
+                        : 'Paid plan users see renewal alerts within 2 days of expiry and a payment modal with their assigned UPI QR code.'}
+                    </p>
+                  </div>
+
+                  {/* Monthly Fee */}
+                  <div className="bg-slate-900 border border-slate-800/90 rounded-xl p-4 space-y-2">
+                    <label className="text-xs font-medium text-slate-300 block">
+                      Monthly Fee (INR ₹)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-slate-400 text-xs font-bold">₹</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={subscription.monthlyFee ?? 0}
+                        onChange={(e) => setSubscription(prev => ({ ...prev, monthlyFee: Math.max(0, Number(e.target.value) || 0) }))}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-bold"
+                        placeholder="e.g. 499"
+                      />
+                    </div>
+                    {/* Quick fee presets */}
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                      {[199, 299, 499, 999, 1499, 1999].map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setSubscription(prev => ({ ...prev, monthlyFee: preset }))}
+                          className={`text-[10px] px-1.5 py-0.5 rounded border transition ${
+                            subscription.monthlyFee === preset
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+                              : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                          }`}
+                        >
+                          ₹{preset}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Payment Status */}
+                  <div className="bg-slate-900 border border-slate-800/90 rounded-xl p-4 space-y-2">
+                    <label className="text-xs font-medium text-slate-300 block">Payment Status</label>
+                    <select
+                      value={subscription.paymentStatus}
+                      onChange={(e) => setSubscription(prev => ({ ...prev, paymentStatus: e.target.value as UserPaymentStatus }))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="active">Active</option>
+                      <option value="expiring_soon">Expiring Soon</option>
+                      <option value="verification_pending">Verification Pending</option>
+                      <option value="expired">Expired</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Valid Until Date Picker & Quick Actions */}
+                <div className="bg-slate-900 border border-slate-800/90 rounded-xl p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-blue-400" />
+                      Plan Valid Until (ISO Date)
+                    </label>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] text-slate-400 mr-1">Quick Add:</span>
+                      <button
+                        type="button"
+                        onClick={() => handleQuickExtendDays(30)}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-medium transition cursor-pointer"
+                      >
+                        +30 Days
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleQuickExtendDays(90)}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-medium transition cursor-pointer"
+                      >
+                        +90 Days
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleQuickExtendDays(365)}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-medium transition cursor-pointer"
+                      >
+                        +1 Year
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      type="date"
+                      value={subscription.validUntil ? subscription.validUntil.slice(0, 10) : ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) {
+                          setSubscription(prev => ({ ...prev, validUntil: '' }));
+                          return;
+                        }
+                        const d = new Date(val + 'T23:59:59.999Z');
+                        if (!isNaN(d.getTime())) {
+                          setSubscription(prev => ({ ...prev, validUntil: d.toISOString() }));
+                        }
+                      }}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
+                    />
+
+                    <div className="flex items-center text-xs text-slate-400 bg-slate-950/60 border border-slate-800/80 rounded-lg px-3 py-2">
+                      <Clock className="w-3.5 h-3.5 text-slate-500 mr-2 flex-shrink-0" />
+                      <span>
+                        {subscription.validUntil ? (
+                          new Date(subscription.validUntil).getTime() > Date.now() ? (
+                            <span className="text-emerald-400 font-semibold">
+                              {Math.ceil((new Date(subscription.validUntil).getTime() - Date.now()) / (1000 * 60 * 60 * 24))} days remaining
+                            </span>
+                          ) : (
+                            <span className="text-rose-400 font-semibold">
+                              Expired {Math.ceil((Date.now() - new Date(subscription.validUntil).getTime()) / (1000 * 60 * 60 * 24))} days ago
+                            </span>
+                          )
+                        ) : (
+                          'No expiry configured'
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Payment QR Code Uploader & URL */}
+                <div className="bg-slate-900 border border-slate-800/90 rounded-xl p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                        <QrCode className="w-3.5 h-3.5 text-amber-400" />
+                        UPI Payment QR Code
+                      </label>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Upload custom UPI QR image (GPay, PhonePe, Paytm, BharatPe) or enter image URL.
+                      </p>
+                    </div>
+
+                    {subscription.qrCodeUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setSubscription(prev => ({ ...prev, qrCodeUrl: '' }))}
+                        className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 transition"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove QR</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* QR Image preview & uploader drop area */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                    {/* File Upload Box */}
+                    <div className="relative border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl p-4 text-center transition bg-slate-950/60">
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/jpg"
+                        onChange={handleQrUpload}
+                        disabled={uploadingQr}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                      <div className="flex flex-col items-center justify-center space-y-2 pointer-events-none">
+                        <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-300">
+                          {uploadingQr ? (
+                            <RefreshCw className="w-5 h-5 animate-spin text-blue-400" />
+                          ) : (
+                            <Upload className="w-5 h-5 text-blue-400" />
+                          )}
+                        </div>
+                        <div className="space-y-0.5">
+                          <p className="text-xs font-semibold text-slate-200">
+                            {uploadingQr ? 'Processing Image...' : 'Click or Drop QR Image to Upload'}
+                          </p>
+                          <p className="text-[10px] text-slate-500">
+                            PNG, JPG, WEBP (Auto compressed for instant Firestore sync)
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* QR Preview or Placeholder */}
+                    <div>
+                      {subscription.qrCodeUrl ? (
+                        <div className="flex items-center gap-3 p-3 bg-slate-950 rounded-xl border border-slate-800">
+                          <div className="w-20 h-20 bg-white rounded-lg p-1.5 flex items-center justify-center border border-slate-700 shadow-sm flex-shrink-0">
+                            <img
+                              src={subscription.qrCodeUrl}
+                              alt="Payment QR Code"
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-contain"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          </div>
+                          <div className="text-xs text-slate-300 min-w-0 flex-1 space-y-1">
+                            <span className="font-semibold block text-emerald-400">QR Code Active</span>
+                            <p className="text-[11px] text-slate-400">
+                              Users see this QR when paying their monthly ₹{subscription.monthlyFee} fee.
+                            </p>
+                            <a
+                              href={subscription.qrCodeUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-400 hover:underline flex items-center gap-1 text-[11px]"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              View full image
+                            </a>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-slate-950/40 rounded-xl border border-slate-800/60 text-center flex flex-col items-center justify-center h-full min-h-[96px]">
+                          <ImageIcon className="w-6 h-6 text-slate-600 mb-1" />
+                          <span className="text-xs text-slate-400">No QR Code attached</span>
+                          <span className="text-[10px] text-slate-500">Upload an image or paste URL below</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Fallback Direct URL input */}
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-slate-400 font-semibold">Or enter Direct Image URL:</span>
+                    <input
+                      type="url"
+                      value={subscription.qrCodeUrl || ''}
+                      onChange={(e) => setSubscription(prev => ({ ...prev, qrCodeUrl: e.target.value.trim() }))}
+                      placeholder="https://.../payment-qr.png"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Last Submitted Payment Slip Section */}
+                <div className="bg-slate-900 border border-slate-800/90 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <h4 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                      <Receipt className="w-4 h-4 text-emerald-400" />
+                      Last Submitted Payment Slip
+                    </h4>
+
+                    {subscription.lastSubmittedSlip ? (
+                      <span className="text-[11px] text-slate-400">
+                        Submitted: {new Date(subscription.lastSubmittedSlip.submittedAt).toLocaleDateString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-slate-500 italic">No slip submitted yet</span>
+                    )}
+                  </div>
+
+                  {subscription.lastSubmittedSlip ? (
+                    <div className="space-y-4 pt-1">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">Amount Paid</span>
+                          <span className="text-sm font-bold text-emerald-400">₹{subscription.lastSubmittedSlip.amountPaid}</span>
+                        </div>
+
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">UTR / Ref Number</span>
+                          <span className="text-xs font-mono text-slate-200 truncate block">
+                            {subscription.lastSubmittedSlip.utrNumber || 'Not provided'}
+                          </span>
+                        </div>
+
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">Payment Slip File</span>
+                          <a
+                            href={subscription.lastSubmittedSlip.slipUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-blue-400 hover:underline flex items-center gap-1 font-medium mt-0.5"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            View Attached Slip
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* Slip preview */}
+                      <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 flex items-center gap-4">
+                        <img
+                          src={subscription.lastSubmittedSlip.slipUrl}
+                          alt="Slip Preview"
+                          referrerPolicy="no-referrer"
+                          className="w-20 h-20 object-cover rounded-lg border border-slate-700 cursor-pointer hover:opacity-90 transition"
+                          onClick={() => window.open(subscription.lastSubmittedSlip?.slipUrl, '_blank')}
+                        />
+                        <div className="flex-1 min-w-0 space-y-1.5">
+                          <p className="text-xs text-slate-300 font-medium">Verify receipt and approve access</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleQuickExtendDays(30);
+                                showToast('Slip approved: Added 30 days and marked active!', 'success');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Approve & Extend 30 Days
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSubscription(prev => ({
+                                  ...prev,
+                                  paymentStatus: 'expired',
+                                }));
+                                showToast('Slip rejected: Marked as expired.', 'info');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition flex items-center gap-1.5"
+                            >
+                              <UserX className="w-3.5 h-3.5" />
+                              Reject Slip
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-950/60 rounded-lg border border-slate-800/80 text-center">
+                      <p className="text-xs text-slate-400">
+                        When the user transfers via UPI or bank and uploads their screenshot receipt, their slip URL, UTR number, and amount will appear here for one-click verification.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Save Subscription CTA */}
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    disabled={savingSubscription}
+                    onClick={handleSaveSubscription}
+                    className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-2 shadow-sm"
+                  >
+                    {savingSubscription ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Saving Subscription...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-3.5 h-3.5" />
+                        <span>Save Subscription Configuration</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           )}

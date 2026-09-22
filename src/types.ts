@@ -110,6 +110,59 @@ export const DEFAULT_USER_RATE_CONFIG: UserRateConfig = {
   hubSignature: '',
 };
 
+export type UserPlanType = 'free' | 'paid';
+export type UserPaymentStatus = 'active' | 'expiring_soon' | 'expired' | 'verification_pending';
+
+export interface UserSubmittedSlip {
+  slipUrl: string;
+  utrNumber?: string;
+  submittedAt: string; // ISO date string
+  amountPaid: number;
+}
+
+export interface UserSubscription {
+  planType: UserPlanType;
+  monthlyFee: number;
+  validUntil: string; // ISO date string
+  qrCodeUrl: string;
+  paymentStatus: UserPaymentStatus;
+  lastSubmittedSlip?: UserSubmittedSlip;
+}
+
+export interface DefaultSubscriptionConfig {
+  planType: UserPlanType;
+  monthlyFee: number;
+  trialDays: number;
+  qrCodeUrl: string;
+  paymentStatus: UserPaymentStatus;
+}
+
+export const DEFAULT_SUBSCRIPTION_CONFIG: DefaultSubscriptionConfig = {
+  planType: 'free',
+  monthlyFee: 0,
+  trialDays: 30,
+  qrCodeUrl: '',
+  paymentStatus: 'active',
+};
+
+export function createDefaultUserSubscription(
+  config?: Partial<DefaultSubscriptionConfig>
+): UserSubscription {
+  const merged: DefaultSubscriptionConfig = { ...DEFAULT_SUBSCRIPTION_CONFIG, ...config };
+  const days = typeof merged.trialDays === 'number' && merged.trialDays > 0 ? merged.trialDays : 30;
+  const validUntilDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+  return {
+    planType: merged.planType || 'free',
+    monthlyFee: typeof merged.monthlyFee === 'number' ? merged.monthlyFee : 0,
+    validUntil: validUntilDate.toISOString(),
+    qrCodeUrl: merged.qrCodeUrl || '',
+    paymentStatus: merged.paymentStatus || 'active',
+  };
+}
+
+export const DEFAULT_USER_SUBSCRIPTION: UserSubscription = createDefaultUserSubscription();
+
 export interface AppUser {
   uid: string;
   email: string;
@@ -125,6 +178,7 @@ export interface AppUser {
   permissions?: UserPermissions;
   rateConfig?: UserRateConfig;
   hubSignature?: string;
+  subscription?: UserSubscription;
 }
 
 export interface DateRange {

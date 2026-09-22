@@ -20,6 +20,12 @@ service cloud.firestore {
       allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
     }
 
+    // System-wide default settings (subscription defaults for new users, app configs)
+    match /system_settings/{docId} {
+      allow read: if request.auth != null;
+      allow write: if isSuperAdmin();
+    }
+
     // Isolated per-user multi-tenant workspaces: /workspaces/{userId}/riders and /workspaces/{userId}/entries
     match /workspaces/{userId} {
       allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());

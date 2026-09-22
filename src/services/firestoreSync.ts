@@ -20,8 +20,15 @@ import {
   AppUser, 
   UserPermissions, 
   UserRateConfig, 
+  UserSubscription,
+  UserPlanType,
+  UserPaymentStatus,
+  UserSubmittedSlip,
+  DefaultSubscriptionConfig,
   DEFAULT_USER_PERMISSIONS, 
-  DEFAULT_USER_RATE_CONFIG 
+  DEFAULT_USER_RATE_CONFIG,
+  DEFAULT_SUBSCRIPTION_CONFIG,
+  createDefaultUserSubscription
 } from '../types';
 
 export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
@@ -147,6 +154,136 @@ export function normalizeUserPermissions(raw?: any): UserPermissions {
   };
 }
 
+/**
+ * Normalizes subscription data ensuring valid planType, paymentStatus, and valid dates
+ */
+export function normalizeUserSubscription(sub?: any): UserSubscription {
+  if (!sub || typeof sub !== 'object') {
+    return createDefaultUserSubscription();
+  }
+
+  const validPlanTypes: UserPlanType[] = ['free', 'paid'];
+  const planType: UserPlanType = validPlanTypes.includes(sub.planType) ? sub.planType : 'free';
+
+  const validPaymentStatuses: UserPaymentStatus[] = [
+    'active',
+    'expiring_soon',
+    'expired',
+    'verification_pending',
+  ];
+  const paymentStatus: UserPaymentStatus = validPaymentStatuses.includes(sub.paymentStatus)
+    ? sub.paymentStatus
+    : 'active';
+
+  let lastSubmittedSlip: UserSubmittedSlip | undefined = undefined;
+  if (sub.lastSubmittedSlip && typeof sub.lastSubmittedSlip === 'object') {
+    lastSubmittedSlip = {
+      slipUrl: String(sub.lastSubmittedSlip.slipUrl || ''),
+      utrNumber: sub.lastSubmittedSlip.utrNumber ? String(sub.lastSubmittedSlip.utrNumber) : undefined,
+      submittedAt: String(sub.lastSubmittedSlip.submittedAt || new Date().toISOString()),
+      amountPaid: typeof sub.lastSubmittedSlip.amountPaid === 'number' ? sub.lastSubmittedSlip.amountPaid : 0,
+    };
+  }
+
+  return {
+    planType,
+    monthlyFee: typeof sub.monthlyFee === 'number' ? sub.monthlyFee : 0,
+    validUntil:
+      typeof sub.validUntil === 'string' && sub.validUntil
+        ? sub.validUntil
+        : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    qrCodeUrl: typeof sub.qrCodeUrl === 'string' ? sub.qrCodeUrl : '',
+    paymentStatus,
+    ...(lastSubmittedSlip ? { lastSubmittedSlip } : {}),
+  };
+}
+
+export const SYSTEM_SETTINGS_COLLECTION = 'system_settings';
+export const SUBSCRIPTION_CONFIG_DOC = 'subscription';
+
+/**
+ * Super Admin: Get configurable default subscription for new users
+ */
+export async function getDefaultSubscriptionConfig(): Promise<DefaultSubscriptionConfig> {
+  try {
+    const docRef = doc(db, SYSTEM_SETTINGS_COLLECTION, SUBSCRIPTION_CONFIG_DOC);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      const validPlanTypes: UserPlanType[] = ['free', 'paid'];
+      const planType: UserPlanType = validPlanTypes.includes(data.planType) ? data.planType : 'free';
+      const validStatuses: UserPaymentStatus[] = ['active', 'expiring_soon', 'expired', 'verification_pending'];
+      const paymentStatus: UserPaymentStatus = validStatuses.includes(data.paymentStatus) ? data.paymentStatus : 'active';
+
+      return {
+        planType,
+        monthlyFee: typeof data.monthlyFee === 'number' ? data.monthlyFee : DEFAULT_SUBSCRIPTION_CONFIG.monthlyFee,
+        trialDays: typeof data.trialDays === 'number' && data.trialDays > 0 ? data.trialDays : DEFAULT_SUBSCRIPTION_CONFIG.trialDays,
+        qrCodeUrl: typeof data.qrCodeUrl === 'string' ? data.qrCodeUrl : DEFAULT_SUBSCRIPTION_CONFIG.qrCodeUrl,
+        paymentStatus,
+      };
+    }
+  } catch (err) {
+    console.warn('Could not fetch default subscription config from Firestore:', err);
+  }
+  return { ...DEFAULT_SUBSCRIPTION_CONFIG };
+}
+
+/**
+ * Super Admin: Save configurable default subscription for new users
+ */
+export async function saveDefaultSubscriptionConfig(config: DefaultSubscriptionConfig): Promise<void> {
+  const docRef = doc(db, SYSTEM_SETTINGS_COLLECTION, SUBSCRIPTION_CONFIG_DOC);
+  await setDoc(
+    docRef,
+    {
+      planType: config.planType || 'free',
+      monthlyFee: typeof config.monthlyFee === 'number' ? config.monthlyFee : 0,
+      trialDays: typeof config.trialDays === 'number' ? config.trialDays : 30,
+      qrCodeUrl: config.qrCodeUrl || '',
+      paymentStatus: config.paymentStatus || 'active',
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+/**
+ * Subscribe to default subscription config changes in real-time
+ */
+export function subscribeToDefaultSubscriptionConfig(
+  onConfig: (config: DefaultSubscriptionConfig) => void,
+  onError?: (err: Error) => void
+): () => void {
+  const docRef = doc(db, SYSTEM_SETTINGS_COLLECTION, SUBSCRIPTION_CONFIG_DOC);
+  return onSnapshot(
+    docRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const validPlanTypes: UserPlanType[] = ['free', 'paid'];
+        const planType: UserPlanType = validPlanTypes.includes(data.planType) ? data.planType : 'free';
+        const validStatuses: UserPaymentStatus[] = ['active', 'expiring_soon', 'expired', 'verification_pending'];
+        const paymentStatus: UserPaymentStatus = validStatuses.includes(data.paymentStatus) ? data.paymentStatus : 'active';
+
+        onConfig({
+          planType,
+          monthlyFee: typeof data.monthlyFee === 'number' ? data.monthlyFee : DEFAULT_SUBSCRIPTION_CONFIG.monthlyFee,
+          trialDays: typeof data.trialDays === 'number' && data.trialDays > 0 ? data.trialDays : DEFAULT_SUBSCRIPTION_CONFIG.trialDays,
+          qrCodeUrl: typeof data.qrCodeUrl === 'string' ? data.qrCodeUrl : DEFAULT_SUBSCRIPTION_CONFIG.qrCodeUrl,
+          paymentStatus,
+        });
+      } else {
+        onConfig({ ...DEFAULT_SUBSCRIPTION_CONFIG });
+      }
+    },
+    (err) => {
+      console.warn('Error subscribing to subscription system settings:', err);
+      onError?.(err);
+    }
+  );
+}
+
 export interface SyncProfileResult {
   status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked';
   isPending: boolean;
@@ -157,6 +294,7 @@ export interface SyncProfileResult {
   permissions: UserPermissions;
   rateConfig: UserRateConfig;
   hubSignature?: string;
+  subscription: UserSubscription;
 }
 
 /**
@@ -176,6 +314,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
     let role: 'admin' | 'user' = adminRole ? 'admin' : 'user';
     let permissions: UserPermissions = { ...DEFAULT_USER_PERMISSIONS };
     let rateConfig: UserRateConfig = { ...DEFAULT_USER_RATE_CONFIG };
+    let subscription: UserSubscription = createDefaultUserSubscription();
     const userName = user.displayName || user.email?.split('@')[0] || 'User';
 
     if (existingSnap.exists()) {
@@ -191,6 +330,11 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       if (data.rateConfig) {
         rateConfig = { ...DEFAULT_USER_RATE_CONFIG, ...data.rateConfig };
       }
+      if (data.subscription) {
+        subscription = normalizeUserSubscription(data.subscription);
+      } else {
+        subscription = createDefaultUserSubscription();
+      }
 
       // Update login timestamp, name, photo without overwriting pending/blocked state or permissions
       await updateDoc(allUserRef, {
@@ -202,10 +346,14 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
         role,
         permissions,
         rateConfig,
+        subscription,
         updatedAt: serverTimestamp(),
       });
     } else {
-      // First time registration - regular users are placed into 'pending' approval
+      // First time registration - configurable default subscription for new users
+      const defaultSubConfig = await getDefaultSubscriptionConfig();
+      subscription = createDefaultUserSubscription(defaultSubConfig);
+
       const newUserData = {
         uid: user.uid,
         email: user.email || '',
@@ -216,18 +364,9 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
         lastLoginAt: new Date().toISOString(),
         status, // 'active' for super admin, 'pending' for regular user
         role,
-        permissions: {
-          dailyEntry: true,
-          riders: true,
-          incentives: true,
-          reports: true,
-          canAccessDailyEntry: true,
-          canAccessRiders: true,
-          canAccessIncentives: true,
-          canAccessReports: true,
-          canExportData: true,
-        },
+        permissions: { ...DEFAULT_USER_PERMISSIONS },
         rateConfig,
+        subscription,
         updatedAt: serverTimestamp(),
       };
       await setDoc(allUserRef, newUserData);
@@ -261,7 +400,9 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       isApproved,
       role, 
       permissions, 
-      rateConfig 
+      rateConfig,
+      hubSignature: rateConfig.hubSignature || '',
+      subscription,
     };
   } catch (error) {
     console.error('Error syncing user profile to Firestore:', error);
@@ -274,7 +415,9 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       isApproved: adminRole,
       role: adminRole ? 'admin' : 'user',
       permissions: { ...DEFAULT_USER_PERMISSIONS },
-      rateConfig: { ...DEFAULT_USER_RATE_CONFIG }
+      rateConfig: { ...DEFAULT_USER_RATE_CONFIG },
+      hubSignature: '',
+      subscription: createDefaultUserSubscription(),
     };
   }
 }
@@ -285,6 +428,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
  * 1) Admin approval / activation / deactivation / blocking
  * 2) Feature access flag changes
  * 3) Rate configurations
+ * 4) Subscription updates
  */
 export function subscribeToCurrentUserDoc(
   userId: string,
@@ -297,31 +441,43 @@ export function subscribeToCurrentUserDoc(
     permissions: UserPermissions;
     rateConfig: UserRateConfig;
     hubSignature?: string;
+    subscription?: UserSubscription;
   }) => void
 ): () => void {
-  const userRef = doc(db, 'all_users', userId);
+  const allUserRef = doc(db, 'all_users', userId);
+  const userRef = doc(db, 'users', userId);
   const adminRole = isSuperAdmin(userEmail);
 
-  return onSnapshot(
-    userRef,
+  let mergedData: any = {};
+
+  const processAndNotify = () => {
+    const rawStatus = (mergedData.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked') || 'pending';
+    const status = adminRole ? 'active' : rawStatus;
+    const isPending = !adminRole && status === 'pending';
+    const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked');
+    const isApproved = adminRole || status === 'approved' || status === 'active';
+
+    const permissions = normalizeUserPermissions(mergedData.permissions);
+    const rateConfig = mergedData.rateConfig 
+      ? { ...DEFAULT_USER_RATE_CONFIG, ...mergedData.rateConfig } 
+      : { ...DEFAULT_USER_RATE_CONFIG };
+    const hubSignature = mergedData.hubSignature || rateConfig.hubSignature || '';
+    const subscription = normalizeUserSubscription(mergedData.subscription);
+
+    onUpdate({ status, isPending, isBlocked, isApproved, permissions, rateConfig, hubSignature, subscription });
+  };
+
+  const unsubAll = onSnapshot(
+    allUserRef,
     (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        const rawStatus = (data.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked') || 'pending';
-        const status = adminRole ? 'active' : rawStatus;
-        const isPending = !adminRole && status === 'pending';
-        const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked');
-        const isApproved = adminRole || status === 'approved' || status === 'active';
-
-        const permissions = normalizeUserPermissions(data.permissions);
-        const rateConfig = data.rateConfig 
-          ? { ...DEFAULT_USER_RATE_CONFIG, ...data.rateConfig } 
-          : { ...DEFAULT_USER_RATE_CONFIG };
-        const hubSignature = data.hubSignature || rateConfig.hubSignature || '';
-
-        onUpdate({ status, isPending, isBlocked, isApproved, permissions, rateConfig, hubSignature });
-      } else {
-        // User not yet written to all_users
+        mergedData = { ...mergedData, ...data };
+        if (data.subscription) {
+          mergedData.subscription = data.subscription;
+        }
+        processAndNotify();
+      } else if (!mergedData.status) {
         onUpdate({
           status: adminRole ? 'active' : 'pending',
           isPending: !adminRole,
@@ -330,13 +486,35 @@ export function subscribeToCurrentUserDoc(
           permissions: DEFAULT_USER_PERMISSIONS,
           rateConfig: DEFAULT_USER_RATE_CONFIG,
           hubSignature: '',
+          subscription: createDefaultUserSubscription(),
         });
       }
     },
     (error) => {
-      console.error('Error listening to current user doc in all_users:', error);
+      console.warn('Notice from all_users listener:', error);
     }
   );
+
+  const unsubUser = onSnapshot(
+    userRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data.subscription) {
+          mergedData.subscription = data.subscription;
+          processAndNotify();
+        }
+      }
+    },
+    (error) => {
+      console.warn('Notice from users listener:', error);
+    }
+  );
+
+  return () => {
+    unsubAll();
+    unsubUser();
+  };
 }
 
 /**
@@ -388,6 +566,7 @@ export function subscribeToAllUsers(
             ? { ...DEFAULT_USER_RATE_CONFIG, ...data.rateConfig } 
             : { ...DEFAULT_USER_RATE_CONFIG },
           hubSignature: data.hubSignature || data.rateConfig?.hubSignature || '',
+          subscription: normalizeUserSubscription(data.subscription),
         });
       });
 
@@ -549,6 +728,120 @@ export async function updateUserHubSignature(
     'rateConfig.hubSignature': cleanSig,
     hubSignatureUpdatedAt: serverTimestamp(),
   });
+}
+
+/**
+ * Super Admin / System: Update subscription object for a specific user
+ */
+export async function updateUserSubscription(
+  userId: string,
+  subscription: Partial<UserSubscription>
+): Promise<UserSubscription> {
+  const userRef = doc(db, 'users', userId);
+  const allUserRef = doc(db, 'all_users', userId);
+
+  let currentSub = createDefaultUserSubscription();
+  try {
+    const snap = await getDoc(userRef);
+    if (snap.exists() && snap.data()?.subscription) {
+      currentSub = normalizeUserSubscription(snap.data().subscription);
+    } else {
+      const allSnap = await getDoc(allUserRef);
+      if (allSnap.exists() && allSnap.data()?.subscription) {
+        currentSub = normalizeUserSubscription(allSnap.data().subscription);
+      }
+    }
+  } catch (readErr) {
+    console.warn('Failed to read existing subscription before update:', readErr);
+  }
+  
+  const updatedSub = normalizeUserSubscription({ ...currentSub, ...subscription });
+
+  // 1. Strictly execute updateDoc on users/{userId} -> subscription
+  try {
+    await updateDoc(userRef, {
+      subscription: updatedSub,
+      subscriptionUpdatedAt: serverTimestamp(),
+    });
+  } catch (docErr: any) {
+    // If document does not exist yet in users/{userId}, create it with setDoc merge
+    await setDoc(userRef, {
+      subscription: updatedSub,
+      subscriptionUpdatedAt: serverTimestamp(),
+    }, { merge: true });
+  }
+
+  // 2. Also keep all_users registry updated for Master Admin table view
+  try {
+    await updateDoc(allUserRef, {
+      subscription: updatedSub,
+      subscriptionUpdatedAt: serverTimestamp(),
+    });
+  } catch (allErr: any) {
+    await setDoc(allUserRef, {
+      subscription: updatedSub,
+      subscriptionUpdatedAt: serverTimestamp(),
+    }, { merge: true });
+  }
+
+  return updatedSub;
+}
+
+/**
+ * User / Client: Submit payment slip with slipUrl, optional utrNumber, amountPaid, and submittedAt
+ * Automatically marks paymentStatus as 'verification_pending'
+ */
+export async function submitUserPaymentSlip(
+  userId: string,
+  slip: UserSubmittedSlip
+): Promise<UserSubscription> {
+  const userRef = doc(db, 'users', userId);
+  const allUserRef = doc(db, 'all_users', userId);
+
+  let currentSub = createDefaultUserSubscription();
+  try {
+    const snap = await getDoc(userRef);
+    if (snap.exists() && snap.data()?.subscription) {
+      currentSub = normalizeUserSubscription(snap.data().subscription);
+    } else {
+      const allSnap = await getDoc(allUserRef);
+      if (allSnap.exists() && allSnap.data()?.subscription) {
+        currentSub = normalizeUserSubscription(allSnap.data().subscription);
+      }
+    }
+  } catch (readErr) {
+    console.warn('Failed to read existing subscription before slip submission:', readErr);
+  }
+
+  const updatedSub: UserSubscription = {
+    ...currentSub,
+    paymentStatus: 'verification_pending',
+    lastSubmittedSlip: {
+      slipUrl: slip.slipUrl,
+      utrNumber: slip.utrNumber,
+      submittedAt: slip.submittedAt || new Date().toISOString(),
+      amountPaid: typeof slip.amountPaid === 'number' ? slip.amountPaid : currentSub.monthlyFee,
+    },
+  };
+
+  const payload = {
+    subscription: updatedSub,
+    lastPaymentSlipSubmittedAt: serverTimestamp(),
+  };
+
+  try {
+    await updateDoc(userRef, payload);
+  } catch (err: any) {
+    await setDoc(userRef, payload, { merge: true });
+  }
+
+  try {
+    await updateDoc(allUserRef, payload);
+  } catch (allErr: any) {
+    await setDoc(allUserRef, payload, { merge: true });
+  }
+
+  return updatedSub;
 }
 
 /**

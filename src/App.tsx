@@ -43,6 +43,7 @@ import {
   isSuperAdmin,
   SUPER_ADMIN_EMAIL,
   normalizeUserPermissions,
+  normalizeUserSubscription,
   isEntityOwnedByUser
 } from './services/firestoreSync';
 import { 
@@ -54,7 +55,9 @@ import {
   UserRateConfig,
   AppUser,
   DEFAULT_USER_PERMISSIONS,
-  DEFAULT_USER_RATE_CONFIG
+  DEFAULT_USER_RATE_CONFIG,
+  UserSubscription,
+  DEFAULT_USER_SUBSCRIPTION
 } from './types';
 import { 
   loadRidersFromStorage, 
@@ -84,6 +87,7 @@ import { SyncExtractedData } from './services/oldAppSync';
 import { getTodayDateString, formatINR } from './utils/formatters';
 import { FestivalBannerCard } from './components/FestivalBannerCard';
 import { FestivalGreetingsModal } from './components/FestivalGreetingsModal';
+import { SubscriptionAlertBanner } from './components/SubscriptionAlertBanner';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('entry');
@@ -112,6 +116,7 @@ export default function App() {
   // User Permissions & Dynamic Rate Config (Admin Overrides)
   const [userPermissions, setUserPermissions] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS);
   const [userRateConfig, setUserRateConfig] = useState<UserRateConfig>(DEFAULT_USER_RATE_CONFIG);
+  const [userSubscription, setUserSubscription] = useState<UserSubscription>(DEFAULT_USER_SUBSCRIPTION);
 
   // Strict Master Admin Verification
   const isSuperAdminUser = Boolean(currentUser?.email && isSuperAdmin(currentUser.email));
@@ -473,10 +478,16 @@ export default function App() {
           if (docData.rateConfig) {
             setUserRateConfig({ ...DEFAULT_USER_RATE_CONFIG, ...docData.rateConfig });
           }
+          if (docData.subscription) {
+            setUserSubscription(normalizeUserSubscription(docData.subscription));
+          }
         });
 
         // 3. Sync user profile with Firestore in background & check status
         syncUserProfile(user).then((profileResult) => {
+          if (profileResult.subscription) {
+            setUserSubscription(normalizeUserSubscription(profileResult.subscription));
+          }
           if (profileResult.isPending) {
             setIsPending(true);
             setIsDeactivated(false);
@@ -1022,6 +1033,14 @@ export default function App() {
       {/* PWA Install Banner - Only visible to Master Admin */}
       {isAdmin && <PWAInstallBanner variant="banner" />}
 
+      {/* Subscription Alert & Renewal Banner - Strictly hidden for Free users and Master Admin */}
+      <SubscriptionAlertBanner
+        userSubscription={userSubscription}
+        userId={currentUser?.uid}
+        userEmail={currentUser?.email}
+        isSuperAdmin={isSuperAdminUser}
+      />
+
       {/* Top Application Header */}
       <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
@@ -1221,6 +1240,17 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Paid Subscription Renewal Banner, Alerts, and Expiry Lock */}
+        {currentUser && (
+          <SubscriptionAlertBanner
+            userSubscription={userSubscription || undefined}
+            userId={currentUser.uid}
+            userEmail={currentUser.email}
+            isSuperAdmin={isSuperAdminUser}
+            onSubscriptionUpdated={(updated) => setUserSubscription(updated)}
+          />
         )}
 
         {/* Desktop / Tablet Navigation Tabs */}

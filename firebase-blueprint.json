@@ -13,7 +13,18 @@
         "totalRiders": { "type": "number" },
         "totalEntries": { "type": "number" },
         "permissions": { "type": "object" },
-        "rateConfig": { "type": "object" }
+        "rateConfig": { "type": "object" },
+        "subscription": { "type": "object" }
+      }
+    },
+    "system_settings": {
+      "fields": {
+        "planType": { "type": "string" },
+        "monthlyFee": { "type": "number" },
+        "trialDays": { "type": "number" },
+        "qrCodeUrl": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "updatedAt": { "type": "string" }
       }
     },
     "users": {
@@ -98,6 +109,10 @@
     "/all_users/{userId}": {
       "schema": "all_users",
       "description": "Central user registry for super-admin governance, approval, and feature permissions"
+    },
+    "/system_settings/{settingId}": {
+      "schema": "system_settings",
+      "description": "System-wide default configurations such as subscription defaults for new users"
     }
   }
 }
