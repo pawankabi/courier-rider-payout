@@ -1,0 +1,103 @@
+{
+  "entities": {
+    "all_users": {
+      "fields": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "lastLoginAt": { "type": "string" },
+        "status": { "type": "string" },
+        "role": { "type": "string" },
+        "totalRiders": { "type": "number" },
+        "totalEntries": { "type": "number" },
+        "permissions": { "type": "object" },
+        "rateConfig": { "type": "object" }
+      }
+    },
+    "users": {
+      "fields": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "lastLoginAt": { "type": "string" }
+      }
+    },
+    "riders": {
+      "fields": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "vehicleType": { "type": "string" },
+        "joinedDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "order": { "type": "number" },
+        "baseRate": { "type": "number" },
+        "incentiveRate": { "type": "number" },
+        "incentiveEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "deliveries": {
+      "fields": {
+        "riderId": { "type": "string" },
+        "riderName": { "type": "string" },
+        "riderPhone": { "type": "string" },
+        "date": { "type": "string" },
+        "parcels": { "type": "number" },
+        "baseRate": { "type": "number" },
+        "hasIncentive": { "type": "boolean" },
+        "incentiveRate": { "type": "number" },
+        "baseAmount": { "type": "number" },
+        "incentiveAmount": { "type": "number" },
+        "totalEarnings": { "type": "number" },
+        "status": { "type": "string" },
+        "paidAt": { "type": "string" },
+        "advanceAmount": { "type": "number" },
+        "advanceDate": { "type": "string" },
+        "settlementId": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "settlements": {
+      "fields": {
+        "riderId": { "type": "string" },
+        "riderName": { "type": "string" },
+        "riderPhone": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "entryIds": { "type": "array" },
+        "totalParcels": { "type": "number" },
+        "baseAmount": { "type": "number" },
+        "incentiveAmount": { "type": "number" },
+        "grossTotal": { "type": "number" },
+        "advanceAmount": { "type": "number" },
+        "advanceDate": { "type": "string" },
+        "netTotal": { "type": "number" },
+        "paidAt": { "type": "string" },
+        "status": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/workspaces/{userId}/riders/{riderId}": {
+      "schema": "riders",
+      "description": "User isolated workspace collection storing riders belonging strictly to userId"
+    },
+    "/workspaces/{userId}/entries/{entryId}": {
+      "schema": "deliveries",
+      "description": "User isolated workspace collection storing delivery entries belonging strictly to userId"
+    },
+    "/workspaces/{userId}/settlements/{settlementId}": {
+      "schema": "settlements",
+      "description": "User isolated workspace collection storing settlement receipts belonging strictly to userId"
+    },
+    "/all_users/{userId}": {
+      "schema": "all_users",
+      "description": "Central user registry for super-admin governance, approval, and feature permissions"
+    }
+  }
+}
