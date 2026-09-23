@@ -45,6 +45,7 @@ import {
   Calendar,
   DollarSign,
   Receipt,
+  History,
   X
 } from 'lucide-react';
 import { 
@@ -58,7 +59,8 @@ import {
   DEFAULT_SUBSCRIPTION_CONFIG,
   UserPlanType,
   UserPaymentStatus,
-  UserSubscription
+  UserSubscription,
+  PaymentHistoryItem
 } from '../types';
 import { 
   subscribeToAllUsers, 
@@ -74,6 +76,8 @@ import {
   saveDefaultSubscriptionConfig,
   subscribeToDefaultSubscriptionConfig,
   updateUserSubscription,
+  approveUserPaymentSlip,
+  rejectUserPaymentSlip,
   SUPER_ADMIN_EMAIL, 
   isSuperAdmin 
 } from '../services/firestoreSync';
@@ -86,6 +90,7 @@ import { UserManagementModal } from './UserManagementModal';
 import { SingleRiderDetailModal } from './SingleRiderDetailModal';
 import { AdminBillingExpiryAndSlips } from './AdminBillingExpiryAndSlips';
 import { FreeToPaidConversionModal } from './FreeToPaidConversionModal';
+import { AdminPaymentHistoryModal } from './AdminPaymentHistoryModal';
 
 interface AdminDashboardTabProps {
   currentAdminEmail?: string | null;
@@ -131,6 +136,8 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   const [qrModalUser, setQrModalUser] = useState<AppUser | null>(null);
   // Slip Review Modal
   const [slipReviewUser, setSlipReviewUser] = useState<AppUser | null>(null);
+  // Payment History Modal
+  const [historyModalUser, setHistoryModalUser] = useState<AppUser | null>(null);
   // Free to Paid Conversion Modal
   const [convertingToPaidUser, setConvertingToPaidUser] = useState<AppUser | null>(null);
 
@@ -183,9 +190,59 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
     return () => unsubSub();
   }, []);
 
+  const [isProcessingDefaultQr, setIsProcessingDefaultQr] = useState(false);
+  const [defaultQrError, setDefaultQrError] = useState<string | null>(null);
+
   const handleOpenSubConfigModal = () => {
     setTempSubConfig({ ...defaultSubConfig });
+    setDefaultQrError(null);
     setShowSubConfigModal(true);
+  };
+
+  const handleDefaultQrFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      setDefaultQrError(validation.error || 'कृपया मान्य छवि फ़ाइल चुनें (PNG, JPG, WEBP)');
+      return;
+    }
+
+    setIsProcessingDefaultQr(true);
+    setDefaultQrError(null);
+
+    const reader = new FileReader();
+    reader.onload = async (readerEvent) => {
+      try {
+        const rawDataUrl = readerEvent.target?.result as string;
+        if (!rawDataUrl) throw new Error('छवि डेटा पढ़ने में विफलता।');
+
+        // Optimize and compress for safe Firestore document storage
+        const optimized = await compressAndEncodeImage(file, {
+          maxDimension: 800,
+          quality: 0.9,
+          maxSizeBytes: 400 * 1024,
+        }).catch(() => rawDataUrl);
+
+        setTempSubConfig((prev) => ({
+          ...prev,
+          qrCodeUrl: optimized || rawDataUrl,
+        }));
+        showToast('Default QR Code फ़ोटो लोड हो गई! "Save Default Settings" पर क्लिक करें।', 'success');
+      } catch (err: any) {
+        console.error('Error processing default QR code:', err);
+        setDefaultQrError(err.message || 'QR कोड प्रोसेस करने में विफलता।');
+      } finally {
+        setIsProcessingDefaultQr(false);
+      }
+    };
+    reader.onerror = () => {
+      setDefaultQrError('FileReader failed to read image file.');
+      setIsProcessingDefaultQr(false);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const handleSaveSubConfig = async () => {
@@ -377,13 +434,21 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       const sub = u.subscription;
       if (!sub || sub.planType === 'free') {
         freeCount++;
+        if (sub?.freeUntilDate) {
+          const freeEndTime = sub.freeUntilDate.length === 10
+            ? new Date(`${sub.freeUntilDate}T23:59:59.999Z`).getTime()
+            : new Date(sub.freeUntilDate).getTime();
+          if (freeEndTime < now) {
+            expiredCount++;
+          }
+        }
       } else {
         paidCount++;
         projectedMonthlyRevenue += (sub.monthlyFee || 0);
 
         const isDateExpired = sub.validUntil ? new Date(sub.validUntil).getTime() < now : false;
 
-        if (sub.paymentStatus === 'verification_pending') {
+        if (sub.paymentStatus === 'verification_pending' || sub.paymentStatus === 'awaiting_approval') {
           slipPendingCount++;
         } else if (sub.paymentStatus === 'expired' || isDateExpired) {
           expiredCount++;
@@ -410,8 +475,13 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       const sub = u.subscription;
       const isFree = !sub || sub.planType === 'free';
       const isPaid = sub?.planType === 'paid';
-      const isSlipPending = sub?.paymentStatus === 'verification_pending';
-      const isExpired = sub?.paymentStatus === 'expired' || 
+      const isSlipPending = sub?.paymentStatus === 'verification_pending' || sub?.paymentStatus === 'awaiting_approval';
+      const isFreeExpired = isFree && Boolean(sub?.freeUntilDate && (
+        (sub.freeUntilDate.length === 10
+          ? new Date(`${sub.freeUntilDate}T23:59:59.999Z`).getTime()
+          : new Date(sub.freeUntilDate).getTime()) < Date.now()
+      ));
+      const isExpired = isFreeExpired || sub?.paymentStatus === 'expired' || 
         Boolean(isPaid && sub?.validUntil && new Date(sub.validUntil).getTime() < Date.now());
 
       if (subFilter === 'free' && !isFree) return false;
@@ -530,7 +600,25 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
 
     setUploadingQrUserId(user.uid);
     try {
-      const dataUrl = await compressAndEncodeImage(file, 500, 500, 0.88);
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = async (e) => {
+          try {
+            const raw = e.target?.result as string;
+            const optimized = await compressAndEncodeImage(file, {
+              maxDimension: 800,
+              quality: 0.9,
+              maxSizeBytes: 400 * 1024,
+            }).catch(() => raw);
+            resolve(optimized || raw);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = () => reject(new Error('FileReader failed to read image file'));
+        reader.readAsDataURL(file);
+      });
+
       const updatedSub = await updateUserSubscription(user.uid, {
         qrCodeUrl: dataUrl,
       });
@@ -588,23 +676,15 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
     }
   };
 
-  // Approve Payment Slip
+  // Approve Payment Slip & Append to History
   const handleApproveSlip = async (user: AppUser) => {
     setActionLoadingId(`slip-${user.uid}`);
     try {
-      const currentValidUntil = user.subscription?.validUntil;
-      const baseTime = currentValidUntil && new Date(currentValidUntil).getTime() > Date.now()
-        ? new Date(currentValidUntil).getTime()
-        : Date.now();
-      const newValidUntil = new Date(baseTime + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-      const updatedSub = await updateUserSubscription(user.uid, {
-        validUntil: newValidUntil,
-        paymentStatus: 'active',
-      });
+      const adminEmail = currentAdminEmail || 'admin';
+      const updatedSub = await approveUserPaymentSlip(user.uid, adminEmail);
       setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
       setSlipReviewUser(null);
-      showToast(`Payment slip approved for ${user.displayName || user.email}! Plan active for +30 days.`, 'success');
+      showToast(`Payment slip approved for ${user.displayName || user.email}! +30 Days extended and added to payment history.`, 'success');
     } catch (err: any) {
       console.error('Failed to approve slip:', err);
       alert('Failed to approve payment slip in Firestore: ' + (err?.message || err));
@@ -618,9 +698,8 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   const handleRejectSlip = async (user: AppUser) => {
     setActionLoadingId(`slip-reject-${user.uid}`);
     try {
-      const updatedSub = await updateUserSubscription(user.uid, {
-        paymentStatus: 'expired',
-      });
+      const adminEmail = currentAdminEmail || 'admin';
+      const updatedSub = await rejectUserPaymentSlip(user.uid, adminEmail);
       setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
       setSlipReviewUser(null);
       showToast(`Payment slip rejected. Status set to expired for ${user.displayName || user.email}`, 'info');
@@ -628,6 +707,29 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       console.error('Failed to reject slip:', err);
       alert('Failed to reject payment slip in Firestore: ' + (err?.message || err));
       showToast('Failed to reject payment slip.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Update Time-Bound Free Trial Expiration Date
+  const handleUpdateFreeUntilDate = async (user: AppUser, freeDate: string) => {
+    setActionLoadingId(`free-date-${user.uid}`);
+    try {
+      const trimmedDate = freeDate.trim();
+      const updatedSub = await updateUserSubscription(user.uid, {
+        freeUntilDate: trimmedDate,
+      });
+      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
+      showToast(
+        trimmedDate
+          ? `Free trial set until ${trimmedDate} for ${user.displayName || user.email}`
+          : `Removed free trial expiration for ${user.displayName || user.email} (Unlimited Free)`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Failed to update free trial date:', err);
+      showToast('Failed to update free trial date in Firestore.', 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -2783,22 +2885,44 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                             {/* 5. Validity & Payment Status */}
                             <td className="py-3.5 px-4">
                               <div className="space-y-1">
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   {isFree ? (
-                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                                      LIFETIME FREE
-                                    </span>
+                                    <div className="space-y-1">
+                                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                        {sub?.freeUntilDate ? 'FREE TRIAL' : 'LIFETIME FREE'}
+                                      </span>
+                                      <div className="flex items-center gap-1.5 mt-1">
+                                        <span className="text-[10px] text-slate-400">Trial until:</span>
+                                        <input
+                                          type="date"
+                                          value={sub?.freeUntilDate || ''}
+                                          onChange={(e) => handleUpdateFreeUntilDate(user, e.target.value)}
+                                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:border-blue-500"
+                                          title="Optional: Pick an expiration date for free trial"
+                                        />
+                                        {sub?.freeUntilDate && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleUpdateFreeUntilDate(user, '')}
+                                            className="text-rose-400 hover:text-rose-300 text-[10px] font-bold px-1"
+                                            title="Clear trial date (Unlimited Free)"
+                                          >
+                                            ✕
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
                                   ) : (
                                     <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
                                       paymentStatus === 'active'
                                         ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                                        : paymentStatus === 'verification_pending'
+                                        : paymentStatus === 'verification_pending' || paymentStatus === 'awaiting_approval'
                                         ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 animate-pulse'
                                         : paymentStatus === 'expiring_soon'
                                         ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                                         : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
                                     }`}>
-                                      {paymentStatus.replace('_', ' ').toUpperCase()}
+                                      {paymentStatus === 'awaiting_approval' ? 'AWAITING APPROVAL' : paymentStatus.replace('_', ' ').toUpperCase()}
                                     </span>
                                   )}
                                 </div>
@@ -2806,7 +2930,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                                 <div className="text-[11px] text-slate-400 flex items-center gap-2">
                                   <span>
                                     {isFree ? (
-                                      'Never expires'
+                                      sub?.freeUntilDate ? `Trial ends: ${sub.freeUntilDate}` : 'Never expires'
                                     ) : sub?.validUntil ? (
                                       `Expires: ${new Date(sub.validUntil).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
                                     ) : (
@@ -2843,6 +2967,21 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                             {/* 6. Actions */}
                             <td className="py-3.5 px-4 text-right">
                               <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryModalUser(user)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-semibold border border-amber-500/30 transition cursor-pointer flex items-center gap-1"
+                                  title="View complete payment and slip history"
+                                >
+                                  <History className="w-3 h-3 text-amber-400" />
+                                  <span>History</span>
+                                  {Array.isArray(sub?.paymentHistory) && sub.paymentHistory.length > 0 && (
+                                    <span className="px-1 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold">
+                                      {sub.paymentHistory.length}
+                                    </span>
+                                  )}
+                                </button>
+
                                 <button
                                   type="button"
                                   onClick={() => setManagingUser(user)}
@@ -2922,31 +3061,57 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                           </span>
                         </div>
 
-                        {/* Plan Toggle */}
-                        <div className="flex items-center justify-between p-2 rounded-xl bg-slate-900 border border-slate-800">
-                          <span className="text-xs font-medium text-slate-300">Plan Type</span>
-                          <div className="inline-flex p-0.5 rounded-lg bg-slate-950 border border-slate-800">
-                            <button
-                              type="button"
-                              disabled={isPlanLoading}
-                              onClick={() => handleToggleUserPlan(user, 'free')}
-                              className={`px-3 py-1 rounded-md text-xs font-bold transition ${
-                                isFree ? 'bg-emerald-600 text-white' : 'text-slate-400'
-                              }`}
-                            >
-                              Free
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isPlanLoading}
-                              onClick={() => handleToggleUserPlan(user, 'paid')}
-                              className={`px-3 py-1 rounded-md text-xs font-bold transition ${
-                                !isFree ? 'bg-amber-600 text-white' : 'text-slate-400'
-                              }`}
-                            >
-                              Paid
-                            </button>
+                        {/* Plan Toggle & Free Trial Date */}
+                        <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-medium text-slate-300">Plan Type</span>
+                            <div className="inline-flex p-0.5 rounded-lg bg-slate-950 border border-slate-800">
+                              <button
+                                type="button"
+                                disabled={isPlanLoading}
+                                onClick={() => handleToggleUserPlan(user, 'free')}
+                                className={`px-3 py-1 rounded-md text-xs font-bold transition ${
+                                  isFree ? 'bg-emerald-600 text-white' : 'text-slate-400'
+                                }`}
+                              >
+                                Free
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isPlanLoading}
+                                onClick={() => handleToggleUserPlan(user, 'paid')}
+                                className={`px-3 py-1 rounded-md text-xs font-bold transition ${
+                                  !isFree ? 'bg-amber-600 text-white' : 'text-slate-400'
+                                }`}
+                              >
+                                Paid
+                              </button>
+                            </div>
                           </div>
+
+                          {isFree && (
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-xs">
+                              <span className="text-slate-400 text-[11px]">Free Trial Until:</span>
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="date"
+                                  value={sub?.freeUntilDate || ''}
+                                  onChange={(e) => handleUpdateFreeUntilDate(user, e.target.value)}
+                                  className="bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white"
+                                />
+                                {sub?.freeUntilDate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateFreeUntilDate(user, '')}
+                                    className="text-rose-400 hover:text-rose-300 font-bold px-1"
+                                    title="Clear date"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         {/* Monthly Fee */}
@@ -3036,8 +3201,17 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                             )}
                           </div>
 
-                          {/* Quick Extend or Manage */}
+                          {/* Quick Extend, History, or Manage */}
                           <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setHistoryModalUser(user)}
+                              className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/30 text-xs font-semibold flex items-center gap-1"
+                              title="Payment History"
+                            >
+                              <History className="w-3 h-3 text-amber-400" />
+                              <span>History</span>
+                            </button>
                             {!isFree && (
                               <button
                                 type="button"
@@ -3187,31 +3361,89 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                 </p>
               </div>
 
-              {/* Default Payment QR Code URL */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-300">Default Payment QR Code URL (UPI)</label>
-                <input
-                  type="url"
-                  value={tempSubConfig.qrCodeUrl || ''}
-                  onChange={(e) => setTempSubConfig(prev => ({ ...prev, qrCodeUrl: e.target.value.trim() }))}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
-                  placeholder="https://example.com/upi-qr-code.png"
-                />
-                {tempSubConfig.qrCodeUrl && (
-                  <div className="flex items-center gap-3 p-2 bg-slate-950 rounded-lg border border-slate-800">
-                    <img
-                      src={tempSubConfig.qrCodeUrl}
-                      alt="QR Preview"
-                      referrerPolicy="no-referrer"
-                      className="w-14 h-14 object-contain rounded bg-white p-1"
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
-                      }}
-                    />
-                    <div className="text-xs text-slate-400">
-                      <span className="text-slate-300 font-medium block">Default QR Preview</span>
-                      <span className="text-[11px] text-slate-500">Will be shown on payment screens</span>
+              {/* Default Payment QR Code Image Uploader */}
+              <div className="space-y-2 bg-slate-950/70 p-4 rounded-xl border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                    <QrCode className="w-4 h-4 text-amber-400" />
+                    <span>QR Code फ़ोटो अपलोड करें (Upload QR Code Image)</span>
+                  </label>
+                  {tempSubConfig.qrCodeUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setTempSubConfig((prev) => ({ ...prev, qrCodeUrl: '' }))}
+                      className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1 cursor-pointer font-medium"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Remove QR</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  मास्टर एडमिन का UPI QR कोड (Google Pay / PhonePe / Paytm / BHIM) फ़ोटो अपलोड करें। नए उपयोगकर्ताओं को भुगतान स्क्रीन पर स्वतः यह QR कोड प्राप्त होगा।
+                </p>
+
+                {/* Clean File Input Dropzone */}
+                <div className="relative border-2 border-dashed border-slate-700 hover:border-amber-500/70 rounded-xl p-4 text-center transition bg-slate-900/90 cursor-pointer">
+                  <input
+                    type="file"
+                    id="admin-default-qr-file-input"
+                    accept="image/*"
+                    onChange={handleDefaultQrFileSelect}
+                    disabled={isProcessingDefaultQr}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                  />
+                  <div className="flex flex-col items-center justify-center space-y-1.5 pointer-events-none py-1">
+                    <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-400">
+                      {isProcessingDefaultQr ? (
+                        <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
+                      ) : (
+                        <Upload className="w-5 h-5 text-amber-400" />
+                      )}
                     </div>
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-bold text-slate-200">
+                        {isProcessingDefaultQr ? 'छवि प्रोसेस हो रही है...' : 'QR Code फ़ोटो अपलोड करें (Upload QR Code Image)'}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        PNG, JPG, WEBP • Click to Browse or Drop File
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {defaultQrError && (
+                  <p className="text-xs text-rose-400 font-medium">{defaultQrError}</p>
+                )}
+
+                {/* Instant Visual Preview */}
+                {tempSubConfig.qrCodeUrl ? (
+                  <div className="flex items-center gap-4 p-3 bg-slate-900 rounded-xl border border-slate-700/80 animate-in fade-in">
+                    <div className="w-20 h-20 bg-white rounded-xl p-1.5 border border-slate-300 shadow-md flex items-center justify-center shrink-0">
+                      <img
+                        src={tempSubConfig.qrCodeUrl}
+                        alt="Default UPI QR Code Preview"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    <div className="text-xs min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>QR Code सक्रिय है (Preview Active)</span>
+                      </div>
+                      <p className="text-[11px] text-slate-300">
+                        नये साइन-अप करने वाले सभी यूजर्स को स्वतः यह QR कोड दिया जाएगा।
+                      </p>
+                      <span className="text-[10px] text-slate-500 font-mono block truncate">
+                        Base64 Image Data • Click "Save Default Settings" to persist
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                    <QrCode className="w-4 h-4 text-slate-600" />
+                    <span>कोई QR कोड अपलोड नहीं किया गया है। ऊपर दिए गए बटन से फ़ोटो चुनें।</span>
                   </div>
                 )}
               </div>
@@ -3414,13 +3646,20 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                   className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Approve (+30 Days)</span>
+                  <span>Approve & Unlock (Extend 30 Days)</span>
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Admin Payment History Modal */}
+      <AdminPaymentHistoryModal
+        user={historyModalUser}
+        isOpen={Boolean(historyModalUser)}
+        onClose={() => setHistoryModalUser(null)}
+      />
 
       {/* Free to Paid Plan Conversion Modal */}
       <FreeToPaidConversionModal

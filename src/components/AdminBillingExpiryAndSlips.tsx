@@ -68,12 +68,13 @@ export const AdminBillingExpiryAndSlips: React.FC<AdminBillingExpiryAndSlipsProp
     });
   }, [users]);
 
-  // 2. Calculate Pending Slips (where paymentStatus === 'verification_pending')
+  // 2. Calculate Pending Slips (where paymentStatus === 'verification_pending' or 'awaiting_approval')
   const pendingSlipUsers = useMemo(() => {
     return users.filter((u) => {
       const sub = u.subscription;
       if (!sub) return false;
       return sub.paymentStatus === 'verification_pending' || 
+        sub.paymentStatus === 'awaiting_approval' ||
         (Boolean(sub.lastSubmittedSlip) && sub.paymentStatus !== 'active' && sub.planType === 'paid');
     }).sort((a, b) => {
       const timeA = a.subscription?.lastSubmittedSlip?.submittedAt 
@@ -369,7 +370,7 @@ export const AdminBillingExpiryAndSlips: React.FC<AdminBillingExpiryAndSlipsProp
                           {user.displayName || user.name || 'Tenant User'}
                         </span>
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                          Verification Pending
+                          {sub.paymentStatus === 'awaiting_approval' ? 'Awaiting Approval' : 'Verification Pending'}
                         </span>
                       </div>
 
@@ -464,7 +465,7 @@ export const AdminBillingExpiryAndSlips: React.FC<AdminBillingExpiryAndSlipsProp
                       ) : (
                         <>
                           <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-                          <span>Approve & Extend by 30 Days</span>
+                          <span>Approve & Unlock (Extend 30 Days)</span>
                         </>
                       )}
                     </button>

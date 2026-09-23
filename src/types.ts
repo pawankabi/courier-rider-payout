@@ -111,7 +111,7 @@ export const DEFAULT_USER_RATE_CONFIG: UserRateConfig = {
 };
 
 export type UserPlanType = 'free' | 'paid';
-export type UserPaymentStatus = 'active' | 'expiring_soon' | 'expired' | 'verification_pending';
+export type UserPaymentStatus = 'active' | 'expiring_soon' | 'expired' | 'verification_pending' | 'awaiting_approval';
 
 export interface UserSubmittedSlip {
   slipUrl: string;
@@ -120,13 +120,81 @@ export interface UserSubmittedSlip {
   amountPaid: number;
 }
 
+export interface PaymentHistoryItem {
+  id: string;
+  date: string; // ISO timestamp
+  amount: number;
+  utr?: string;
+  slipUrl?: string;
+  approvedBy: string; // 'admin' or admin email
+  notes?: string;
+  status?: string;
+}
+
 export interface UserSubscription {
   planType: UserPlanType;
   monthlyFee: number;
   validUntil: string; // ISO date string
   qrCodeUrl: string;
   paymentStatus: UserPaymentStatus;
+  freeUntilDate?: string; // Optional time-bound free trial date (e.g. YYYY-MM-DD or ISO)
   lastSubmittedSlip?: UserSubmittedSlip;
+  paymentHistory?: PaymentHistoryItem[];
+}
+
+export interface SubscriptionLockStatus {
+  isLocked: boolean;
+  reason?: 'expired' | 'awaiting_approval';
+  isFreeTrialExpired?: boolean;
+}
+
+/**
+ * Strict Subscription Paywall Evaluator:
+ * Determines if user must be completely blocked from app dashboard.
+ */
+export function checkSubscriptionLock(
+  sub?: UserSubscription | null,
+  isSuperAdmin = false
+): SubscriptionLockStatus {
+  if (isSuperAdmin || !sub) return { isLocked: false };
+
+  const now = Date.now();
+
+  // 1. Time-Bound Free Trial (Conditional Free)
+  if (sub.planType === 'free') {
+    if (sub.freeUntilDate && sub.freeUntilDate.trim().length > 0) {
+      const freeUntilTime = sub.freeUntilDate.length === 10
+        ? new Date(`${sub.freeUntilDate}T23:59:59.999Z`).getTime()
+        : new Date(sub.freeUntilDate).getTime();
+
+      if (!isNaN(freeUntilTime) && freeUntilTime < now) {
+        // Free trial period has passed: hard lock out
+        return { isLocked: true, reason: 'expired', isFreeTrialExpired: true };
+      }
+    }
+    // Free plan without expiry or still within free trial
+    return { isLocked: false };
+  }
+
+  // 2. Paid Plan - Mandatory Admin Approval Lock
+  if (sub.paymentStatus === 'awaiting_approval' || sub.paymentStatus === 'verification_pending') {
+    return { isLocked: true, reason: 'awaiting_approval' };
+  }
+
+  // 3. Paid Plan - Check validUntil Expiry
+  let isExpired = false;
+  if (sub.validUntil) {
+    const validTime = new Date(sub.validUntil).getTime();
+    isExpired = isNaN(validTime) || validTime <= now;
+  } else {
+    isExpired = true;
+  }
+
+  if (isExpired || sub.paymentStatus === 'expired') {
+    return { isLocked: true, reason: 'expired' };
+  }
+
+  return { isLocked: false };
 }
 
 export interface DefaultSubscriptionConfig {
@@ -138,26 +206,33 @@ export interface DefaultSubscriptionConfig {
 }
 
 export const DEFAULT_SUBSCRIPTION_CONFIG: DefaultSubscriptionConfig = {
-  planType: 'free',
-  monthlyFee: 0,
-  trialDays: 30,
+  planType: 'paid',
+  monthlyFee: 499,
+  trialDays: 0,
   qrCodeUrl: '',
-  paymentStatus: 'active',
+  paymentStatus: 'expired',
 };
 
 export function createDefaultUserSubscription(
-  config?: Partial<DefaultSubscriptionConfig>
+  config?: Partial<DefaultSubscriptionConfig & { validUntil?: string; freeUntilDate?: string }>
 ): UserSubscription {
-  const merged: DefaultSubscriptionConfig = { ...DEFAULT_SUBSCRIPTION_CONFIG, ...config };
-  const days = typeof merged.trialDays === 'number' && merged.trialDays > 0 ? merged.trialDays : 30;
-  const validUntilDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const merged = { ...DEFAULT_SUBSCRIPTION_CONFIG, ...config };
+  let validUntilStr = merged.validUntil;
+  if (!validUntilStr) {
+    if (merged.trialDays && merged.trialDays > 0) {
+      validUntilStr = new Date(Date.now() + merged.trialDays * 24 * 60 * 60 * 1000).toISOString();
+    } else {
+      validUntilStr = new Date().toISOString(); // Expired by default so initial payment is required
+    }
+  }
 
   return {
-    planType: merged.planType || 'free',
-    monthlyFee: typeof merged.monthlyFee === 'number' ? merged.monthlyFee : 0,
-    validUntil: validUntilDate.toISOString(),
+    planType: merged.planType || 'paid',
+    monthlyFee: typeof merged.monthlyFee === 'number' ? merged.monthlyFee : 499,
+    validUntil: validUntilStr,
     qrCodeUrl: merged.qrCodeUrl || '',
-    paymentStatus: merged.paymentStatus || 'active',
+    paymentStatus: merged.paymentStatus || 'expired',
+    freeUntilDate: config?.freeUntilDate || '',
   };
 }
 
@@ -179,6 +254,7 @@ export interface AppUser {
   rateConfig?: UserRateConfig;
   hubSignature?: string;
   subscription?: UserSubscription;
+  paymentHistory?: PaymentHistoryItem[];
 }
 
 export interface DateRange {

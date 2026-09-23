@@ -15,7 +15,8 @@ import {
   Smartphone,
   ChevronDown,
   Download,
-  CloudDownload
+  CloudDownload,
+  CreditCard
 } from 'lucide-react';
 import { auth } from '../firebase';
 
@@ -25,9 +26,17 @@ interface Props {
   onOpenAuth: (mode?: 'signin' | 'signup') => void;
   onDownloadBackup?: () => void;
   onOpenSyncOldApp?: () => void;
+  onOpenSubscription?: () => void;
 }
 
-export const UserAccountMenu: React.FC<Props> = ({ user, syncStatus, onOpenAuth, onDownloadBackup, onOpenSyncOldApp }) => {
+export const UserAccountMenu: React.FC<Props> = ({ 
+  user, 
+  syncStatus, 
+  onOpenAuth, 
+  onDownloadBackup, 
+  onOpenSyncOldApp,
+  onOpenSubscription
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -182,6 +191,20 @@ export const UserAccountMenu: React.FC<Props> = ({ user, syncStatus, onOpenAuth,
             <Shield className="w-3 h-3 text-emerald-400 shrink-0" />
             <span>Only you can access this database.</span>
           </div>
+
+          {/* Subscription & Billing action */}
+          {onOpenSubscription && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onOpenSubscription();
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+            >
+              <CreditCard className="w-3.5 h-3.5 text-amber-400" />
+              <span>Subscription & Billing</span>
+            </button>
+          )}
 
           {/* Sync from Old App URL action */}
           {onOpenSyncOldApp && (

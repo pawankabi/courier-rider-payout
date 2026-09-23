@@ -23,7 +23,8 @@ import {
   X,
   Eye,
   Share2,
-  Sparkles
+  Sparkles,
+  CreditCard
 } from 'lucide-react';
 import { copyAppShareLink, SHARE_SUCCESS_MESSAGE } from './utils/shareLink';
 import { User, onAuthStateChanged } from 'firebase/auth';
@@ -32,6 +33,7 @@ import {
   syncUserProfile, 
   subscribeToUserData, 
   subscribeToCurrentUserDoc,
+  subscribeToDefaultSubscriptionConfig,
   migrateLocalStorageToFirestore,
   saveRiderToFirestore, 
   deleteRiderFromFirestore,
@@ -57,7 +59,8 @@ import {
   DEFAULT_USER_PERMISSIONS,
   DEFAULT_USER_RATE_CONFIG,
   UserSubscription,
-  DEFAULT_USER_SUBSCRIPTION
+  DEFAULT_USER_SUBSCRIPTION,
+  checkSubscriptionLock
 } from './types';
 import { 
   loadRidersFromStorage, 
@@ -88,6 +91,7 @@ import { getTodayDateString, formatINR } from './utils/formatters';
 import { FestivalBannerCard } from './components/FestivalBannerCard';
 import { FestivalGreetingsModal } from './components/FestivalGreetingsModal';
 import { SubscriptionAlertBanner } from './components/SubscriptionAlertBanner';
+import { UserPaymentModal } from './components/UserPaymentModal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('entry');
@@ -117,10 +121,48 @@ export default function App() {
   const [userPermissions, setUserPermissions] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS);
   const [userRateConfig, setUserRateConfig] = useState<UserRateConfig>(DEFAULT_USER_RATE_CONFIG);
   const [userSubscription, setUserSubscription] = useState<UserSubscription>(DEFAULT_USER_SUBSCRIPTION);
+  const [isUserPaymentModalOpen, setIsUserPaymentModalOpen] = useState(false);
+  const [masterQrCodeUrl, setMasterQrCodeUrl] = useState<string>('');
+  const [hasAutoOpenedPaymentModal, setHasAutoOpenedPaymentModal] = useState<string | null>(null);
+
+  // Subscribe to system default subscription config to obtain Master Admin's UPI QR Code
+  useEffect(() => {
+    const unsubscribe = subscribeToDefaultSubscriptionConfig((config) => {
+      if (config.qrCodeUrl) {
+        setMasterQrCodeUrl(config.qrCodeUrl);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Reset auto-popup tracker when user logs out
+  useEffect(() => {
+    if (!currentUser) {
+      setHasAutoOpenedPaymentModal(null);
+    }
+  }, [currentUser]);
 
   // Strict Master Admin Verification
   const isSuperAdminUser = Boolean(currentUser?.email && isSuperAdmin(currentUser.email));
   const isAdmin = isSuperAdminUser;
+
+  // Strict Subscription Lock Check
+  const subscriptionLock = useMemo(() => {
+    return checkSubscriptionLock(userSubscription, isSuperAdminUser);
+  }, [userSubscription, isSuperAdminUser]);
+
+  const isPaywallLocked = Boolean(currentUser && !isSuperAdminUser && subscriptionLock.isLocked);
+
+  // Automatic Popup on Login for Expiring Soon warnings (if not locked)
+  useEffect(() => {
+    if (!currentUser || isSuperAdminUser || !userSubscription) return;
+    if (userSubscription.planType === 'paid' && userSubscription.paymentStatus === 'expiring_soon') {
+      if (hasAutoOpenedPaymentModal !== currentUser.uid) {
+        setIsUserPaymentModalOpen(true);
+        setHasAutoOpenedPaymentModal(currentUser.uid);
+      }
+    }
+  }, [currentUser?.uid, userSubscription?.paymentStatus, userSubscription?.planType, isSuperAdminUser, hasAutoOpenedPaymentModal]);
 
   // Derived capability flags
   const canAccessDailyEntry = isSuperAdminUser || Boolean(userPermissions.dailyEntry ?? userPermissions.canAccessDailyEntry);
@@ -996,6 +1038,27 @@ export default function App() {
     );
   }
 
+  // Strict Subscription Paywall Lockout:
+  // If user's subscription is locked (expired, awaiting approval, or unpaid):
+  // Completely block access to the dashboard and all app features!
+  if (isPaywallLocked && currentUser && !isSuperAdminUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+        <UserPaymentModal
+          isOpen={true}
+          onClose={() => {}}
+          userSubscription={userSubscription}
+          userId={currentUser.uid}
+          userEmail={currentUser.email}
+          masterQrCodeUrl={masterQrCodeUrl}
+          isSuperAdmin={false}
+          onSubscriptionUpdated={(updated) => setUserSubscription(updated)}
+          onSuccessToast={(msg) => setToastMessage({ text: msg, type: 'success' })}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
       {/* Admin Inspection Banner */}
@@ -1153,6 +1216,21 @@ export default function App() {
               </div>
             )}
 
+            {/* Regular User Persistent Header Shortcut Button: "💳 Subscription / Pay & Slip" */}
+            {currentUser && !isSuperAdminUser && (
+              <button
+                id="header-user-subscription-btn"
+                type="button"
+                onClick={() => setIsUserPaymentModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-bold shadow-md shadow-amber-600/20 border border-amber-500/40 transition active:scale-95 cursor-pointer shrink-0"
+                title="💳 Subscription / Pay & Slip: View fee, scan QR code, or submit payment slip"
+              >
+                <CreditCard className="w-3.5 h-3.5 text-amber-200" />
+                <span className="hidden sm:inline">💳 Subscription / Pay & Slip</span>
+                <span className="sm:hidden">💳 Pay & Slip</span>
+              </button>
+            )}
+
             {/* User Account & Cloud Sync Menu */}
             <UserAccountMenu
               user={currentUser}
@@ -1163,6 +1241,7 @@ export default function App() {
               }}
               onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
               onOpenSyncOldApp={isAdmin ? () => setIsSyncOldAppModalOpen(true) : undefined}
+              onOpenSubscription={!isSuperAdminUser ? () => setIsUserPaymentModalOpen(true) : undefined}
             />
           </div>
         </div>
@@ -1248,8 +1327,10 @@ export default function App() {
             userSubscription={userSubscription || undefined}
             userId={currentUser.uid}
             userEmail={currentUser.email}
+            masterQrCodeUrl={masterQrCodeUrl}
             isSuperAdmin={isSuperAdminUser}
             onSubscriptionUpdated={(updated) => setUserSubscription(updated)}
+            onOpenPayModal={() => setIsUserPaymentModalOpen(true)}
           />
         )}
 
@@ -1586,6 +1667,21 @@ export default function App() {
           onClose={() => setIsSyncOldAppModalOpen(false)}
           onImportComplete={handleConfirmSyncOldApp}
           currentOwnerEmail={inspectedUser ? inspectedUser.email : (currentUser?.email || null)}
+        />
+      )}
+
+      {/* Regular User Subscription / Payment Slip Modal */}
+      {currentUser && !isSuperAdminUser && (
+        <UserPaymentModal
+          isOpen={isUserPaymentModalOpen}
+          onClose={() => setIsUserPaymentModalOpen(false)}
+          userSubscription={userSubscription}
+          userId={currentUser.uid}
+          userEmail={currentUser.email}
+          masterQrCodeUrl={masterQrCodeUrl}
+          isSuperAdmin={isSuperAdminUser}
+          onSubscriptionUpdated={(updated) => setUserSubscription(updated)}
+          onSuccessToast={(msg) => setToastMessage({ text: msg, type: 'success' })}
         />
       )}
     </div>

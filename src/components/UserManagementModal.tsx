@@ -37,7 +37,7 @@ import {
   Trash2,
   Image as ImageIcon
 } from 'lucide-react';
-import { compressAndEncodeImage } from '../utils/imageUpload';
+import { compressAndEncodeImage, validateImageFile } from '../utils/imageUpload';
 import { 
   AppUser, 
   Rider, 
@@ -131,18 +131,38 @@ export const UserManagementModal: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      showToast(validation.error || 'कृपया मान्य छवि फ़ाइल चुनें (PNG, JPG, WEBP)', 'error');
+      return;
+    }
+
     setUploadingQr(true);
     try {
-      const dataUrl = await compressAndEncodeImage(file, {
-        maxDimension: 800,
-        quality: 0.85,
-        maxSizeBytes: 400 * 1024,
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = async (event) => {
+          try {
+            const raw = event.target?.result as string;
+            const optimized = await compressAndEncodeImage(file, {
+              maxDimension: 800,
+              quality: 0.9,
+              maxSizeBytes: 400 * 1024,
+            }).catch(() => raw);
+            resolve(optimized || raw);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = () => reject(new Error('FileReader failed to read image file'));
+        reader.readAsDataURL(file);
       });
+
       setSubscription(prev => ({
         ...prev,
         qrCodeUrl: dataUrl
       }));
-      showToast('QR Code uploaded! Click "Save Subscription Configuration" to save.', 'success');
+      showToast('QR Code फ़ोटो सफलतापूर्वक लोड हो गई! नीचे "Save Subscription Configuration" पर क्लिक करें।', 'success');
     } catch (err: any) {
       console.error('Failed to compress QR image:', err);
       showToast(err.message || 'Failed to process QR image.', 'error');
@@ -1569,16 +1589,16 @@ export const UserManagementModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Payment QR Code Uploader & URL */}
+                {/* Payment QR Code Uploader & Instant Preview */}
                 <div className="bg-slate-900 border border-slate-800/90 rounded-xl p-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
                       <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
                         <QrCode className="w-3.5 h-3.5 text-amber-400" />
-                        UPI Payment QR Code
+                        <span>QR Code फ़ोटो अपलोड करें (Upload QR Code Image)</span>
                       </label>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        Upload custom UPI QR image (GPay, PhonePe, Paytm, BharatPe) or enter image URL.
+                        उपयोगकर्ता के लिए विशिष्ट UPI QR कोड (GPay, PhonePe, Paytm) अपलोड करें।
                       </p>
                     </div>
 
@@ -1586,7 +1606,7 @@ export const UserManagementModal: React.FC<Props> = ({
                       <button
                         type="button"
                         onClick={() => setSubscription(prev => ({ ...prev, qrCodeUrl: '' }))}
-                        className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 transition"
+                        className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 transition cursor-pointer font-medium"
                       >
                         <Trash2 className="w-3 h-3" />
                         <span>Remove QR</span>
@@ -1597,28 +1617,28 @@ export const UserManagementModal: React.FC<Props> = ({
                   {/* QR Image preview & uploader drop area */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                     {/* File Upload Box */}
-                    <div className="relative border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl p-4 text-center transition bg-slate-950/60">
+                    <div className="relative border-2 border-dashed border-slate-700 hover:border-amber-500/70 rounded-xl p-4 text-center transition bg-slate-950/60 cursor-pointer">
                       <input
                         type="file"
-                        accept="image/png,image/jpeg,image/webp,image/jpg"
+                        accept="image/*"
                         onChange={handleQrUpload}
                         disabled={uploadingQr}
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                       />
-                      <div className="flex flex-col items-center justify-center space-y-2 pointer-events-none">
-                        <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-300">
+                      <div className="flex flex-col items-center justify-center space-y-2 pointer-events-none py-1">
+                        <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-400">
                           {uploadingQr ? (
-                            <RefreshCw className="w-5 h-5 animate-spin text-blue-400" />
+                            <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
                           ) : (
-                            <Upload className="w-5 h-5 text-blue-400" />
+                            <Upload className="w-5 h-5 text-amber-400" />
                           )}
                         </div>
                         <div className="space-y-0.5">
-                          <p className="text-xs font-semibold text-slate-200">
-                            {uploadingQr ? 'Processing Image...' : 'Click or Drop QR Image to Upload'}
+                          <p className="text-xs font-bold text-slate-200">
+                            {uploadingQr ? 'छवि प्रोसेस हो रही है...' : 'QR Code फ़ोटो अपलोड करें (Upload QR Code Image)'}
                           </p>
-                          <p className="text-[10px] text-slate-500">
-                            PNG, JPG, WEBP (Auto compressed for instant Firestore sync)
+                          <p className="text-[10px] text-slate-400">
+                            PNG, JPG, WEBP • Click to Browse or Drop File
                           </p>
                         </div>
                       </div>
@@ -1628,7 +1648,7 @@ export const UserManagementModal: React.FC<Props> = ({
                     <div>
                       {subscription.qrCodeUrl ? (
                         <div className="flex items-center gap-3 p-3 bg-slate-950 rounded-xl border border-slate-800">
-                          <div className="w-20 h-20 bg-white rounded-lg p-1.5 flex items-center justify-center border border-slate-700 shadow-sm flex-shrink-0">
+                          <div className="w-20 h-20 bg-white rounded-lg p-1.5 flex items-center justify-center border border-slate-300 shadow-sm flex-shrink-0">
                             <img
                               src={subscription.qrCodeUrl}
                               alt="Payment QR Code"
@@ -1640,41 +1660,23 @@ export const UserManagementModal: React.FC<Props> = ({
                             />
                           </div>
                           <div className="text-xs text-slate-300 min-w-0 flex-1 space-y-1">
-                            <span className="font-semibold block text-emerald-400">QR Code Active</span>
+                            <span className="font-semibold block text-emerald-400">QR Code सक्रिय है</span>
                             <p className="text-[11px] text-slate-400">
-                              Users see this QR when paying their monthly ₹{subscription.monthlyFee} fee.
+                              उपयोगकर्ता को यह QR कोड उनके भुगतान स्क्रीन पर दिखाई देगा।
                             </p>
-                            <a
-                              href={subscription.qrCodeUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-blue-400 hover:underline flex items-center gap-1 text-[11px]"
-                            >
-                              <ExternalLink className="w-3 h-3" />
-                              View full image
-                            </a>
+                            <span className="text-[10px] text-slate-500 font-mono block truncate">
+                              Base64 Data • Ready to save
+                            </span>
                           </div>
                         </div>
                       ) : (
-                        <div className="p-4 bg-slate-950/40 rounded-xl border border-slate-800/60 text-center flex flex-col items-center justify-center h-full min-h-[96px]">
-                          <ImageIcon className="w-6 h-6 text-slate-600 mb-1" />
-                          <span className="text-xs text-slate-400">No QR Code attached</span>
-                          <span className="text-[10px] text-slate-500">Upload an image or paste URL below</span>
+                        <div className="p-4 bg-slate-950/40 rounded-xl border border-dashed border-slate-800/80 text-center flex flex-col items-center justify-center h-full min-h-[96px]">
+                          <QrCode className="w-6 h-6 text-slate-600 mb-1" />
+                          <span className="text-xs text-slate-400">कोई कस्टम QR कोड संलग्न नहीं है</span>
+                          <span className="text-[10px] text-slate-500">ऊपर दिए गए बॉक्स से फ़ोटो अपलोड करें</span>
                         </div>
                       )}
                     </div>
-                  </div>
-
-                  {/* Fallback Direct URL input */}
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-slate-400 font-semibold">Or enter Direct Image URL:</span>
-                    <input
-                      type="url"
-                      value={subscription.qrCodeUrl || ''}
-                      onChange={(e) => setSubscription(prev => ({ ...prev, qrCodeUrl: e.target.value.trim() }))}
-                      placeholder="https://.../payment-qr.png"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
-                    />
                   </div>
                 </div>
 
