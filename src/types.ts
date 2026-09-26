@@ -57,6 +57,7 @@ export interface PublicRiderStatement {
     parcels: number;
     totalEarnings: number;
     status: string;
+    settlementId?: string;
   }[];
   updatedAt: string;
 }
@@ -71,6 +72,8 @@ export interface DeliveryEntry {
   baseRate: number; // ₹13 or rider/account configured
   hasIncentive: boolean; // +₹2 or rider/account configured
   incentiveRate: number; // ₹2 or rider/account configured
+  appliedBaseRate?: number;
+  appliedIncentiveRate?: number;
   baseAmount: number; // parcels * baseRate
   incentiveAmount: number; // parcels * (hasIncentive ? incentiveRate : 0)
   totalEarnings: number; // baseAmount + incentiveAmount

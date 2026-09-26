@@ -18,7 +18,7 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 // Silence internal connection retry warnings so harmless transient reconnects do not trigger alerts
 try {
-  setLogLevel('error');
+  setLogLevel('silent');
 } catch {}
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();

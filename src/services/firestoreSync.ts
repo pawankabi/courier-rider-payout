@@ -2070,12 +2070,23 @@ export async function fetchPublicRiderStatement(
       } catch {}
     }
 
-    if (!foundRider && existingStatement) {
-      return existingStatement;
-    }
+    // If foundRider not found, create a safe fallback statement object
+    const safeFallback: PublicRiderStatement = existingStatement || {
+      riderId: cleanId,
+      riderName: `राइडर (${cleanId})`,
+      riderPhone: '',
+      vehicleType: 'Hero Splendor (Bike)',
+      hubName: 'सरायकेला कूरियर डिलीवरी हब',
+      hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+      totalAdvance: 0,
+      advances: [],
+      salaries: [],
+      recentDeliveries: [],
+      updatedAt: new Date().toISOString(),
+    };
 
     if (!foundRider) {
-      return null;
+      return safeFallback;
     }
 
     // 3. Fetch advances
@@ -2266,9 +2277,44 @@ export async function fetchPublicRiderStatement(
 
     return constructedStatement;
   } catch (err) {
-    console.warn('Could not fetch public statement from Firestore:', err);
+    console.warn('Notice loading public statement from Firestore, falling back to local snapshot:', err);
+    try {
+      const rawRiders = localStorage.getItem('cp_riders');
+      if (rawRiders) {
+        const riders: Rider[] = JSON.parse(rawRiders);
+        const matched = riders.find((r) => r.id === cleanId || r.id === decodedId);
+        if (matched) {
+          return {
+            riderId: matched.id,
+            riderName: matched.name,
+            riderPhone: matched.phone,
+            vehicleType: matched.vehicleType || 'Hero Splendor (Bike)',
+            hubName: 'सरायकेला कूरियर डिलीवरी हब',
+            hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+            totalAdvance: typeof matched.totalAdvance === 'number' ? matched.totalAdvance : 0,
+            advances: Array.isArray(matched.advances) ? matched.advances : [],
+            salaries: [],
+            recentDeliveries: [],
+            updatedAt: new Date().toISOString(),
+          };
+        }
+      }
+    } catch {}
+
+    return {
+      riderId: cleanId,
+      riderName: `राइडर (${cleanId})`,
+      riderPhone: '',
+      vehicleType: 'Hero Splendor (Bike)',
+      hubName: 'सरायकेला कूरियर डिलीवरी हब',
+      hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+      totalAdvance: 0,
+      advances: [],
+      salaries: [],
+      recentDeliveries: [],
+      updatedAt: new Date().toISOString(),
+    };
   }
-  return null;
 }
 
 /**

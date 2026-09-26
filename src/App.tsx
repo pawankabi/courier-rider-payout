@@ -67,6 +67,7 @@ import {
 } from './types';
 import { RiderLedgerStatement } from './components/RiderLedgerStatement';
 import { PublicRiderLedger } from './components/PublicRiderLedger';
+import { StatementErrorBoundary } from './components/StatementErrorBoundary';
 import { 
   loadRidersFromStorage, 
   saveRidersToStorage, 
@@ -201,7 +202,7 @@ function MainCourierApp() {
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'local'>('local');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup'>('signin');
-  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' } | null>(null);
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [connectionBanner, setConnectionBanner] = useState<{ text: string; type: 'connecting' | 'connected' | 'offline' } | null>(null);
   const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
 
@@ -1995,7 +1996,11 @@ export default function App() {
   }, []);
 
   if (statementRiderId) {
-    return <PublicRiderLedger riderId={statementRiderId} />;
+    return (
+      <StatementErrorBoundary>
+        <PublicRiderLedger riderId={statementRiderId} />
+      </StatementErrorBoundary>
+    );
   }
 
   return <MainCourierApp />;
