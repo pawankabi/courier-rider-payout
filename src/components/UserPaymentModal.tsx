@@ -66,6 +66,21 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
     }
   }, [userSubscription?.qrCodeUrl, masterQrCodeUrl]);
 
+  // Smooth Escape key handler to return smoothly without freeze
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedHistorySlip) {
+          setSelectedHistorySlip(null);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, selectedHistorySlip]);
+
   if (!isOpen) return null;
 
   // Super admin never needs payment or paywall
@@ -226,18 +241,16 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
               </button>
             )}
 
-            {/* Close button: strictly hidden if hard app lockout */}
-            {!isStrictlyLocked && (
-              <button
-                type="button"
-                id="user-payment-modal-close-btn"
-                onClick={onClose}
-                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition cursor-pointer"
-                title="बंद करें"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
+            {/* Close button: prominent and working */}
+            <button
+              type="button"
+              id="user-payment-modal-close-btn"
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition cursor-pointer"
+              title="Close (✕)"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -592,6 +605,19 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
               )}
             </>
           )}
+        </div>
+
+        {/* Modal Footer with Back / Cancel */}
+        <div className="p-3 sm:p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between gap-3 text-xs shrink-0">
+          <span className="text-slate-400">सुरक्षित भुगतान व स्लिप सत्यापन</span>
+          <button
+            type="button"
+            id="user-payment-modal-bottom-cancel-btn"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 font-semibold transition cursor-pointer"
+          >
+            Back / Cancel (वापस जाएं)
+          </button>
         </div>
       </div>
 

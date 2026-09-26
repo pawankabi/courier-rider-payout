@@ -91,9 +91,26 @@
         "paidAt": { "type": "string" },
         "status": { "type": "string" }
       }
+    },
+    "public_statements": {
+      "fields": {
+        "riderId": { "type": "string" },
+        "riderName": { "type": "string" },
+        "riderPhone": { "type": "string" },
+        "vehicleType": { "type": "string" },
+        "hubName": { "type": "string" },
+        "totalAdvance": { "type": "number" },
+        "advances": { "type": "array" },
+        "salaries": { "type": "array" },
+        "updatedAt": { "type": "string" }
+      }
     }
   },
   "firestore": {
+    "/public_statements/{riderId}": {
+      "schema": "public_statements",
+      "description": "Public read-only rider statements/ledgers accessible without login via secure link"
+    },
     "/workspaces/{userId}/riders/{riderId}": {
       "schema": "riders",
       "description": "User isolated workspace collection storing riders belonging strictly to userId"

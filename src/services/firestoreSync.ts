@@ -1,5 +1,6 @@
 import {
   collection,
+  collectionGroup,
   doc,
   getDoc,
   setDoc,
@@ -9,6 +10,9 @@ import {
   writeBatch,
   getDocs,
   serverTimestamp,
+  query,
+  where,
+  limit,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { db } from '../firebase';
@@ -29,7 +33,9 @@ import {
   DEFAULT_USER_PERMISSIONS, 
   DEFAULT_USER_RATE_CONFIG,
   DEFAULT_SUBSCRIPTION_CONFIG,
-  createDefaultUserSubscription
+  createDefaultUserSubscription,
+  RiderAdvanceEntry,
+  PublicRiderStatement
 } from '../types';
 
 export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
@@ -1700,6 +1706,14 @@ export async function saveRiderToFirestore(
     userId: rider.userId || userId,
   });
   await setDoc(workspaceRef, riderWithOwnership, { merge: true });
+
+  // Dual-write to root /riders/{rider.id} so public statement can directly read it
+  try {
+    const rootRef = doc(db, 'riders', rider.id);
+    await setDoc(rootRef, riderWithOwnership, { merge: true });
+  } catch (err) {
+    console.warn('Root /riders write notice:', err);
+  }
 }
 
 /**
@@ -1709,6 +1723,10 @@ export async function deleteRiderFromFirestore(userId: string, riderId: string):
   if (!userId) return;
   const workspaceRef = doc(db, 'workspaces', userId, 'riders', riderId);
   await deleteDoc(workspaceRef).catch(() => {});
+  try {
+    const rootRef = doc(db, 'riders', riderId);
+    await deleteDoc(rootRef).catch(() => {});
+  } catch {}
 }
 
 /**
@@ -1745,6 +1763,14 @@ export async function saveDeliveryToFirestore(
     userId: entry.userId || userId,
   });
   await setDoc(workspaceRef, entryWithOwnership);
+
+  // Dual-write to root /deliveries/{entry.id}
+  try {
+    const rootRef = doc(db, 'deliveries', entry.id);
+    await setDoc(rootRef, entryWithOwnership, { merge: true });
+  } catch (err) {
+    console.warn('Root /deliveries write notice:', err);
+  }
 }
 
 /**
@@ -1877,4 +1903,392 @@ export async function batchImportBackupToFirestore(
     settlementsCount: settlements.length,
   };
 }
+
+/**
+ * Sync public read-only statement to Firestore collection (/public_statements/{riderId})
+ * Accessible to riders without requiring authentication.
+ */
+export async function syncPublicRiderStatement(
+  rider: Rider,
+  advances: RiderAdvanceEntry[] = [],
+  settlements: SettlementRecord[] = [],
+  deliveries: DeliveryEntry[] = [],
+  hubName?: string,
+  hubSignature?: string
+): Promise<void> {
+  if (!rider?.id) return;
+  try {
+    const docRef = doc(db, 'public_statements', rider.id);
+    
+    // Sort advances by date or createdAt descending
+    const sortedAdvances = [...(advances.length > 0 ? advances : (rider.advances || []))].sort((a, b) => {
+      const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
+      const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
+      return timeB - timeA;
+    });
+
+    // Filter and sort settlements for this rider
+    const riderSettlements = settlements
+      .filter((s) => s.riderId === rider.id)
+      .sort((a, b) => new Date(b.paidAt || b.startDate).getTime() - new Date(a.paidAt || a.startDate).getTime())
+      .map((s) => ({
+        id: s.id,
+        startDate: s.startDate,
+        endDate: s.endDate,
+        totalParcels: s.totalParcels,
+        baseAmount: s.baseAmount,
+        incentiveAmount: s.incentiveAmount,
+        grossTotal: s.grossTotal,
+        advanceAmount: s.advanceAmount || 0,
+        netTotal: s.netTotal,
+        paidAt: s.paidAt,
+        status: s.status || 'PAID',
+      }));
+
+    // Recent deliveries (up to 100)
+    const recentDeliveries = deliveries
+      .filter((d) => d.riderId === rider.id)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 100)
+      .map((d) => ({
+        id: d.id,
+        date: d.date,
+        parcels: d.parcels,
+        totalEarnings: d.totalEarnings,
+        status: d.status,
+      }));
+
+    const statementPayload: PublicRiderStatement = {
+      riderId: rider.id,
+      riderName: rider.name,
+      riderPhone: rider.phone,
+      vehicleType: rider.vehicleType || 'Hero Splendor (Bike)',
+      hubName: hubName || 'Courier Delivery Hub',
+      hubSignature: hubSignature || '',
+      totalAdvance: typeof rider.totalAdvance === 'number' ? rider.totalAdvance : 0,
+      advances: sortedAdvances,
+      salaries: riderSettlements,
+      recentDeliveries,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await setDoc(docRef, cleanForFirestore(statementPayload), { merge: true });
+  } catch (err) {
+    console.warn('Failed to sync public statement document:', err);
+  }
+}
+
+/**
+ * Fetch public read-only statement by riderId from Firestore (/public_statements/{riderId})
+ * Callable without authentication.
+ * Fetches rider profile, advances, delivery entries, and settlements.
+ */
+export async function fetchPublicRiderStatement(
+  riderId: string
+): Promise<PublicRiderStatement | null> {
+  if (!riderId) return null;
+  const cleanId = riderId.trim();
+  const decodedId = decodeURIComponent(cleanId).trim();
+
+  try {
+    // 1. Direct document lookup by clean ID or decoded ID
+    let existingStatement: PublicRiderStatement | null = null;
+    try {
+      const docRef = doc(db, 'public_statements', cleanId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        existingStatement = snap.data() as PublicRiderStatement;
+      } else if (decodedId !== cleanId) {
+        const docRefDecoded = doc(db, 'public_statements', decodedId);
+        const snapDecoded = await getDoc(docRefDecoded);
+        if (snapDecoded.exists()) {
+          existingStatement = snapDecoded.data() as PublicRiderStatement;
+        }
+      }
+    } catch (e) {
+      console.warn('public_statements direct lookup notice:', e);
+    }
+
+    // If existing statement has detailed advances or deliveries/salaries, return it
+    if (existingStatement && (
+      (existingStatement.advances && existingStatement.advances.length > 0) ||
+      (existingStatement.salaries && existingStatement.salaries.length > 0) ||
+      (existingStatement.recentDeliveries && existingStatement.recentDeliveries.length > 0)
+    )) {
+      return existingStatement;
+    }
+
+    // 2. Fetch rider profile document (direct /riders, collection query, or collectionGroup)
+    let foundRider: Rider | null = null;
+
+    // Check direct /riders/{id}
+    try {
+      const riderDirectSnap = await getDoc(doc(db, 'riders', cleanId));
+      if (riderDirectSnap.exists()) {
+        foundRider = riderDirectSnap.data() as Rider;
+      } else if (decodedId !== cleanId) {
+        const decodedSnap = await getDoc(doc(db, 'riders', decodedId));
+        if (decodedSnap.exists()) {
+          foundRider = decodedSnap.data() as Rider;
+        }
+      }
+    } catch {}
+
+    // Check query on collection('riders')
+    if (!foundRider) {
+      try {
+        const qDirect = query(collection(db, 'riders'), where('id', '==', cleanId), limit(1));
+        const snapDirect = await getDocs(qDirect);
+        if (!snapDirect.empty) {
+          foundRider = snapDirect.docs[0].data() as Rider;
+        }
+      } catch {}
+    }
+
+    // Check collectionGroup('riders') with single equality (does not require composite index)
+    if (!foundRider) {
+      try {
+        const qRider = query(collectionGroup(db, 'riders'), where('id', '==', cleanId), limit(1));
+        const snapRider = await getDocs(qRider);
+        if (!snapRider.empty) {
+          foundRider = snapRider.docs[0].data() as Rider;
+        }
+      } catch (err) {
+        console.warn('collectionGroup riders notice:', err);
+      }
+    }
+
+    // Local storage fallback
+    if (!foundRider) {
+      try {
+        const raw = localStorage.getItem('cp_riders');
+        if (raw) {
+          const cached: Rider[] = JSON.parse(raw);
+          const found = cached.find((r) => r.id === cleanId || r.id === decodedId);
+          if (found) foundRider = found;
+        }
+      } catch {}
+    }
+
+    if (!foundRider && existingStatement) {
+      return existingStatement;
+    }
+
+    if (!foundRider) {
+      return null;
+    }
+
+    // 3. Fetch advances
+    let advances: RiderAdvanceEntry[] = Array.isArray(foundRider.advances) ? foundRider.advances : [];
+    if (advances.length === 0) {
+      try {
+        const qAdv = query(collectionGroup(db, 'advances'), where('riderId', '==', cleanId));
+        const snapAdv = await getDocs(qAdv);
+        if (!snapAdv.empty) {
+          advances = snapAdv.docs.map((d) => d.data() as RiderAdvanceEntry);
+        }
+      } catch {}
+    }
+
+    // 4. Fetch settlements / salaries
+    let salaries: any[] = [];
+    try {
+      const qSettlements = query(collection(db, 'settlements'), where('riderId', '==', cleanId));
+      const snapSettlements = await getDocs(qSettlements);
+      if (!snapSettlements.empty) {
+        salaries = snapSettlements.docs.map((d) => {
+          const s = d.data() as SettlementRecord;
+          return {
+            id: s.id,
+            startDate: s.startDate,
+            endDate: s.endDate,
+            totalParcels: s.totalParcels,
+            baseAmount: s.baseAmount,
+            incentiveAmount: s.incentiveAmount,
+            grossTotal: s.grossTotal,
+            advanceAmount: s.advanceAmount || 0,
+            netTotal: s.netTotal,
+            paidAt: s.paidAt,
+            status: s.status || 'PAID',
+          };
+        });
+      }
+    } catch {}
+
+    if (salaries.length === 0) {
+      try {
+        const qSettlements = query(collectionGroup(db, 'settlements'), where('riderId', '==', cleanId));
+        const snapSettlements = await getDocs(qSettlements);
+        if (!snapSettlements.empty) {
+          salaries = snapSettlements.docs.map((d) => {
+            const s = d.data() as SettlementRecord;
+            return {
+              id: s.id,
+              startDate: s.startDate,
+              endDate: s.endDate,
+              totalParcels: s.totalParcels,
+              baseAmount: s.baseAmount,
+              incentiveAmount: s.incentiveAmount,
+              grossTotal: s.grossTotal,
+              advanceAmount: s.advanceAmount || 0,
+              netTotal: s.netTotal,
+              paidAt: s.paidAt,
+              status: s.status || 'PAID',
+            };
+          });
+        }
+      } catch {}
+    }
+
+    // Check localStorage settlements fallback
+    if (salaries.length === 0) {
+      try {
+        const rawS = localStorage.getItem('cp_settlements');
+        if (rawS) {
+          const cachedS: SettlementRecord[] = JSON.parse(rawS);
+          salaries = cachedS
+            .filter((s) => s.riderId === cleanId || s.riderId === decodedId)
+            .map((s) => ({
+              id: s.id,
+              startDate: s.startDate,
+              endDate: s.endDate,
+              totalParcels: s.totalParcels,
+              baseAmount: s.baseAmount,
+              incentiveAmount: s.incentiveAmount,
+              grossTotal: s.grossTotal,
+              advanceAmount: s.advanceAmount || 0,
+              netTotal: s.netTotal,
+              paidAt: s.paidAt,
+              status: s.status || 'PAID',
+            }));
+        }
+      } catch {}
+    }
+
+    // 5. Fetch delivery entries (from root deliveries or collectionGroup)
+    let recentDeliveries: any[] = [];
+    try {
+      const qDel = query(collection(db, 'deliveries'), where('riderId', '==', cleanId), limit(100));
+      const snapDel = await getDocs(qDel);
+      if (!snapDel.empty) {
+        recentDeliveries = snapDel.docs.map((d) => {
+          const e = d.data() as DeliveryEntry;
+          return {
+            id: e.id,
+            date: e.date,
+            parcels: e.parcels,
+            totalEarnings: e.totalEarnings,
+            status: e.status,
+            settlementId: e.settlementId,
+          };
+        });
+      }
+    } catch {}
+
+    if (recentDeliveries.length === 0) {
+      try {
+        const qEntries = query(collectionGroup(db, 'entries'), where('riderId', '==', cleanId), limit(100));
+        const snapEntries = await getDocs(qEntries);
+        if (!snapEntries.empty) {
+          recentDeliveries = snapEntries.docs.map((d) => {
+            const e = d.data() as DeliveryEntry;
+            return {
+              id: e.id,
+              date: e.date,
+              parcels: e.parcels,
+              totalEarnings: e.totalEarnings,
+              status: e.status,
+              settlementId: e.settlementId,
+            };
+          });
+        }
+      } catch {}
+    }
+
+    if (recentDeliveries.length === 0) {
+      try {
+        const qDeliveries = query(collectionGroup(db, 'deliveries'), where('riderId', 'in', [cleanId, decodedId]), limit(100));
+        const snapDeliveries = await getDocs(qDeliveries);
+        if (!snapDeliveries.empty) {
+          recentDeliveries = snapDeliveries.docs.map((d) => {
+            const e = d.data() as DeliveryEntry;
+            return {
+              id: e.id,
+              date: e.date,
+              parcels: e.parcels,
+              totalEarnings: e.totalEarnings,
+              status: e.status,
+            };
+          });
+        }
+      } catch {}
+    }
+
+    // Local storage deliveries fallback
+    if (recentDeliveries.length === 0) {
+      try {
+        const rawD = localStorage.getItem('cp_deliveries');
+        if (rawD) {
+          const cachedD: DeliveryEntry[] = JSON.parse(rawD);
+          recentDeliveries = cachedD
+            .filter((e) => e.riderId === cleanId || e.riderId === decodedId)
+            .slice(0, 100)
+            .map((e) => ({
+              id: e.id,
+              date: e.date,
+              parcels: e.parcels,
+              totalEarnings: e.totalEarnings,
+              status: e.status,
+            }));
+        }
+      } catch {}
+    }
+
+    const constructedStatement: PublicRiderStatement = {
+      riderId: foundRider.id,
+      riderName: foundRider.name,
+      riderPhone: foundRider.phone,
+      vehicleType: foundRider.vehicleType || 'Hero Splendor (Bike)',
+      hubName: 'सरायकेला कूरियर डिलीवरी हब',
+      hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+      totalAdvance: typeof foundRider.totalAdvance === 'number' ? foundRider.totalAdvance : 0,
+      advances,
+      salaries,
+      recentDeliveries,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Cache back to public_statements document for fast subsequent loads
+    try {
+      const docRefToSave = doc(db, 'public_statements', cleanId);
+      setDoc(docRefToSave, cleanForFirestore(constructedStatement), { merge: true }).catch(() => {});
+    } catch {}
+
+    return constructedStatement;
+  } catch (err) {
+    console.warn('Could not fetch public statement from Firestore:', err);
+  }
+  return null;
+}
+
+/**
+ * Background bulk sync all riders' public statement documents
+ */
+export async function syncAllRidersPublicStatements(
+  riders: Rider[],
+  settlements: SettlementRecord[] = [],
+  deliveries: DeliveryEntry[] = [],
+  hubName?: string,
+  hubSignature?: string
+): Promise<void> {
+  if (!Array.isArray(riders) || riders.length === 0) return;
+  for (const r of riders) {
+    try {
+      await syncPublicRiderStatement(r, r.advances || [], settlements, deliveries, hubName, hubSignature);
+    } catch (e) {
+      console.warn('Notice syncing statement for rider:', r.name, e);
+    }
+  }
+}
+
 

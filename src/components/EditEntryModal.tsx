@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Check, Calculator, Calendar, Package } from 'lucide-react';
 import { DeliveryEntry, Rider } from '../types';
 import { BASE_RATE, INCENTIVE_RATE, formatINR } from '../utils/formatters';
@@ -18,6 +18,17 @@ export const EditEntryModal: React.FC<Props> = ({ entry, riders, onSave, onClose
   const [hasIncentive, setHasIncentive] = useState(entry.hasIncentive);
   const [status, setStatus] = useState<'Unpaid' | 'Paid'>(entry.status);
   const [notes, setNotes] = useState(entry.notes || '');
+
+  // Smooth Escape key handler to return smoothly without freeze
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   const selectedRider = riders.find((r) => r.id === riderId);
   const currentBaseRate = selectedRider?.baseRate ?? entry.baseRate ?? BASE_RATE;

@@ -1,3 +1,15 @@
+export interface RiderAdvanceEntry {
+  id: string;
+  riderId: string;
+  amount: number;
+  date?: string; // Optional date (YYYY-MM-DD or empty)
+  reason?: string; // e.g. "Bike repair", "Fuel", "Festival emergency"
+  runningBalance: number; // previousAdvanceTotal + newAdvanceAmount = currentTotalAdvance
+  createdAt: string; // ISO string
+  createdBy?: string;
+  settlementId?: string;
+}
+
 export interface Rider {
   id: string;
   name: string;
@@ -13,6 +25,40 @@ export interface Rider {
   createdByEmail?: string; // Email of user who registered the rider
   workspaceId?: string; // Workspace UID isolation tag
   userId?: string; // Associated User UID
+  totalAdvance?: number; // Running advance balance
+  advances?: RiderAdvanceEntry[]; // Detailed advance payment records
+}
+
+export interface PublicRiderStatement {
+  riderId: string;
+  riderName: string;
+  riderPhone: string;
+  vehicleType?: string;
+  hubName?: string;
+  hubSignature?: string;
+  totalAdvance: number;
+  advances: RiderAdvanceEntry[];
+  salaries: {
+    id: string;
+    startDate: string;
+    endDate: string;
+    totalParcels: number;
+    baseAmount: number;
+    incentiveAmount: number;
+    grossTotal: number;
+    advanceAmount: number;
+    netTotal: number;
+    paidAt: string;
+    status: string;
+  }[];
+  recentDeliveries?: {
+    id: string;
+    date: string;
+    parcels: number;
+    totalEarnings: number;
+    status: string;
+  }[];
+  updatedAt: string;
 }
 
 export interface DeliveryEntry {

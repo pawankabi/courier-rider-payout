@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   History, 
   X, 
@@ -27,6 +27,21 @@ export const AdminPaymentHistoryModal: React.FC<AdminPaymentHistoryModalProps> =
 }) => {
   const [copiedUtr, setCopiedUtr] = useState<string | null>(null);
   const [zoomedSlipUrl, setZoomedSlipUrl] = useState<string | null>(null);
+
+  // Smooth Escape key handler to return smoothly without freeze
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (zoomedSlipUrl) {
+          setZoomedSlipUrl(null);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, zoomedSlipUrl]);
 
   if (!isOpen || !user) return null;
 
@@ -223,7 +238,7 @@ export const AdminPaymentHistoryModal: React.FC<AdminPaymentHistoryModalProps> =
               onClick={onClose}
               className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition"
             >
-              Close
+              Back / Cancel (वापस जाएं)
             </button>
           </div>
         </div>

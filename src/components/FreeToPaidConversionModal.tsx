@@ -57,6 +57,17 @@ export const FreeToPaidConversionModal: React.FC<FreeToPaidConversionModalProps>
     }
   }, [user, isOpen]);
 
+  // Smooth Escape key handler to return smoothly without freeze
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting && !isUploadingQr) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, isSubmitting, isUploadingQr]);
+
   // Calculate final validUntil date (Hooks MUST be before any early return)
   const calculatedValidUntil = React.useMemo(() => {
     if (useCustomEndDate && customEndDate) {
@@ -398,7 +409,7 @@ export const FreeToPaidConversionModal: React.FC<FreeToPaidConversionModalProps>
               onClick={onClose}
               className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
             >
-              Cancel
+              Back / Cancel (वापस जाएं)
             </button>
             <button
               type="submit"

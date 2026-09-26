@@ -190,6 +190,31 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
     return () => unsubSub();
   }, []);
 
+  // Smooth Escape key handler to return smoothly without freeze
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showSubConfigModal) setShowSubConfigModal(false);
+        else if (qrModalUser) setQrModalUser(null);
+        else if (slipReviewUser) setSlipReviewUser(null);
+        else if (historyModalUser) setHistoryModalUser(null);
+        else if (convertingToPaidUser) setConvertingToPaidUser(null);
+        else if (managingUser) setManagingUser(null);
+        else if (inspectingRider) setInspectingRider(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    showSubConfigModal,
+    qrModalUser,
+    slipReviewUser,
+    historyModalUser,
+    convertingToPaidUser,
+    managingUser,
+    inspectingRider
+  ]);
+
   const [isProcessingDefaultQr, setIsProcessingDefaultQr] = useState(false);
   const [defaultQrError, setDefaultQrError] = useState<string | null>(null);
 

@@ -3,23 +3,23 @@
  * Provides the dedicated, clean shared preview link for team access and delivery rider fleet.
  */
 
-export const SHARED_APP_URL = 'https://ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app';
+export const PRODUCTION_DOMAIN = 'https://courier-rider-payout.vercel.app';
+export const SHARED_APP_URL = PRODUCTION_DOMAIN;
 
 export const SHARE_SUCCESS_MESSAGE = 'App Link copied to clipboard! Share this with your team.';
 
 /**
  * Returns the cleanest direct web app preview link.
- * Prioritizes the production/standalone preview URL or clean origin.
+ * Prioritizes the production Vercel domain to prevent AI Studio preview leaks.
  */
 export function getAppShareUrl(): string {
   if (typeof window !== 'undefined' && window.location) {
     const origin = window.location.origin;
-    // If running in production preview domain
-    if (origin && (origin.includes('ais-pre') || (!origin.includes('localhost') && !origin.includes('127.0.0.1') && !origin.includes('ais-dev')))) {
+    if (origin && origin.includes('courier-rider-payout.vercel.app')) {
       return origin;
     }
   }
-  return SHARED_APP_URL;
+  return PRODUCTION_DOMAIN;
 }
 
 /**

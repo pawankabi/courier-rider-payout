@@ -19,13 +19,15 @@ import {
   Save, 
   RefreshCw,
   Check,
-  TrendingUp
+  TrendingUp,
+  IndianRupee
 } from 'lucide-react';
-import { Rider, DeliveryEntry, SettlementRecord, AppUser } from '../types';
+import { Rider, DeliveryEntry, SettlementRecord, AppUser, RiderAdvanceEntry } from '../types';
 import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
 import { generatePayoutPDF } from '../utils/pdfGenerator';
 import { exportSingleRiderToCSV } from '../utils/csvExport';
-import { saveRiderToFirestore, deleteRiderFromFirestore, saveDeliveryToFirestore } from '../services/firestoreSync';
+import { saveRiderToFirestore, deleteRiderFromFirestore, saveDeliveryToFirestore, syncPublicRiderStatement } from '../services/firestoreSync';
+import { RiderAdvanceModal } from './RiderAdvanceModal';
 
 interface SingleRiderDetailModalProps {
   rider: Rider;
@@ -36,6 +38,9 @@ interface SingleRiderDetailModalProps {
   onRiderUpdated: (updatedRider: Rider) => void;
   onRiderDeleted: (riderId: string) => void;
   onEntryUpdated?: (updatedEntry: DeliveryEntry) => void;
+  onSaveAdvance?: (updatedRider: Rider, newAdvance: RiderAdvanceEntry) => Promise<void>;
+  onDeleteAdvance?: (updatedRider: Rider, advanceId: string) => Promise<void>;
+  onViewLedger?: (riderId: string) => void;
 }
 
 export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
@@ -47,6 +52,9 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
   onRiderUpdated,
   onRiderDeleted,
   onEntryUpdated,
+  onSaveAdvance,
+  onDeleteAdvance,
+  onViewLedger,
 }) => {
   // Filter deliveries for this specific rider
   const riderEntries = entries
@@ -69,6 +77,24 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
 
   // Feedback Toast
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // Advance Management Modal
+  const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
+
+  // Smooth Escape key handler to return smoothly without freeze
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isAdvanceModalOpen) {
+          setIsAdvanceModalOpen(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, isAdvanceModalOpen]);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToast({ text, type });
@@ -312,8 +338,33 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
               )}
             </div>
 
-            {/* Export Suite Buttons for Single Rider */}
+            {/* Export Suite & Advance Management Buttons for Single Rider */}
             <div className="flex items-center gap-2 flex-wrap">
+              <button
+                id="single-rider-advance-btn"
+                type="button"
+                onClick={() => setIsAdvanceModalOpen(true)}
+                className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow transition active:scale-95 cursor-pointer"
+                title="Manage rider advance & loan balance"
+              >
+                <IndianRupee className="w-3.5 h-3.5" />
+                <span>एडवांस खाता ({formatINR(rider.totalAdvance || 0)})</span>
+              </button>
+
+              <button
+                id="single-rider-ledger-link"
+                type="button"
+                onClick={() => {
+                  if (onViewLedger) onViewLedger(rider.id);
+                  else window.open(`/statement/${rider.id}`, '_blank');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                title="Open public Excel-style rider ledger sheet"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Online Sheet</span>
+              </button>
+
               <button
                 id="single-rider-download-pdf-btn"
                 type="button"
@@ -391,7 +442,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
                   <label className="text-xs text-slate-300 block mb-1">Base Rate (₹ per parcel)</label>
                   <input
                     type="number"
-                    step="0.5"
+                    step="any"
                     value={editBaseRate}
                     onChange={(e) => setEditBaseRate(Number(e.target.value))}
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
@@ -402,7 +453,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
                   <label className="text-xs text-slate-300 block mb-1">Incentive Rate (₹ per parcel)</label>
                   <input
                     type="number"
-                    step="0.5"
+                    step="any"
                     value={editIncentiveRate}
                     onChange={(e) => setEditIncentiveRate(Number(e.target.value))}
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
@@ -626,17 +677,65 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
         {/* Modal Footer */}
         <div className="p-3 sm:p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between gap-3 text-xs">
           <div className="text-slate-400">
-            Total Deliveries: <strong className="text-white">{riderEntries.length}</strong> • Unpaid: <strong className="text-amber-400">{unpaidCount}</strong>
+            Total Deliveries: <strong className="text-white">{riderEntries.length}</strong> • Unpaid: <strong className="text-amber-400">{unpaidCount}</strong> • Advance: <strong className="text-amber-300">{formatINR(rider.totalAdvance || 0)}</strong>
           </div>
           <button
             type="button"
+            id="close-single-rider-modal-bottom-btn"
             onClick={onClose}
-            className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
           >
-            Close Inspector
+            Back / Cancel (वापस जाएं)
           </button>
         </div>
       </div>
+
+      {/* Embedded Rider Advance Modal */}
+      {isAdvanceModalOpen && (
+        <RiderAdvanceModal
+          rider={rider}
+          settlements={settlements}
+          deliveries={riderEntries}
+          hubName={user.displayName || user.name || 'सरायकेला कूरियर हब'}
+          hubSignature={user.hubSignature}
+          onClose={() => setIsAdvanceModalOpen(false)}
+          onSaveAdvance={async (updatedRider, newAdvance) => {
+            if (onSaveAdvance) {
+              await onSaveAdvance(updatedRider, newAdvance);
+            } else {
+              await saveRiderToFirestore(user.uid, updatedRider);
+              onRiderUpdated(updatedRider);
+              await syncPublicRiderStatement(
+                updatedRider,
+                updatedRider.advances || [],
+                settlements,
+                riderEntries,
+                user.displayName || user.name,
+                user.hubSignature
+              );
+            }
+            showToast(`₹${newAdvance.amount} का एडवांस सुरक्षित किया गया!`, 'success');
+          }}
+          onDeleteAdvance={async (updatedRider, advId) => {
+            if (onDeleteAdvance) {
+              await onDeleteAdvance(updatedRider, advId);
+            } else {
+              await saveRiderToFirestore(user.uid, updatedRider);
+              onRiderUpdated(updatedRider);
+              await syncPublicRiderStatement(
+                updatedRider,
+                updatedRider.advances || [],
+                settlements,
+                riderEntries,
+                user.displayName || user.name,
+                user.hubSignature
+              );
+            }
+            showToast('एडवांस एंट्री सफलतापूर्वक हटाई गई!', 'success');
+          }}
+          onViewLedger={onViewLedger}
+        />
+      )}
     </div>
   );
 };

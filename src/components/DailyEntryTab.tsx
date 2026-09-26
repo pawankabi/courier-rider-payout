@@ -30,6 +30,7 @@ import {
 import { EditEntryModal } from './EditEntryModal';
 import { getFestivalAlert } from '../data/festivals';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
+import { InstantShareSuccessModal } from './InstantShareSuccessModal';
 
 const DAILY_ENTRY_DRAFT_KEY = 'courier_daily_entry_draft_v1';
 
@@ -82,7 +83,7 @@ export const DailyEntryTab: React.FC<Props> = ({
 
   // Form State with initial draft recovery
   const [selectedRiderId, setSelectedRiderId] = useState<string>(() => {
-    if (initialDraft?.selectedRiderId && riders.some((r) => r.id === initialDraft.selectedRiderId)) {
+    if (initialDraft?.selectedRiderId) {
       return initialDraft.selectedRiderId;
     }
     return riders.length > 0 ? riders[0].id : '';
@@ -121,12 +122,14 @@ export const DailyEntryTab: React.FC<Props> = ({
   useEffect(() => {
     if (riders.length > 0) {
       if (!selectedRiderId || !riders.some((r) => r.id === selectedRiderId)) {
-        setSelectedRiderId(riders[0].id);
+        if (initialDraft?.selectedRiderId && riders.some((r) => r.id === initialDraft.selectedRiderId)) {
+          setSelectedRiderId(initialDraft.selectedRiderId);
+        } else {
+          setSelectedRiderId(riders[0].id);
+        }
       }
-    } else {
-      setSelectedRiderId('');
     }
-  }, [riders, selectedRiderId]);
+  }, [riders, selectedRiderId, initialDraft]);
 
   // Auto-Save in-progress draft on EVERY keystroke or field change
   useEffect(() => {
@@ -191,6 +194,15 @@ export const DailyEntryTab: React.FC<Props> = ({
   // Edit Modal State
   const [editingEntry, setEditingEntry] = useState<DeliveryEntry | null>(null);
 
+  // Instant 1-Tap SMS / WhatsApp popup state on save
+  const [instantShareData, setInstantShareData] = useState<{
+    riderName: string;
+    riderPhone: string;
+    riderId: string;
+    amount: number;
+    message: string;
+  } | null>(null);
+
   // Dynamic Rate Calculations
   const selectedRider = riders.find((r) => r.id === selectedRiderId);
   const activeBaseRate = 
@@ -250,6 +262,27 @@ export const DailyEntryTab: React.FC<Props> = ({
       totalEarnings,
       status: 'Unpaid',
       notes: notes.trim(),
+    });
+
+    // Construct automatic SMS / WhatsApp message and trigger direct native SMS fallback
+    const statementUrl = `https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
+    const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: ${statementUrl}`;
+    const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
+
+    // Immediately trigger direct native SMS fallback
+    try {
+      window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
+    } catch (smsErr) {
+      console.warn('Native SMS trigger notice:', smsErr);
+    }
+
+    // Display instant on-screen success prompt with 2 big 1-tap buttons (Send SMS / Send WhatsApp)
+    setInstantShareData({
+      riderName: rider.name,
+      riderPhone: cleanPhone,
+      riderId: rider.id,
+      amount: totalEarnings,
+      message: autoMessage,
     });
 
     // Clear temporary draft ONLY when submitted successfully
@@ -824,6 +857,22 @@ export const DailyEntryTab: React.FC<Props> = ({
           riders={riders}
           initialFestivalId={festivalAlert?.festival?.id}
           hubSignature={userRateConfig?.hubSignature}
+        />
+      )}
+
+      {/* Automatic 1-Tap SMS / WhatsApp Instant Share Success Modal */}
+      {instantShareData && (
+        <InstantShareSuccessModal
+          isOpen={Boolean(instantShareData)}
+          onClose={() => setInstantShareData(null)}
+          riderName={instantShareData.riderName}
+          riderPhone={instantShareData.riderPhone}
+          riderId={instantShareData.riderId}
+          title="पे-आउट एंट्री दर्ज हुई! (Payout Logged)"
+          subtitle={`सफलतापूर्वक दर्ज की गई • ${instantShareData.riderName}`}
+          amount={instantShareData.amount}
+          entryType="payout"
+          customMessage={instantShareData.message}
         />
       )}
     </div>

@@ -42,6 +42,17 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, initialMode = 'sig
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  // Smooth Escape key handler to return smoothly without freeze
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   if (!isOpen) return null;
 
   const isIframe = typeof window !== 'undefined' && window.self !== window.top;
@@ -410,9 +421,18 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, initialMode = 'sig
         )}
 
         {/* Privacy & Cloud Isolation reassurance */}
-        <div className="mt-5 pt-4 border-t border-slate-800 flex items-center justify-center gap-2 text-[11px] text-slate-500">
-          <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span>Protected by Firebase Firestore rules. Only you can access your data.</span>
+        <div className="mt-5 pt-4 border-t border-slate-800 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+          <div className="flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>Protected by Firebase Firestore rules.</span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold transition cursor-pointer"
+          >
+            Back / Cancel
+          </button>
         </div>
       </div>
     </div>

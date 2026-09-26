@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -24,9 +24,13 @@ import {
   Coins,
   Calendar,
   DollarSign,
-  Sparkles
+  Sparkles,
+  IndianRupee,
+  FileSpreadsheet
 } from 'lucide-react';
-import { Rider, DeliveryEntry } from '../types';
+import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry } from '../types';
+import { RiderAdvanceModal } from './RiderAdvanceModal';
+import { generateStatementUrl, formatSalarySmsText, dispatchAutomatedSms, getWhatsAppUrl, getNativeSmsUrl } from '../services/smsService';
 import { 
   formatINR, 
   isValidIndianPhone, 
@@ -61,6 +65,10 @@ interface Props {
     }
   ) => void;
   onToggleEntryStatus?: (entryId: string) => void;
+  onSaveAdvance?: (updatedRider: Rider, newAdvance: RiderAdvanceEntry) => Promise<void>;
+  onDeleteAdvance?: (updatedRider: Rider, advanceId: string) => Promise<void>;
+  onViewLedger?: (riderId: string) => void;
+  settlements?: SettlementRecord[];
   canAccessFestivalGreetings?: boolean;
   hubSignature?: string;
 }
@@ -68,17 +76,36 @@ interface Props {
 export const RidersTab: React.FC<Props> = ({
   riders,
   entries,
+  settlements = [],
   onAddRider,
   onUpdateRider,
   onDeleteRider,
   onReorderRiders,
   onMarkEntriesPaid,
   onToggleEntryStatus,
+  onSaveAdvance,
+  onDeleteAdvance,
+  onViewLedger,
   canAccessFestivalGreetings = false,
   hubSignature,
 }) => {
   // Status Filter State: 'unpaid' (Default) or 'all'
-  const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all'>('unpaid');
+  const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all'>(() => {
+    try {
+      const saved = localStorage.getItem('cp_riders_status_filter');
+      if (saved === 'all' || saved === 'unpaid') return saved;
+    } catch {}
+    return 'unpaid';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('cp_riders_status_filter', statusFilter);
+    } catch {}
+  }, [statusFilter]);
+
+  // Advance Management Modal state
+  const [advanceModalRider, setAdvanceModalRider] = useState<Rider | null>(null);
 
   // Expanded entry lists per rider ID
   const [expandedRiderIds, setExpandedRiderIds] = useState<Record<string, boolean>>({});
@@ -275,6 +302,69 @@ export const RidersTab: React.FC<Props> = ({
     };
   };
 
+  // Restore persisted active modal for a rider (e.g. after phone unlock / app resume)
+  useEffect(() => {
+    if (riders.length === 0) return;
+    try {
+      const raw = localStorage.getItem('cp_riders_active_modal');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed?.riderId) {
+        const target = riders.find((r) => r.id === parsed.riderId);
+        if (target) {
+          if (parsed.type === 'advance') {
+            setAdvanceModalRider((curr) => (curr?.id === target.id ? curr : target));
+          } else if (parsed.type === 'edit') {
+            setEditingRider((curr) => (curr?.id === target.id ? curr : target));
+          } else if (parsed.type === 'paying') {
+            const stats = getRiderStats(target.id);
+            setPayingRiderData((curr) => (curr?.rider?.id === target.id ? curr : { rider: target, stats }));
+          }
+        }
+      }
+    } catch {}
+  }, [riders]);
+
+  // Persist open modal state so lock/unlock / page refresh brings user right back
+  useEffect(() => {
+    try {
+      if (advanceModalRider) {
+        localStorage.setItem(
+          'cp_riders_active_modal',
+          JSON.stringify({ type: 'advance', riderId: advanceModalRider.id })
+        );
+      } else if (editingRider) {
+        localStorage.setItem(
+          'cp_riders_active_modal',
+          JSON.stringify({ type: 'edit', riderId: editingRider.id })
+        );
+      } else if (payingRiderData) {
+        localStorage.setItem(
+          'cp_riders_active_modal',
+          JSON.stringify({ type: 'paying', riderId: payingRiderData.rider.id })
+        );
+      } else {
+        localStorage.removeItem('cp_riders_active_modal');
+      }
+    } catch {}
+  }, [advanceModalRider, editingRider, payingRiderData]);
+
+  // Smooth Escape key handler to return smoothly without freeze
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (advanceModalRider) setAdvanceModalRider(null);
+        else if (isAddModalOpen) setIsAddModalOpen(false);
+        else if (editingRider) setEditingRider(null);
+        else if (deletingRider) setDeletingRider(null);
+        else if (payingRiderData) setPayingRiderData(null);
+        else if (isFestivalModalOpen) setIsFestivalModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [advanceModalRider, isAddModalOpen, editingRider, deletingRider, payingRiderData, isFestivalModalOpen]);
+
   // Mark all unpaid entries for rider as paid
   const handleOpenMarkPaid = (rider: Rider) => {
     const stats = getRiderStats(rider.id);
@@ -350,6 +440,10 @@ export const RidersTab: React.FC<Props> = ({
   );
   const totalUnpaidParcels = totalUnpaidDeliveries.reduce(
     (sum, e) => sum + e.parcels,
+    0
+  );
+  const totalAdvanceAmount = riders.reduce(
+    (sum, r) => sum + (Number(r.totalAdvance) || 0),
     0
   );
 
@@ -589,12 +683,40 @@ export const RidersTab: React.FC<Props> = ({
               }`}
             />
             {statusFilter === 'unpaid' ? (
-              <span>
-                Showing <strong>{sortedFilteredRiders.length}</strong> rider{sortedFilteredRiders.length === 1 ? '' : 's'} with pending unpaid dues • Total Unpaid: <strong className="text-amber-400">{formatINR(totalUnpaidAmount)}</strong> ({totalUnpaidParcels} pkts)
+              <span className="flex items-center gap-1.5 flex-wrap">
+                <span>
+                  Showing <strong>{sortedFilteredRiders.length}</strong> rider{sortedFilteredRiders.length === 1 ? '' : 's'} with pending unpaid dues
+                </span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-300 font-semibold text-xs">
+                  <span>Total Unpaid:</span>
+                  <strong className="text-amber-400 font-black text-sm">{formatINR(totalUnpaidAmount)}</strong>
+                  <span className="text-[11px] text-amber-200/80">({totalUnpaidParcels} pkts)</span>
+                </span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-300 font-semibold text-xs">
+                  <IndianRupee className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Total Advance:</span>
+                  <strong className="text-rose-300 font-black text-sm">{formatINR(totalAdvanceAmount)}</strong>
+                </span>
               </span>
             ) : (
-              <span>
-                Showing <strong>all {sortedFilteredRiders.length}</strong> riders with lifetime delivery records & past settlements.
+              <span className="flex items-center gap-1.5 flex-wrap">
+                <span>
+                  Showing <strong>all {sortedFilteredRiders.length}</strong> riders with lifetime delivery records
+                </span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-300 font-semibold text-xs">
+                  <span>Total Unpaid:</span>
+                  <strong className="text-amber-400 font-black text-sm">{formatINR(totalUnpaidAmount)}</strong>
+                  <span className="text-[11px] text-amber-200/80">({totalUnpaidParcels} pkts)</span>
+                </span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-300 font-semibold text-xs">
+                  <IndianRupee className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Total Advance:</span>
+                  <strong className="text-rose-300 font-black text-sm">{formatINR(totalAdvanceAmount)}</strong>
+                </span>
               </span>
             )}
           </div>
@@ -714,6 +836,18 @@ export const RidersTab: React.FC<Props> = ({
                           <MessageCircle className="w-3 h-3" />
                           <span>WhatsApp</span>
                         </a>
+
+                        {/* Top Running Advance Balance Badge */}
+                        {rider.totalAdvance && rider.totalAdvance > 0 ? (
+                          <span 
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-bold cursor-pointer hover:bg-amber-500/25 transition"
+                            onClick={() => setAdvanceModalRider(rider)}
+                            title="कुल बकाया एडवांस - क्लिक करके हिस्ट्री देखें"
+                          >
+                            <IndianRupee className="w-2.5 h-2.5" />
+                            <span>Adv: {formatINR(rider.totalAdvance)}</span>
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -753,50 +887,78 @@ export const RidersTab: React.FC<Props> = ({
                   <span>Joined: {rider.joinedDate || '2026'}</span>
                 </div>
 
-                {/* Status-Adaptive Earnings Metrics */}
+                {/* Status-Adaptive Earnings & Advance Metrics */}
                 {statusFilter === 'unpaid' ? (
-                  /* UNPAID DEFAULT VIEW: Exclusively highlights unpaid earnings */
-                  <div className="mt-3.5 p-3.5 rounded-xl bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/20 border border-amber-500/30">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-[11px] uppercase font-bold tracking-wider text-amber-400">
-                          <Clock className="w-3.5 h-3.5" />
-                          <span>Active Unpaid Balance</span>
+                  /* UNPAID DEFAULT VIEW: Shows Active Unpaid Balance and Active Advance side by side */
+                  <div className="mt-3.5 space-y-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {/* Active Unpaid Balance Card */}
+                      <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/20 border border-amber-500/35 flex flex-col justify-between shadow-sm">
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 text-[11px] uppercase font-bold tracking-wider text-amber-400">
+                              <Clock className="w-3.5 h-3.5 shrink-0" />
+                              <span>Active Unpaid Balance</span>
+                            </div>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                              {stats.unpaidParcels} pkts
+                            </span>
+                          </div>
+                          <div className="text-xl sm:text-2xl font-black text-amber-300 mt-1">
+                            {formatINR(stats.unpaidAmount)}
+                          </div>
                         </div>
-                        <div className="text-2xl font-black text-amber-300 mt-1">
-                          {formatINR(stats.unpaidAmount)}
+
+                        <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-1">
+                          <span className="text-[10px] text-slate-400">
+                            {stats.unpaidCount} daily delivery log{stats.unpaidCount === 1 ? '' : 's'}
+                          </span>
+                          <button
+                            id={`mark-paid-rider-${rider.id}-btn`}
+                            onClick={() => handleOpenMarkPaid(rider)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow active:scale-95 transition cursor-pointer"
+                            title="Mark all pending deliveries as Paid and settle payout"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Mark Paid</span>
+                          </button>
                         </div>
                       </div>
 
-                      {/* Primary Mark As Paid Action Button */}
-                      <button
-                        id={`mark-paid-rider-${rider.id}-btn`}
-                        onClick={() => handleOpenMarkPaid(rider)}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/25 active:scale-95 transition"
-                        title="Mark all pending deliveries as Paid and remove from unpaid view"
+                      {/* Distinct Active Advance Card (Prompt Requirement) */}
+                      <div 
+                        onClick={() => setAdvanceModalRider(rider)}
+                        className="p-3.5 rounded-xl bg-gradient-to-br from-slate-900 via-slate-900 to-rose-950/25 border border-rose-500/40 hover:border-rose-500/70 cursor-pointer transition flex flex-col justify-between shadow-sm group"
+                        title="राइडर एडवांस प्रबंधन - क्लिक करके हिस्ट्री देखें या नया एडवांस जोड़ें"
                       >
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Mark as Paid</span>
-                      </button>
-                    </div>
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 text-[11px] uppercase font-bold tracking-wider text-rose-400">
+                              <IndianRupee className="w-3.5 h-3.5 shrink-0" />
+                              <span>Active Advance Balance</span>
+                            </div>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 group-hover:bg-rose-500/30 transition">
+                              ✏️ Manage
+                            </span>
+                          </div>
+                          <div className="text-xl sm:text-2xl font-black text-rose-300 mt-1">
+                            {formatINR(rider.totalAdvance || 0)}
+                          </div>
+                        </div>
 
-                    <div className="mt-3 pt-2.5 border-t border-slate-800/80 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-slate-400 text-[11px]">Unpaid Parcels:</span>
-                        <p className="font-bold text-slate-200 mt-0.5">
-                          {stats.unpaidParcels} delivered packets
-                        </p>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 text-[11px]">Pending Dates:</span>
-                        <p className="font-bold text-slate-200 mt-0.5">
-                          {stats.unpaidCount} daily delivery log{stats.unpaidCount === 1 ? '' : 's'}
-                        </p>
+                        <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-1 text-[10px]">
+                          <span className="text-slate-400">
+                            {(rider.advances && rider.advances.length > 0) ? `${rider.advances.length} past advance entries` : 'No active advance'}
+                          </span>
+                          <span className="text-rose-400 font-bold group-hover:underline">
+                            View / Edit →
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  /* ALL HISTORY VIEW: Comprehensive lifetime overview */
+                  /* ALL HISTORY VIEW: Comprehensive lifetime overview + Unpaid & Advance Dues */
                   <div className="mt-3.5 space-y-2.5">
                     <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 text-center">
                       <div>
@@ -825,32 +987,66 @@ export const RidersTab: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    {stats.unpaidAmount > 0 ? (
-                      <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">
-                        <div>
-                          <span className="text-[11px] text-amber-300 font-semibold">
-                            Pending Unpaid:
-                          </span>
-                          <span className="ml-1.5 text-xs font-black text-amber-400">
-                            {formatINR(stats.unpaidAmount)}
-                          </span>
-                          <span className="text-[10px] text-slate-400 ml-1">
-                            ({stats.unpaidParcels} pkts)
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {stats.unpaidAmount > 0 ? (
+                        <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">
+                          <div>
+                            <span className="text-[10px] text-amber-300 uppercase font-bold block">
+                              Active Unpaid Balance:
+                            </span>
+                            <span className="text-sm font-black text-amber-400">
+                              {formatINR(stats.unpaidAmount)}
+                            </span>
+                            <span className="text-[10px] text-slate-400 ml-1">
+                              ({stats.unpaidParcels} pkts)
+                            </span>
+                          </div>
+                          <button
+                            id={`mark-paid-rider-allview-${rider.id}-btn`}
+                            onClick={() => handleOpenMarkPaid(rider)}
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] rounded-lg shadow transition cursor-pointer"
+                          >
+                            Mark Paid
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/60 border border-emerald-500/30">
+                          <div>
+                            <span className="text-[10px] text-emerald-400 uppercase font-bold block">
+                              Active Unpaid Balance:
+                            </span>
+                            <span className="text-sm font-black text-emerald-400">
+                              ₹0
+                            </span>
+                            <span className="text-[10px] text-slate-400 ml-1">
+                              (Settled)
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-lg border border-emerald-500/30">
+                            ✓ Settled
                           </span>
                         </div>
-                        <button
-                          id={`mark-paid-rider-allview-${rider.id}-btn`}
-                          onClick={() => handleOpenMarkPaid(rider)}
-                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] rounded-lg shadow transition"
-                        >
-                          Mark as Paid
-                        </button>
+                      )}
+
+                      {/* Distinct Active Advance Card in All History View */}
+                      <div 
+                        onClick={() => setAdvanceModalRider(rider)}
+                        className="flex items-center justify-between p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 hover:border-rose-500/50 cursor-pointer transition"
+                        title="राइडर एडवांस प्रबंधन"
+                      >
+                        <div>
+                          <span className="text-[10px] text-rose-300 uppercase font-bold block">
+                            Active Advance Balance:
+                          </span>
+                          <span className="text-sm font-black text-rose-400">
+                            {formatINR(rider.totalAdvance || 0)}
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-bold text-rose-300 bg-rose-500/20 px-2 py-1 rounded-lg">
+                          ✏️ Manage
+                        </span>
                       </div>
-                    ) : (
-                      <div className="p-2 text-center rounded-xl bg-slate-900/40 border border-slate-800 text-[11px] text-emerald-400 font-medium">
-                        ✓ All balances settled in full
-                      </div>
-                    )}
+                    </div>
                   </div>
                 )}
 
@@ -964,6 +1160,33 @@ export const RidersTab: React.FC<Props> = ({
                     <MessageCircle className="w-3.5 h-3.5" />
                     <span>WhatsApp</span>
                   </a>
+
+                  {/* Advance Management Button */}
+                  <button
+                    id={`advance-rider-footer-${rider.id}`}
+                    type="button"
+                    onClick={() => setAdvanceModalRider(rider)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 rounded-xl transition active:scale-95 shadow-sm cursor-pointer"
+                    title={`Manage advance & loans for ${rider.name}`}
+                  >
+                    <IndianRupee className="w-3.5 h-3.5" />
+                    <span>Advance {rider.totalAdvance ? `(${formatINR(rider.totalAdvance)})` : ''}</span>
+                  </button>
+
+                  {/* Public Online Ledger Statement Link */}
+                  <button
+                    id={`ledger-rider-footer-${rider.id}`}
+                    type="button"
+                    onClick={() => {
+                      if (onViewLedger) onViewLedger(rider.id);
+                      else window.open(generateStatementUrl(rider.id), '_blank');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 bg-slate-850 hover:bg-slate-800 border border-emerald-500/30 rounded-xl transition active:scale-95 cursor-pointer"
+                    title={`View public Excel ledger sheet for ${rider.name}`}
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="hidden sm:inline">Ledger</span>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-1.5">
@@ -1418,14 +1641,25 @@ export const RidersTab: React.FC<Props> = ({
       {deletingRider && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm animate-in fade-in">
           <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-red-500/40 p-6 shadow-2xl text-white space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-2xl bg-red-500/15 text-red-400 border border-red-500/30 shrink-0">
-                <AlertTriangle className="w-6 h-6" />
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-red-500/15 text-red-400 border border-red-500/30 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">Delete Delivery Boy</h3>
+                  <p className="text-xs text-slate-400">Confirmation required</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-bold text-base text-white">Delete Delivery Boy</h3>
-                <p className="text-xs text-slate-400">Confirmation required</p>
-              </div>
+              <button
+                type="button"
+                id="close-delete-rider-modal-top-btn"
+                onClick={() => setDeletingRider(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                title="Close (✕)"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
             <div className="p-4 rounded-xl bg-slate-850 border border-slate-750 space-y-2">
@@ -1482,6 +1716,33 @@ export const RidersTab: React.FC<Props> = ({
           onClose={() => setIsFestivalModalOpen(false)}
           riders={riders}
           hubSignature={hubSignature}
+        />
+      )}
+
+      {/* Dedicated Rider Advance Management Modal */}
+      {advanceModalRider && (
+        <RiderAdvanceModal
+          rider={advanceModalRider}
+          settlements={settlements}
+          deliveries={entries}
+          hubName={hubSignature || 'सरायकेला कूरियर हब'}
+          hubSignature={hubSignature}
+          onClose={() => setAdvanceModalRider(null)}
+          onSaveAdvance={async (updatedRider, newAdvance) => {
+            if (onSaveAdvance) {
+              await onSaveAdvance(updatedRider, newAdvance);
+            } else {
+              onUpdateRider(updatedRider);
+            }
+            setAdvanceModalRider(updatedRider);
+          }}
+          onDeleteAdvance={async (updatedRider, advId) => {
+            if (onDeleteAdvance) {
+              await onDeleteAdvance(updatedRider, advId);
+            }
+            setAdvanceModalRider(updatedRider);
+          }}
+          onViewLedger={onViewLedger}
         />
       )}
     </div>

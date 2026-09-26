@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   PackagePlus, 
   Users, 
@@ -46,7 +46,8 @@ import {
   SUPER_ADMIN_EMAIL,
   normalizeUserPermissions,
   normalizeUserSubscription,
-  isEntityOwnedByUser
+  isEntityOwnedByUser,
+  syncPublicRiderStatement
 } from './services/firestoreSync';
 import { 
   Rider, 
@@ -60,8 +61,12 @@ import {
   DEFAULT_USER_RATE_CONFIG,
   UserSubscription,
   DEFAULT_USER_SUBSCRIPTION,
-  checkSubscriptionLock
+  checkSubscriptionLock,
+  RiderAdvanceEntry,
+  PublicRiderStatement
 } from './types';
+import { RiderLedgerStatement } from './components/RiderLedgerStatement';
+import { PublicRiderLedger } from './components/PublicRiderLedger';
 import { 
   loadRidersFromStorage, 
   saveRidersToStorage, 
@@ -93,8 +98,91 @@ import { FestivalGreetingsModal } from './components/FestivalGreetingsModal';
 import { SubscriptionAlertBanner } from './components/SubscriptionAlertBanner';
 import { UserPaymentModal } from './components/UserPaymentModal';
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('entry');
+/**
+ * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
+ * Supports:
+ * - /statement/:riderId
+ * - /ledger/:riderId
+ * - #statement/:riderId or #/statement/:riderId
+ * - ?statement=:riderId or ?riderId=:riderId
+ */
+function parseRiderStatementRoute(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  const hash = window.location.hash || '';
+  const pathname = window.location.pathname || '';
+  const isStatement = hash.includes('/statement/') || pathname.includes('/statement/');
+
+  if (isStatement) {
+    const rawRiderId = hash.includes('/statement/')
+      ? hash.split('/statement/')[1]?.split('?')[0]?.split('#')[0]
+      : pathname.split('/statement/')[1]?.split('?')[0]?.split('#')[0];
+    if (rawRiderId) {
+      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
+    }
+  }
+
+  // Also support /ledger/ or #/ledger/ fallback
+  if (hash.includes('/ledger/') || pathname.includes('/ledger/')) {
+    const rawRiderId = hash.includes('/ledger/')
+      ? hash.split('/ledger/')[1]?.split('?')[0]?.split('#')[0]
+      : pathname.split('/ledger/')[1]?.split('?')[0]?.split('#')[0];
+    if (rawRiderId) {
+      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
+    }
+  }
+
+  // Search query parameter check: ?statement=:riderId or ?ledger=:riderId or ?riderId=:riderId
+  const params = new URLSearchParams(window.location.search);
+  const query = params.get('statement') || params.get('ledger') || params.get('riderStatement') || params.get('riderId');
+  if (query) {
+    return decodeURIComponent(query).trim();
+  }
+
+  return null;
+}
+
+function MainCourierApp() {
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    try {
+      const saved = localStorage.getItem('cp_active_tab');
+      if (saved && ['entry', 'riders', 'reports', 'settlement', 'festivals', 'admin'].includes(saved)) {
+        return saved as TabType;
+      }
+    } catch {}
+    return 'entry';
+  });
+
+  // Persist activeTab across refreshes, app switching, and lock/unlock
+  useEffect(() => {
+    try {
+      localStorage.setItem('cp_active_tab', activeTab);
+    } catch {}
+  }, [activeTab]);
+
+  // Session Stability: Keep active tab in localStorage so screen lock or incoming phone calls do not force a hard reload
+  useEffect(() => {
+    const handleRestoreTab = () => {
+      try {
+        const saved = localStorage.getItem('cp_active_tab');
+        if (saved && ['entry', 'riders', 'reports', 'settlement', 'festivals', 'admin'].includes(saved)) {
+          setActiveTab((prev) => (prev === saved ? prev : (saved as TabType)));
+        }
+      } catch {}
+    };
+    window.addEventListener('visibilitychange', handleRestoreTab);
+    window.addEventListener('pageshow', handleRestoreTab);
+    return () => {
+      window.removeEventListener('visibilitychange', handleRestoreTab);
+      window.removeEventListener('pageshow', handleRestoreTab);
+    };
+  }, []);
+
+  const [viewingLedgerRiderId, setViewingLedgerRiderId] = useState<string | null>(null);
+
+  const handleViewLedger = (riderId: string) => {
+    setViewingLedgerRiderId(riderId);
+  };
   
   // Instant Cache-First initialization: load directly from localStorage in < 50ms!
   const [riders, setRiders] = useState<Rider[]>(() => loadRidersFromStorage());
@@ -124,6 +212,50 @@ export default function App() {
   const [isUserPaymentModalOpen, setIsUserPaymentModalOpen] = useState(false);
   const [masterQrCodeUrl, setMasterQrCodeUrl] = useState<string>('');
   const [hasAutoOpenedPaymentModal, setHasAutoOpenedPaymentModal] = useState<string | null>(null);
+
+  // Real-time in-app statement compilation for instant 0ms Khatabook view
+  const inAppLedgerInitialStatement = useMemo<PublicRiderStatement | null>(() => {
+    if (!viewingLedgerRiderId) return null;
+    const r = riders.find((x) => x.id === viewingLedgerRiderId);
+    if (!r) return null;
+    return {
+      riderId: r.id,
+      riderName: r.name,
+      riderPhone: r.phone,
+      vehicleType: r.vehicleType,
+      hubName: userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+      hubSignature: userRateConfig.hubSignature || '',
+      totalAdvance: typeof r.totalAdvance === 'number' ? r.totalAdvance : 0,
+      advances: r.advances || [],
+      salaries: settlements
+        .filter((s) => s.riderId === r.id)
+        .map((s) => ({
+          id: s.id,
+          startDate: s.startDate,
+          endDate: s.endDate,
+          totalParcels: s.totalParcels,
+          baseAmount: s.baseAmount,
+          incentiveAmount: s.incentiveAmount,
+          grossTotal: s.grossTotal,
+          advanceAmount: s.advanceAmount || 0,
+          netTotal: s.netTotal,
+          paidAt: s.paidAt,
+          status: s.status || 'PAID',
+        })),
+      recentDeliveries: entries
+        .filter((e) => e.riderId === r.id)
+        .slice(0, 100)
+        .map((e) => ({
+          id: e.id,
+          date: e.date,
+          parcels: e.parcels,
+          totalEarnings: e.totalEarnings,
+          status: e.status,
+          settlementId: e.settlementId,
+        })),
+      updatedAt: new Date().toISOString(),
+    };
+  }, [viewingLedgerRiderId, riders, settlements, entries, userRateConfig]);
 
   // Subscribe to system default subscription config to obtain Master Admin's UPI QR Code
   useEffect(() => {
@@ -216,12 +348,7 @@ export default function App() {
         }
       },
       onWakeup: () => {
-        // Automatically ensure local state is refreshed upon device wake-up
-        if (currentUser) {
-          const cachedR = loadRidersFromStorage(currentUser.uid);
-          setRiders(cachedR);
-          setEntries(loadDeliveriesFromStorage(cachedR, currentUser.uid));
-        }
+        // Safe background reconnection: do not wipe or overwrite active in-memory state or open modals
       },
     });
 
@@ -452,12 +579,24 @@ export default function App() {
     });
   };
 
+  const lastAuthUidRef = useRef<string | null | undefined>(undefined);
+
   // Initialize data and listen to Firebase Auth & Firestore changes
   useEffect(() => {
     let unsubscribeFirestore: (() => void) | null = null;
     let unsubscribeUserDoc: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      const newUid = user ? user.uid : null;
+
+      // Prevent full app unmounting or state resets when auth callback fires for the SAME user
+      // (e.g. phone lock/unlock, network reconnect, background tab resume, or token refresh)
+      if (lastAuthUidRef.current !== undefined && lastAuthUidRef.current === newUid) {
+        setCurrentUser(user);
+        return;
+      }
+
+      lastAuthUidRef.current = newUid;
       setCurrentUser(user);
 
       if (unsubscribeFirestore) {
@@ -871,6 +1010,37 @@ export default function App() {
       const updatedSettlements = [newSettlement, ...settlements];
       setSettlements(updatedSettlements);
       saveSettlementsToStorage(updatedSettlements, targetUid);
+
+      // Auto-deduct advance from rider running total if advance was deducted in settlement
+      if (advanceAmount > 0) {
+        const targetRider = riders.find((r) => r.id === settlementDetails.riderId);
+        if (targetRider && (targetRider.totalAdvance || 0) > 0) {
+          const remainingAdv = Math.max(0, (targetRider.totalAdvance || 0) - advanceAmount);
+          const updatedRider: Rider = {
+            ...targetRider,
+            totalAdvance: remainingAdv,
+          };
+          const updatedRiders = riders.map((r) => (r.id === targetRider.id ? updatedRider : r));
+          setRiders(updatedRiders);
+          saveRidersToStorage(updatedRiders, targetUid);
+          if (targetUid) {
+            saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch(() => {});
+          }
+        }
+      }
+
+      // Sync public statement ledger for this rider
+      const currentRider = riders.find((r) => r.id === settlementDetails.riderId);
+      if (currentRider) {
+        syncPublicRiderStatement(
+          currentRider,
+          currentRider.advances || [],
+          updatedSettlements,
+          updated,
+          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+          userRateConfig.hubSignature
+        ).catch(() => {});
+      }
     }
 
     if (targetUid) {
@@ -882,6 +1052,78 @@ export default function App() {
         console.error('Error batch updating deliveries in Firestore', err);
       }
     }
+  };
+
+  // Save Rider Advance Entry and sync public ledger sheet
+  const handleSaveRiderAdvance = async (updatedRider: Rider, newAdvance: RiderAdvanceEntry) => {
+    const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+
+    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+    setRiders(updatedRiders);
+    saveRidersToStorage(updatedRiders, targetUid);
+
+    if (targetUid) {
+      try {
+        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+      } catch (err) {
+        console.warn('Error saving rider advance to Firestore:', err);
+      }
+    }
+
+    try {
+      await syncPublicRiderStatement(
+        updatedRider,
+        updatedRider.advances || [],
+        settlements,
+        entries,
+        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature
+      );
+    } catch (err) {
+      console.warn('Error syncing public statement:', err);
+    }
+
+    setToastMessage({
+      text: `₹${newAdvance.amount} का एडवांस सुरक्षित किया गया एवं SMS डिस्पैच सक्रिय!`,
+      type: 'success',
+    });
+  };
+
+  // Delete Rider Advance Entry
+  const handleDeleteRiderAdvance = async (updatedRider: Rider, advanceId: string) => {
+    const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+
+    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+    setRiders(updatedRiders);
+    saveRidersToStorage(updatedRiders, targetUid);
+
+    if (targetUid) {
+      try {
+        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+      } catch (err) {
+        console.warn('Error updating rider after advance delete:', err);
+      }
+    }
+
+    try {
+      await syncPublicRiderStatement(
+        updatedRider,
+        updatedRider.advances || [],
+        settlements,
+        entries,
+        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature
+      );
+    } catch (err) {
+      console.warn('Error syncing public statement:', err);
+    }
+
+    setToastMessage({
+      text: `एडवांस एंट्री सफलतापूर्वक हटाई गई।`,
+      type: 'info',
+    });
   };
 
   // Toggle single entry status
@@ -1002,6 +1244,14 @@ export default function App() {
   const todayParcels = todayEntries.reduce((sum, e) => sum + e.parcels, 0);
   const todayEarnings = todayEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
   const unpaidCount = dashboardEntries.filter((e) => e.status === 'Unpaid').length;
+  const totalUnpaidAmount = useMemo(() => {
+    return dashboardEntries
+      .filter((e) => e.status === 'Unpaid')
+      .reduce((sum, e) => sum + (e.totalEarnings || 0), 0);
+  }, [dashboardEntries]);
+  const totalAdvanceAmount = useMemo(() => {
+    return dashboardRiders.reduce((sum, r) => sum + (Number(r.totalAdvance) || 0), 0);
+  }, [dashboardRiders]);
 
   if (!isInitialized) {
     return (
@@ -1129,6 +1379,19 @@ export default function App() {
 
           {/* Header Action Items */}
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* Header Balances Summary Strip (Total Unpaid & Total Advance Side-by-Side) */}
+            <div className="flex items-center gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-800/90 border border-slate-700/80 text-xs shadow-sm">
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <span className="text-slate-400 text-[11px] sm:text-xs">Total Unpaid:</span>
+                <strong className="text-amber-400 font-black text-xs sm:text-sm">{formatINR(totalUnpaidAmount)}</strong>
+              </div>
+              <span className="text-slate-600 font-bold">•</span>
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <span className="text-slate-400 text-[11px] sm:text-xs">Total Advance:</span>
+                <strong className="text-rose-300 font-black text-xs sm:text-sm">{formatINR(totalAdvanceAmount)}</strong>
+              </div>
+            </div>
+
             {/* Today Quick Metric Badge */}
             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/80 text-xs">
               <span className="text-slate-400">Today:</span>
@@ -1465,12 +1728,16 @@ export default function App() {
             key={`riders-tab-${restoreRefreshKey}`}
             riders={dashboardRiders}
             entries={dashboardEntries}
+            settlements={dashboardSettlements}
             onAddRider={handleAddRider}
             onUpdateRider={handleUpdateRider}
             onDeleteRider={handleDeleteRider}
             onReorderRiders={handleReorderRiders}
             onMarkEntriesPaid={handleMarkEntriesPaid}
             onToggleEntryStatus={handleToggleEntryStatus}
+            onSaveAdvance={handleSaveRiderAdvance}
+            onDeleteAdvance={handleDeleteRiderAdvance}
+            onViewLedger={handleViewLedger}
             canAccessFestivalGreetings={canAccessFestivalGreetings}
             hubSignature={userRateConfig?.hubSignature}
           />
@@ -1492,6 +1759,7 @@ export default function App() {
             onMarkEntriesPaid={handleMarkEntriesPaid}
             onToggleEntryStatus={handleToggleEntryStatus}
             onNavigateToRiders={() => setActiveTab('riders')}
+            onViewLedger={handleViewLedger}
           />
         )}
 
@@ -1684,6 +1952,52 @@ export default function App() {
           onSuccessToast={(msg) => setToastMessage({ text: msg, type: 'success' })}
         />
       )}
+
+      {/* In-App Khatabook Statement / Ledger Screen Overlay with sticky top Close/Back button */}
+      {viewingLedgerRiderId && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950 animate-in fade-in">
+          <RiderLedgerStatement
+            riderId={viewingLedgerRiderId}
+            initialStatement={inAppLedgerInitialStatement}
+            onBackToApp={() => setViewingLedgerRiderId(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }
+
+/**
+ * Immediate Route Interception in App.tsx (Top-Level Check):
+ * At the very top of App.tsx (before rendering any Header, Auth check, Daily Entry screen, or Navigation bars):
+ * Check the current URL pathname and hash:
+ * const hash = window.location.hash;
+ * const path = window.location.pathname;
+ * const isStatementRoute = hash.includes('/statement/') || path.includes('/statement/');
+ * If isStatementRoute is true:
+ * Extract the riderId parameter from the URL.
+ * RETURN ONLY <PublicRiderLedger riderId={riderId}/>.
+ * Do NOT render the main layout, do NOT render the Header (Courier Payout Pro), do NOT show Sign In / Sync, and do NOT show Daily Delivery Entry.
+ */
+export default function App() {
+  const [statementRiderId, setStatementRiderId] = useState<string | null>(() => parseRiderStatementRoute());
+
+  useEffect(() => {
+    const handleUrlChange = () => {
+      setStatementRiderId(parseRiderStatementRoute());
+    };
+    window.addEventListener('hashchange', handleUrlChange);
+    window.addEventListener('popstate', handleUrlChange);
+    return () => {
+      window.removeEventListener('hashchange', handleUrlChange);
+      window.removeEventListener('popstate', handleUrlChange);
+    };
+  }, []);
+
+  if (statementRiderId) {
+    return <PublicRiderLedger riderId={statementRiderId} />;
+  }
+
+  return <MainCourierApp />;
+}
+

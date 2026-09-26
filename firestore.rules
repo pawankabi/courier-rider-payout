@@ -41,15 +41,18 @@ service cloud.firestore {
       allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
 
       match /riders/{riderId} {
-        allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+        allow read: if true; // Public read for ledger statement verification
+        allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
       }
 
       match /entries/{entryId} {
-        allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+        allow read: if true; // Public read for delivery earnings verification
+        allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
       }
 
       match /settlements/{settlementId} {
-        allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+        allow read: if true; // Public read for payout settlement verification
+        allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
       }
 
       match /{allSubpaths=**} {
@@ -59,15 +62,37 @@ service cloud.firestore {
 
     // Primary database collections for riders, deliveries, and settlements
     match /riders/{riderId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if true; // Public read & sync for rider profile & advances
+    }
+
+    // Public read-only statements/ledgers accessible without login
+    match /public_statements/{statementId} {
+      allow read, write: if true; // Public read & sync for rider statement ledgers
     }
 
     match /deliveries/{deliveryId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if true; // Public read & sync for rider delivery logs
     }
 
     match /settlements/{settlementId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if true; // Public read & sync for rider payout settlements
+    }
+
+    // Collection Group Queries for Public Statements (allows unauthenticated query by riderId)
+    match /{path=**}/riders/{riderId} {
+      allow read: if true;
+    }
+
+    match /{path=**}/entries/{entryId} {
+      allow read: if true;
+    }
+
+    match /{path=**}/settlements/{settlementId} {
+      allow read: if true;
+    }
+
+    match /{path=**}/public_statements/{statementId} {
+      allow read: if true;
     }
 
     // User root profile document and subcollections

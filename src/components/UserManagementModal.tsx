@@ -88,6 +88,17 @@ export const UserManagementModal: React.FC<Props> = ({
   const [currentStatus, setCurrentStatus] = useState(user.status);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
+  // Smooth Escape key handler to return smoothly without freeze
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   // Status changer
   const handleStatusChange = async (newStatus: 'pending' | 'approved' | 'active' | 'blocked') => {
     if (isSuperAdmin(user.email) && newStatus === 'blocked') {
@@ -1817,9 +1828,9 @@ export const UserManagementModal: React.FC<Props> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium transition border border-slate-700"
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium transition border border-slate-700 cursor-pointer"
           >
-            Done & Close
+            Back / Cancel (वापस जाएं)
           </button>
         </div>
       </div>

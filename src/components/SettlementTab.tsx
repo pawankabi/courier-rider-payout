@@ -35,6 +35,13 @@ import {
 import { WhatsAppSlipModal } from './WhatsAppSlipModal';
 import { WhatsAppSlipData } from '../utils/whatsapp';
 import { generatePayoutPDF } from '../utils/pdfGenerator';
+import { 
+  generateStatementUrl, 
+  formatSalarySmsText, 
+  dispatchAutomatedSms, 
+  getWhatsAppUrl, 
+  getNativeSmsUrl 
+} from '../services/smsService';
 
 interface Props {
   riders: Rider[];
@@ -58,6 +65,7 @@ interface Props {
   ) => void;
   onToggleEntryStatus: (entryId: string) => void;
   onNavigateToRiders: () => void;
+  onViewLedger?: (riderId: string) => void;
 }
 
 export const SettlementTab: React.FC<Props> = ({
@@ -67,6 +75,7 @@ export const SettlementTab: React.FC<Props> = ({
   onMarkEntriesPaid,
   onToggleEntryStatus,
   onNavigateToRiders,
+  onViewLedger,
 }) => {
   // Filter States
   const [selectedRiderId, setSelectedRiderId] = useState<string>(
@@ -83,6 +92,18 @@ export const SettlementTab: React.FC<Props> = ({
   // WhatsApp Slip Modal State
   const [slipData, setSlipData] = useState<WhatsAppSlipData | null>(null);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
+
+  // Instant Salary SMS Feedback State
+  const [salarySmsFeedback, setSalarySmsFeedback] = useState<{
+    riderName: string;
+    phone: string;
+    smsMessage: string;
+    statementUrl: string;
+    waUrl: string;
+    smsUrl: string;
+    statusText: string;
+    netSalary: number;
+  } | null>(null);
 
   // Selected Rider Object
   const selectedRider = useMemo(() => {
@@ -218,6 +239,43 @@ export const SettlementTab: React.FC<Props> = ({
     } catch {
       // safe fallback
     }
+
+    // Generate canonical public ledger link for the rider: ${window.location.origin}/statement/${rider.id}
+    const statementUrl = generateStatementUrl(selectedRider.id);
+
+    // Format SMS message text according to exact specification:
+    // "नमस्ते {riderName}, आपका {fromDate} से {toDate} का ₹{netSalary} वेतन जमा कर दिया गया है। विस्तृत पे-आउट व एडवांस स्लिप देखें: {statementUrl}"
+    const formattedSms = formatSalarySmsText({
+      riderName: selectedRider.name,
+      fromDate: formatDateDisplay(startDate),
+      toDate: formatDateDisplay(endDate),
+      netSalary: netPayableAmount,
+      statementUrl,
+    });
+
+    const waUrl = getWhatsAppUrl(selectedRider.phone, formattedSms);
+    const smsUrl = getNativeSmsUrl(selectedRider.phone, formattedSms);
+
+    // Trigger automated background API call (Fast2SMS / MSG91 / Webhook)
+    dispatchAutomatedSms({
+      riderPhone: selectedRider.phone,
+      riderName: selectedRider.name,
+      message: formattedSms,
+      type: 'salary',
+      statementUrl,
+      amount: netPayableAmount,
+    }).then((res) => {
+      setSalarySmsFeedback({
+        riderName: selectedRider.name,
+        phone: selectedRider.phone,
+        smsMessage: formattedSms,
+        statementUrl,
+        waUrl,
+        smsUrl,
+        statusText: res.message || 'वेतन SMS डिस्पैच सक्रिय!',
+        netSalary: netPayableAmount,
+      });
+    });
   };
 
   // Open WhatsApp Slip with full advance deduction breakdown
@@ -534,7 +592,7 @@ export const SettlementTab: React.FC<Props> = ({
                 id="advance-amount-input"
                 type="number"
                 min="0"
-                step="50"
+                step="any"
                 placeholder="0"
                 value={advanceAmount === 0 ? '' : advanceAmount}
                 onChange={(e) => {
@@ -627,6 +685,74 @@ export const SettlementTab: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {/* Instant Salary Settlement SMS Trigger Feedback Banner */}
+      {salarySmsFeedback && (
+        <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3 animate-in fade-in">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-emerald-300">
+                  {salarySmsFeedback.statusText}
+                </h4>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  वेतन भुगतान संदेश स्वचालित रूप से +91 {selectedRider?.phone} पर डिस्पैच किया गया है।
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSalarySmsFeedback(null)}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-200 leading-relaxed font-sans">
+            {salarySmsFeedback.smsMessage}
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap pt-1">
+            {/* 1-Click WhatsApp Fallback Button */}
+            <a
+              href={salarySmsFeedback.waUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-slate-950 text-xs font-bold shadow transition active:scale-95 cursor-pointer"
+              title="1-Click WhatsApp Delivery"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>📲 Send via WhatsApp (1-Click)</span>
+            </a>
+
+            {/* 1-Click Native SMS Fallback Button */}
+            <a
+              href={salarySmsFeedback.smsUrl}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow transition active:scale-95 cursor-pointer"
+              title="1-Click Native SMS Delivery"
+            >
+              <Phone className="w-4 h-4" />
+              <span>📲 Send via SMS</span>
+            </a>
+
+            {/* Online Public Sheet View */}
+            {onViewLedger && (
+              <button
+                type="button"
+                onClick={() => onViewLedger(selectedRider.id)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition ml-auto"
+              >
+                <span>📄 View Online Excel Sheet</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Payout Summary & "Mark as Paid" Action Card */}
       <div className="bg-gradient-to-br from-slate-850 via-slate-850 to-slate-900 border border-slate-750 rounded-2xl p-5 sm:p-6 shadow-xl relative overflow-hidden">

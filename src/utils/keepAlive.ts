@@ -24,14 +24,16 @@ export function initKeepAlive({
   let timerId: ReturnType<typeof setInterval> | null = null;
   let lastActiveTime = Date.now();
 
-  const pingServer = async () => {
+  const pingServer = async (silent = false) => {
     if (isDestroyed || !navigator.onLine) {
       onStateChange?.('offline');
       return;
     }
 
     try {
-      onStateChange?.('connecting');
+      if (!silent) {
+        onStateChange?.('connecting');
+      }
       // If user is authenticated, refresh token if it's nearing expiry or after inactivity
       if (auth?.currentUser) {
         const timeSinceLastActive = Date.now() - lastActiveTime;
@@ -53,7 +55,7 @@ export function initKeepAlive({
 
       clearTimeout(timeoutId);
       lastActiveTime = Date.now();
-      if (!isDestroyed) {
+      if (!isDestroyed && !silent) {
         onStateChange?.('connected');
       }
     } catch {
@@ -70,10 +72,10 @@ export function initKeepAlive({
       const idleDuration = now - lastActiveTime;
       lastActiveTime = now;
 
-      // If app was in background for more than 30 seconds, trigger wake-up recovery
-      if (idleDuration > 30000) {
+      // If app was in background, trigger quiet wake-up recovery without flashing spinners
+      if (idleDuration > 10000) {
         onWakeup?.();
-        await pingServer();
+        await pingServer(true);
       }
     }
   };

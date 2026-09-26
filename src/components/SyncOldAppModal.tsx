@@ -53,6 +53,17 @@ export const SyncOldAppModal: React.FC<Props> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Smooth Escape key handler to return smoothly without freeze
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isExtracting && !isImporting) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, isExtracting, isImporting]);
+
   if (!isOpen) return null;
 
   const handleStartExtraction = async (inputToUse?: string) => {

@@ -68,6 +68,17 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
   });
   const [copiedRiderId, setCopiedRiderId] = useState<string | null>(null);
 
+  // Smooth Escape key handler to return smoothly without freeze
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const selectedFestival = useMemo(() => {
     return FESTIVALS.find((f) => f.id === selectedFestivalId) || smartAlert.festival || FESTIVALS[0];
   }, [selectedFestivalId, smartAlert.festival]);
@@ -559,9 +570,9 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
           </span>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 font-semibold transition"
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 font-semibold transition cursor-pointer"
           >
-            Close
+            Back / Cancel (वापस जाएं)
           </button>
         </div>
       </div>
