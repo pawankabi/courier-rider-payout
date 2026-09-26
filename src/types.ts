@@ -295,7 +295,8 @@ export interface AppUser {
   photoURL?: string;
   createdAt: string;
   lastLoginAt: string;
-  status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked';
+  status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected';
+  validUntil?: string; // timestamp or ISO date string (e.g. "2026-10-26T23:59:59")
   role?: 'admin' | 'user';
   totalRiders?: number;
   totalEntries?: number;
@@ -304,6 +305,19 @@ export interface AppUser {
   hubSignature?: string;
   subscription?: UserSubscription;
   paymentHistory?: PaymentHistoryItem[];
+}
+
+export interface UserProfileData {
+  status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected';
+  validUntil?: string;
+  isPending: boolean;
+  isBlocked: boolean;
+  isApproved: boolean;
+  permissions: UserPermissions;
+  rateConfig: UserRateConfig;
+  hubSignature?: string;
+  subscription?: UserSubscription;
+  rawDoc?: any;
 }
 
 export interface DateRange {

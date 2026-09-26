@@ -352,7 +352,8 @@ export function subscribeToDefaultSubscriptionConfig(
 }
 
 export interface SyncProfileResult {
-  status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked';
+  status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected';
+  validUntil?: string;
   isPending: boolean;
   isDeactivated: boolean;
   isBlocked: boolean;
@@ -382,11 +383,12 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       getDoc(allUserRef).catch(() => null),
     ]);
 
-    let status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' = adminRole ? 'active' : 'pending';
+    let status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected' = adminRole ? 'active' : 'pending';
     let role: 'admin' | 'user' = adminRole ? 'admin' : 'user';
     let permissions: UserPermissions = { ...DEFAULT_USER_PERMISSIONS };
     let rateConfig: UserRateConfig = { ...DEFAULT_USER_RATE_CONFIG };
     let subscription: UserSubscription;
+    let validUntil: string = '';
     const userName = user.displayName || user.email?.split('@')[0] || 'User';
 
     // Fetch saved default subscription configuration from Firestore
@@ -403,18 +405,21 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
     // Check if user already has a configured subscription in users/{uid} or all_users/{uid}
     if (userSnap && userSnap.exists() && userSnap.data()?.subscription) {
       subscription = normalizeUserSubscription(userSnap.data()?.subscription);
+      validUntil = userSnap.data()?.validUntil || subscription.validUntil || '';
       // Automatically assign saved default QR image if user's QR is not customized yet
       if (!subscription.qrCodeUrl && defaultSubConfig.qrCodeUrl) {
         subscription.qrCodeUrl = defaultSubConfig.qrCodeUrl;
       }
     } else if (allSnap && allSnap.exists() && allSnap.data()?.subscription) {
       subscription = normalizeUserSubscription(allSnap.data()?.subscription);
+      validUntil = allSnap.data()?.validUntil || subscription.validUntil || '';
       if (!subscription.qrCodeUrl && defaultSubConfig.qrCodeUrl) {
         subscription.qrCodeUrl = defaultSubConfig.qrCodeUrl;
       }
     } else {
       // First-time Gmail login or new user registration
       subscription = defaultInitialSub;
+      validUntil = subscription.validUntil;
     }
 
     if (allSnap && allSnap.exists()) {
@@ -422,8 +427,9 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       // Super admin is always active; otherwise preserve recorded status or default to pending
       status = adminRole 
         ? 'active' 
-        : (data.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked') || 'pending';
+        : (data.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected') || 'pending';
       role = adminRole ? 'admin' : (data.role || 'user');
+      validUntil = data.validUntil || subscription.validUntil || '';
       if (data.permissions) {
         permissions = normalizeUserPermissions(data.permissions);
       }
@@ -442,6 +448,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
         permissions,
         rateConfig,
         subscription,
+        validUntil,
         updatedAt: serverTimestamp(),
       });
     } else {
@@ -459,12 +466,13 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
         permissions: { ...DEFAULT_USER_PERMISSIONS },
         rateConfig,
         subscription,
+        validUntil,
         updatedAt: serverTimestamp(),
       };
       await setDoc(allUserRef, newUserData);
     }
 
-    // Always ensure root user document users/{uid} contains subscription
+    // Always ensure root user document users/{uid} contains subscription and validUntil
     await setDoc(
       userRef,
       {
@@ -475,17 +483,20 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
         photoURL: user.photoURL || '',
         lastLoginAt: new Date().toISOString(),
         subscription,
+        validUntil,
+        status,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
     );
 
     const isPending = !adminRole && status === 'pending';
-    const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked');
+    const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked' || status === 'rejected');
     const isApproved = adminRole || status === 'approved' || status === 'active';
 
     return { 
       status,
+      validUntil,
       isPending, 
       isDeactivated: isBlocked, 
       isBlocked, 
@@ -501,6 +512,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
     const adminRole = isSuperAdmin(user.email);
     return { 
       status: adminRole ? 'active' : 'pending',
+      validUntil: '',
       isPending: !adminRole,
       isDeactivated: false, 
       isBlocked: false,
@@ -517,16 +529,17 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
 /**
  * Real-time listener for current user document in all_users.
  * Listens for:
- * 1) Admin approval / activation / deactivation / blocking
+ * 1) Admin approval / activation / deactivation / blocking / validity extensions
  * 2) Feature access flag changes
  * 3) Rate configurations
- * 4) Subscription updates
+ * 4) Subscription & validUntil updates
  */
 export function subscribeToCurrentUserDoc(
   userId: string,
   userEmail: string | null | undefined,
   onUpdate: (userData: {
-    status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked';
+    status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected';
+    validUntil?: string;
     isPending: boolean;
     isBlocked: boolean;
     isApproved: boolean;
@@ -534,6 +547,7 @@ export function subscribeToCurrentUserDoc(
     rateConfig: UserRateConfig;
     hubSignature?: string;
     subscription?: UserSubscription;
+    rawDoc?: any;
   }) => void
 ): () => void {
   const allUserRef = doc(db, 'all_users', userId);
@@ -543,10 +557,10 @@ export function subscribeToCurrentUserDoc(
   let mergedData: any = {};
 
   const processAndNotify = () => {
-    const rawStatus = (mergedData.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked') || 'pending';
+    const rawStatus = (mergedData.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected') || 'pending';
     const status = adminRole ? 'active' : rawStatus;
     const isPending = !adminRole && status === 'pending';
-    const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked');
+    const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked' || status === 'rejected');
     const isApproved = adminRole || status === 'approved' || status === 'active';
 
     const permissions = normalizeUserPermissions(mergedData.permissions);
@@ -555,8 +569,20 @@ export function subscribeToCurrentUserDoc(
       : { ...DEFAULT_USER_RATE_CONFIG };
     const hubSignature = mergedData.hubSignature || rateConfig.hubSignature || '';
     const subscription = normalizeUserSubscription(mergedData.subscription);
+    const validUntil = mergedData.validUntil || subscription.validUntil || '';
 
-    onUpdate({ status, isPending, isBlocked, isApproved, permissions, rateConfig, hubSignature, subscription });
+    onUpdate({ 
+      status, 
+      validUntil,
+      isPending, 
+      isBlocked, 
+      isApproved, 
+      permissions, 
+      rateConfig, 
+      hubSignature, 
+      subscription,
+      rawDoc: mergedData 
+    });
   };
 
   const unsubAll = onSnapshot(
@@ -615,7 +641,7 @@ export function subscribeToCurrentUserDoc(
 export function subscribeToUserStatus(
   userId: string,
   userEmail: string | null | undefined,
-  onStatusChange: (status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked') => void
+  onStatusChange: (status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected') => void
 ): () => void {
   return subscribeToCurrentUserDoc(userId, userEmail, (data) => {
     onStatusChange(data.status);
@@ -636,10 +662,13 @@ export function subscribeToAllUsers(
       const users: AppUser[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        const rawStatus = (data.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked') || 'pending';
+        const rawStatus = (data.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected') || 'pending';
         const status = isSuperAdmin(data.email) ? 'active' : rawStatus;
         const permissions = normalizeUserPermissions(data.permissions);
         const userName = data.name || data.displayName || data.email?.split('@')[0] || 'User';
+
+        const sub = normalizeUserSubscription(data.subscription);
+        const validUntil = data.validUntil || sub.validUntil || '';
 
         users.push({
           uid: docSnap.id,
@@ -650,6 +679,7 @@ export function subscribeToAllUsers(
           createdAt: data.createdAt || '',
           lastLoginAt: data.lastLoginAt || '',
           status,
+          validUntil,
           role: data.role || (isSuperAdmin(data.email) ? 'admin' : 'user'),
           totalRiders: data.totalRiders || 0,
           totalEntries: data.totalEntries || 0,
@@ -658,7 +688,7 @@ export function subscribeToAllUsers(
             ? { ...DEFAULT_USER_RATE_CONFIG, ...data.rateConfig } 
             : { ...DEFAULT_USER_RATE_CONFIG },
           hubSignature: data.hubSignature || data.rateConfig?.hubSignature || '',
-          subscription: normalizeUserSubscription(data.subscription),
+          subscription: sub,
         });
       });
 
@@ -733,13 +763,159 @@ export async function unblockUser(userId: string): Promise<void> {
  */
 export async function setUserStatus(
   userId: string,
-  newStatus: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked'
+  newStatus: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected'
 ): Promise<void> {
   const userRef = doc(db, 'all_users', userId);
   await updateDoc(userRef, {
     status: newStatus,
     statusUpdatedAt: serverTimestamp(),
   });
+}
+
+/**
+ * Super Admin: Extend a user's validity by N days (e.g. 30 days or 90 days),
+ * sets status: 'approved', sets subscription.paymentStatus: 'active',
+ * and updates both all_users and users root collections.
+ */
+export async function extendUserValidity(
+  userId: string,
+  days: number,
+  currentValidUntil?: string
+): Promise<{ validUntil: string; status: 'approved' }> {
+  const userRef = doc(db, 'users', userId);
+  const allUserRef = doc(db, 'all_users', userId);
+
+  let baseValidTime = Date.now();
+  if (currentValidUntil && currentValidUntil.trim().length > 0) {
+    const parsed = new Date(currentValidUntil).getTime();
+    if (!isNaN(parsed) && parsed > Date.now()) {
+      baseValidTime = parsed;
+    }
+  } else {
+    // Check if user document has existing validUntil in Firestore
+    try {
+      const snap = await getDoc(allUserRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        const existing = data.validUntil || data.subscription?.validUntil;
+        if (existing) {
+          const parsed = new Date(existing).getTime();
+          if (!isNaN(parsed) && parsed > Date.now()) {
+            baseValidTime = parsed;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  const newValidUntil = new Date(baseValidTime + days * 24 * 60 * 60 * 1000).toISOString();
+
+  const payload = {
+    status: 'approved',
+    validUntil: newValidUntil,
+    'subscription.validUntil': newValidUntil,
+    'subscription.paymentStatus': 'active',
+    approvedAt: new Date().toISOString(),
+    statusUpdatedAt: serverTimestamp(),
+    validityUpdatedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await updateDoc(allUserRef, payload);
+  } catch {
+    await setDoc(allUserRef, payload, { merge: true });
+  }
+
+  try {
+    await updateDoc(userRef, payload);
+  } catch {
+    await setDoc(userRef, payload, { merge: true });
+  }
+
+  return { validUntil: newValidUntil, status: 'approved' };
+}
+
+/**
+ * Super Admin: Set a custom validity date for a user,
+ * sets status: 'approved', sets subscription.paymentStatus: 'active',
+ * and updates both all_users and users root collections.
+ */
+export async function setUserValidityDate(
+  userId: string,
+  targetDateStr: string
+): Promise<{ validUntil: string; status: 'approved' }> {
+  const userRef = doc(db, 'users', userId);
+  const allUserRef = doc(db, 'all_users', userId);
+
+  let finalIso = targetDateStr;
+  if (targetDateStr.length === 10) {
+    // Format YYYY-MM-DD to end of day local/ISO
+    finalIso = new Date(`${targetDateStr}T23:59:59.999Z`).toISOString();
+  } else {
+    const d = new Date(targetDateStr);
+    if (!isNaN(d.getTime())) {
+      finalIso = d.toISOString();
+    }
+  }
+
+  const payload = {
+    status: 'approved',
+    validUntil: finalIso,
+    'subscription.validUntil': finalIso,
+    'subscription.paymentStatus': 'active',
+    statusUpdatedAt: serverTimestamp(),
+    validityUpdatedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await updateDoc(allUserRef, payload);
+  } catch {
+    await setDoc(allUserRef, payload, { merge: true });
+  }
+
+  try {
+    await updateDoc(userRef, payload);
+  } catch {
+    await setDoc(userRef, payload, { merge: true });
+  }
+
+  return { validUntil: finalIso, status: 'approved' };
+}
+
+/**
+ * Super Admin: Immediately Lock / Deactivate a user, revoking dashboard access.
+ */
+export async function deactivateOrLockUser(userId: string): Promise<void> {
+  const userRef = doc(db, 'users', userId);
+  const allUserRef = doc(db, 'all_users', userId);
+
+  // Expired timestamp (yesterday)
+  const expiredIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const payload = {
+    status: 'rejected',
+    validUntil: expiredIso,
+    'subscription.validUntil': expiredIso,
+    'subscription.paymentStatus': 'expired',
+    lockedAt: new Date().toISOString(),
+    statusUpdatedAt: serverTimestamp(),
+    validityUpdatedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await updateDoc(allUserRef, payload);
+  } catch {
+    await setDoc(allUserRef, payload, { merge: true });
+  }
+
+  try {
+    await updateDoc(userRef, payload);
+  } catch {
+    await setDoc(userRef, payload, { merge: true });
+  }
 }
 
 /**

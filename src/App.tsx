@@ -98,6 +98,7 @@ import { FestivalBannerCard } from './components/FestivalBannerCard';
 import { FestivalGreetingsModal } from './components/FestivalGreetingsModal';
 import { SubscriptionAlertBanner } from './components/SubscriptionAlertBanner';
 import { UserPaymentModal } from './components/UserPaymentModal';
+import { PaywallLockScreen } from './components/PaywallLockScreen';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -275,27 +276,65 @@ function MainCourierApp() {
     }
   }, [currentUser]);
 
-  // Strict Master Admin Verification
-  const isSuperAdminUser = Boolean(currentUser?.email && isSuperAdmin(currentUser.email));
+  // User Profile from Firestore all_users collection
+  const [userProfile, setUserProfile] = useState<{
+    status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected';
+    validUntil?: string;
+    displayName?: string;
+    name?: string;
+  } | null>(null);
+
+  // Automatic Expiry Cut-Off ticker: ticks every 5 seconds to ensure instant automatic cut-off
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Strict Master Admin Verification (Requirement 1)
+  const isSuperAdminUser = Boolean(
+    currentUser?.email && currentUser.email.trim().toLowerCase() === 'pawankabiseraikella@gmail.com'
+  );
   const isAdmin = isSuperAdminUser;
+
+  // Strict Validity Calculation & Hard Paywall Gate (Requirement 1):
+  // const now = new Date().getTime();
+  // const expiryTime = userProfile?.validUntil ? new Date(userProfile.validUntil).getTime() : 0;
+  // const isExpired = !expiryTime || now > expiryTime;
+  // const isPendingApproval = userProfile?.status !== 'approved';
+  // const isSuperAdminUser = currentUser.email === 'pawankabiseraikella@gmail.com';
+  const now = currentTime;
+  const expiryTime = userProfile?.validUntil
+    ? new Date(userProfile.validUntil).getTime()
+    : userSubscription?.validUntil
+    ? new Date(userSubscription.validUntil).getTime()
+    : 0;
+  const isExpired = !expiryTime || now > expiryTime;
+  const isPendingApproval = userProfile ? userProfile.status !== 'approved' : true;
+
+  // 3-Day Expiry Warning Banner Calculation (Requirement 2):
+  // const daysLeft = Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24));
+  const daysLeft = expiryTime > now ? Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24)) : 0;
 
   // Strict Subscription Lock Check
   const subscriptionLock = useMemo(() => {
     return checkSubscriptionLock(userSubscription, isSuperAdminUser);
   }, [userSubscription, isSuperAdminUser]);
 
-  const isPaywallLocked = Boolean(currentUser && !isSuperAdminUser && subscriptionLock.isLocked);
+  const isPaywallLocked = Boolean(currentUser && !isSuperAdminUser && (isPendingApproval || isExpired || subscriptionLock.isLocked));
 
   // Automatic Popup on Login for Expiring Soon warnings (if not locked)
   useEffect(() => {
     if (!currentUser || isSuperAdminUser || !userSubscription) return;
-    if (userSubscription.planType === 'paid' && userSubscription.paymentStatus === 'expiring_soon') {
+    if (userSubscription.planType === 'paid' && (userSubscription.paymentStatus === 'expiring_soon' || (daysLeft <= 3 && daysLeft > 0))) {
       if (hasAutoOpenedPaymentModal !== currentUser.uid) {
         setIsUserPaymentModalOpen(true);
         setHasAutoOpenedPaymentModal(currentUser.uid);
       }
     }
-  }, [currentUser?.uid, userSubscription?.paymentStatus, userSubscription?.planType, isSuperAdminUser, hasAutoOpenedPaymentModal]);
+  }, [currentUser?.uid, userSubscription?.paymentStatus, userSubscription?.planType, isSuperAdminUser, hasAutoOpenedPaymentModal, daysLeft]);
 
   // Derived capability flags
   const canAccessDailyEntry = isSuperAdminUser || Boolean(userPermissions.dailyEntry ?? userPermissions.canAccessDailyEntry);
@@ -637,18 +676,19 @@ function MainCourierApp() {
 
         // 2. Real-time subscription to user document in all_users (immediate status, rateConfig, and permissions)
         unsubscribeUserDoc = subscribeToCurrentUserDoc(user.uid, user.email, (docData) => {
+          setUserProfile({
+            status: docData.status,
+            validUntil: docData.validUntil,
+            displayName: user.displayName || undefined,
+            name: user.displayName || undefined,
+          });
+
           if (docData.isPending) {
             setIsPending(true);
             setIsDeactivated(false);
-            setRiders([]);
-            setEntries([]);
-            setSettlements([]);
           } else if (docData.isBlocked) {
             setIsPending(false);
             setIsDeactivated(true);
-            setRiders([]);
-            setEntries([]);
-            setSettlements([]);
           } else {
             setIsPending(false);
             setIsDeactivated(false);
@@ -667,22 +707,23 @@ function MainCourierApp() {
 
         // 3. Sync user profile with Firestore in background & check status
         syncUserProfile(user).then((profileResult) => {
+          setUserProfile({
+            status: profileResult.status,
+            validUntil: profileResult.validUntil,
+            displayName: user.displayName || undefined,
+            name: user.displayName || undefined,
+          });
+
           if (profileResult.subscription) {
             setUserSubscription(normalizeUserSubscription(profileResult.subscription));
           }
           if (profileResult.isPending) {
             setIsPending(true);
             setIsDeactivated(false);
-            setRiders([]);
-            setEntries([]);
-            setSettlements([]);
           } else if (profileResult.isDeactivated || profileResult.isBlocked) {
             setIsPending(false);
             setIsDeactivated(true);
             setSyncStatus('offline');
-            setRiders([]);
-            setEntries([]);
-            setSettlements([]);
           } else {
             setIsPending(false);
             setIsDeactivated(false);
@@ -727,6 +768,7 @@ function MainCourierApp() {
         );
       } else {
         // Logged out / Local mode
+        setUserProfile(null);
         setIsDeactivated(false);
         setIsPending(false);
         setInspectedUser(null);
@@ -1265,48 +1307,39 @@ function MainCourierApp() {
     );
   }
 
-  // Deactivated state immediately locks down user access
-  if (isDeactivated && !isSuperAdminUser) {
-    return <DeactivatedScreen userEmail={currentUser?.email} userId={currentUser?.uid} />;
-  }
-
-  // Pending Approval state locks down user access until Admin approval!
-  if (isPending && currentUser && !isSuperAdminUser) {
+  // ENFORCE HARD PAYWALL GATE IN App.tsx (DO NOT ALLOW ACCESS TO DASHBOARD IF EXPIRED OR PENDING):
+  // IF USER IS NOT SUPER ADMIN AND (isPendingApproval OR isExpired):
+  // - DO NOT render Dashboard, Daily Delivery Entry, Riders, Reports, or Navigation Bar.
+  // - RENDER ONLY the standalone <PaywallLockScreen />.
+  if (currentUser && !isSuperAdminUser && (isPendingApproval || isExpired || isDeactivated || isPaywallLocked)) {
     return (
-      <PendingApprovalScreen
-        userEmail={currentUser.email}
-        userName={currentUser.displayName}
+      <PaywallLockScreen
+        currentUser={currentUser}
+        userProfile={userProfile}
+        userSubscription={userSubscription}
+        masterQrCodeUrl={masterQrCodeUrl}
         onSignOut={() => auth.signOut()}
         onRefreshStatus={async () => {
           if (currentUser) {
             const res = await syncUserProfile(currentUser);
-            if (!res.isPending && !res.isBlocked && !res.isDeactivated) {
-              setIsPending(false);
+            setUserProfile({
+              status: res.status,
+              validUntil: res.validUntil,
+              displayName: currentUser.displayName || undefined,
+              name: currentUser.displayName || undefined,
+            });
+            if (res.subscription) {
+              setUserSubscription(res.subscription);
             }
           }
         }}
+        onSubscriptionUpdated={(updated) => {
+          setUserSubscription(updated);
+          if (updated.validUntil) {
+            setUserProfile((prev) => (prev ? { ...prev, validUntil: updated.validUntil } : null));
+          }
+        }}
       />
-    );
-  }
-
-  // Strict Subscription Paywall Lockout:
-  // If user's subscription is locked (expired, awaiting approval, or unpaid):
-  // Completely block access to the dashboard and all app features!
-  if (isPaywallLocked && currentUser && !isSuperAdminUser) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
-        <UserPaymentModal
-          isOpen={true}
-          onClose={() => {}}
-          userSubscription={userSubscription}
-          userId={currentUser.uid}
-          userEmail={currentUser.email}
-          masterQrCodeUrl={masterQrCodeUrl}
-          isSuperAdmin={false}
-          onSubscriptionUpdated={(updated) => setUserSubscription(updated)}
-          onSuccessToast={(msg) => setToastMessage({ text: msg, type: 'success' })}
-        />
-      </div>
     );
   }
 
@@ -1347,12 +1380,14 @@ function MainCourierApp() {
       {/* PWA Install Banner - Only visible to Master Admin */}
       {isAdmin && <PWAInstallBanner variant="banner" />}
 
-      {/* Subscription Alert & Renewal Banner - Strictly hidden for Free users and Master Admin */}
+      {/* Subscription Alert & Renewal Banner - 3-day Expiry Alert */}
       <SubscriptionAlertBanner
         userSubscription={userSubscription}
+        validUntil={userProfile?.validUntil || userSubscription?.validUntil}
         userId={currentUser?.uid}
         userEmail={currentUser?.email}
         isSuperAdmin={isSuperAdminUser}
+        onOpenPayModal={() => setIsUserPaymentModalOpen(true)}
       />
 
       {/* Top Application Header */}

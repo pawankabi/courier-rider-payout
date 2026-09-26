@@ -46,6 +46,7 @@ import {
   DollarSign,
   Receipt,
   History,
+  Save,
   X
 } from 'lucide-react';
 import { 
@@ -78,6 +79,9 @@ import {
   updateUserSubscription,
   approveUserPaymentSlip,
   rejectUserPaymentSlip,
+  extendUserValidity,
+  setUserValidityDate,
+  deactivateOrLockUser,
   SUPER_ADMIN_EMAIL, 
   isSuperAdmin 
 } from '../services/firestoreSync';
@@ -144,6 +148,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   // Action loading state (per user uid or per permission)
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [permLoadingKey, setPermLoadingKey] = useState<string | null>(null); // e.g. `${uid}-dailyEntry`
+  const [customDateInputs, setCustomDateInputs] = useState<Record<string, string>>({});
   
   // Toast feedback
   const [feedbackToast, setFeedbackToast] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -676,26 +681,75 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
     }
   };
 
-  // Quick Extend Subscription by 30 days
-  const handleExtendUserDays = async (user: AppUser, days = 30) => {
-    setActionLoadingId(`extend-${user.uid}`);
+  // Quick Extend Subscription by N days (+30, +90, +365) and sets status = 'approved'
+  const handleExtendUserDays = async (user: AppUser, days = 30, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setActionLoadingId(`extend-${user.uid}-${days}`);
     try {
-      const currentValidUntil = user.subscription?.validUntil;
-      const baseTime = currentValidUntil && new Date(currentValidUntil).getTime() > Date.now()
-        ? new Date(currentValidUntil).getTime()
-        : Date.now();
-      const newValidUntil = new Date(baseTime + days * 24 * 60 * 60 * 1000).toISOString();
-
-      const updatedSub = await updateUserSubscription(user.uid, {
-        validUntil: newValidUntil,
-        paymentStatus: 'active',
-      });
-      setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, subscription: updatedSub } : u));
-      showToast(`Extended ${user.displayName || user.email}'s plan by +${days} days (Active)!`, 'success');
+      const currentExpiry = user.validUntil || user.subscription?.validUntil;
+      const res = await extendUserValidity(user.uid, days, currentExpiry);
+      setUsers(prev => prev.map(u => u.uid === user.uid ? {
+        ...u,
+        status: 'approved',
+        validUntil: res.validUntil,
+        subscription: u.subscription ? { ...u.subscription, validUntil: res.validUntil, paymentStatus: 'active' } : undefined,
+      } : u));
+      showToast('वैधता सफलतापूर्वक अपडेट कर दी गई।', 'success');
     } catch (err: any) {
       console.error('Failed to extend plan:', err);
       alert('Failed to extend subscription in Firestore: ' + (err?.message || err));
       showToast('Failed to extend subscription in Firestore.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Custom Date Picker Handler
+  const handleSetCustomDate = async (user: AppUser, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const dateInput = customDateInputs[user.uid];
+    if (!dateInput) {
+      showToast('कृपया पहले एक तारीख चुनें।', 'error');
+      return;
+    }
+    setActionLoadingId(`custom-date-${user.uid}`);
+    try {
+      const res = await setUserValidityDate(user.uid, dateInput);
+      setUsers(prev => prev.map(u => u.uid === user.uid ? {
+        ...u,
+        status: 'approved',
+        validUntil: res.validUntil,
+        subscription: u.subscription ? { ...u.subscription, validUntil: res.validUntil, paymentStatus: 'active' } : undefined,
+      } : u));
+      showToast('वैधता सफलतापूर्वक अपडेट कर दी गई।', 'success');
+    } catch (err: any) {
+      console.error('Failed to set validity date:', err);
+      showToast('Failed to set validity date in Firestore: ' + (err?.message || err), 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Lock / Deactivate User to immediately revoke access
+  const handleLockDeactivateUser = async (user: AppUser, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!window.confirm(`क्या आप वाकई ${user.displayName || user.email} को सस्पेंड/लॉक करना चाहते हैं? इनका डैशबोर्ड एक्सेस तुरंत बंद हो जाएगा।`)) {
+      return;
+    }
+    setActionLoadingId(`lock-deact-${user.uid}`);
+    try {
+      await deactivateOrLockUser(user.uid);
+      const expiredYesterday = new Date(Date.now() - 86400000).toISOString();
+      setUsers(prev => prev.map(u => u.uid === user.uid ? {
+        ...u,
+        status: 'rejected',
+        validUntil: expiredYesterday,
+        subscription: u.subscription ? { ...u.subscription, validUntil: expiredYesterday, paymentStatus: 'expired' } : undefined,
+      } : u));
+      showToast('खाता सफलतापूर्वक सस्पेंड/लॉक कर दिया गया।', 'info');
+    } catch (err: any) {
+      console.error('Failed to lock/deactivate user:', err);
+      showToast('Failed to lock user in Firestore: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -1914,8 +1968,8 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                 <tr className="border-b border-slate-800 bg-slate-950/60 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
                   <th className="py-3.5 px-4 sm:px-6">User Name</th>
                   <th className="py-3.5 px-4">Email ID</th>
-                  <th className="py-3.5 px-4 text-center">Status</th>
-                  <th className="py-3.5 px-4 text-center">Subscription</th>
+                  <th className="py-3.5 px-4 text-center min-w-[170px]">Status & Validity Date</th>
+                  <th className="py-3.5 px-4 min-w-[270px]">Validity Management Controls</th>
                   <th className="py-3.5 px-4">Feature Permissions</th>
                   <th className="py-3.5 px-4 sm:px-6 text-right">Action Controls</th>
                 </tr>
@@ -1924,10 +1978,16 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                 {filteredUsers.map((user) => {
                   const isAdmin = isSuperAdmin(user.email);
                   const isPending = user.status === 'pending';
-                  const isBlocked = user.status === 'blocked' || user.status === 'deactivated';
+                  const isBlocked = user.status === 'blocked' || user.status === 'deactivated' || user.status === 'rejected';
                   const isActive = user.status === 'active' || user.status === 'approved';
                   const isActionLoading = actionLoadingId === user.uid;
                   const perms = user.permissions || DEFAULT_USER_PERMISSIONS;
+
+                  const effectiveValidUntil = user.validUntil || user.subscription?.validUntil || '';
+                  const nowTime = Date.now();
+                  const expiryTime = effectiveValidUntil ? new Date(effectiveValidUntil).getTime() : 0;
+                  const isDateExpired = !expiryTime || expiryTime <= nowTime;
+                  const daysLeft = expiryTime > nowTime ? Math.ceil((expiryTime - nowTime) / (1000 * 60 * 60 * 24)) : 0;
 
                   return (
                     <tr
@@ -2027,47 +2087,139 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                         </div>
                       </td>
 
-                      {/* 3. Status (Pending/Approved/Blocked) */}
+                      {/* 3. Status & Validity Date */}
                       <td className="py-4 px-4 text-center">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
-                          isPending
-                            ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                            : isBlocked
-                            ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                            : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${
-                            isPending ? 'bg-amber-400 animate-pulse' : isBlocked ? 'bg-rose-400' : 'bg-emerald-400'
-                          }`} />
-                          {isPending ? 'Pending' : isBlocked ? 'Blocked' : 'Approved'}
-                        </span>
+                        <div className="flex flex-col items-center gap-2">
+                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+                            isPending
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                              : isBlocked
+                              ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                              : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              isPending ? 'bg-amber-400 animate-pulse' : isBlocked ? 'bg-rose-400' : 'bg-emerald-400'
+                            }`} />
+                            {isPending ? 'Pending' : isBlocked ? 'Locked' : 'Approved'}
+                          </span>
+
+                          {/* Current Validity Display */}
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-slate-400 text-[10px] font-bold">वैधता (Validity):</span>
+                            {effectiveValidUntil ? (
+                              <span className="font-mono font-bold text-xs text-white">
+                                {new Date(effectiveValidUntil).toLocaleDateString('hi-IN')}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-500 font-mono">कोई तिथि नहीं</span>
+                            )}
+
+                            {/* Badge Indicator: Active (Green) / Expired (Red) */}
+                            {!isDateExpired && effectiveValidUntil ? (
+                              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 inline-flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" />
+                                {Math.max(0, Math.ceil((new Date(effectiveValidUntil).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))} दिन शेष
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 inline-flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3" />
+                                समाप्त (Expired)
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </td>
 
-                      {/* 3b. Subscription Plan & Payment Status */}
-                      <td className="py-4 px-4 text-center">
-                        <div className="inline-flex flex-col items-center gap-1">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                            user.subscription?.planType === 'paid'
-                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                              : 'bg-slate-800 text-slate-300 border-slate-700'
-                          }`}>
-                            <CreditCard className="w-2.5 h-2.5" />
-                            {user.subscription?.planType === 'paid' ? `Paid (₹${user.subscription.monthlyFee ?? 0})` : 'Free'}
-                          </span>
+                      {/* 3b. Dedicated Validity Management Controls */}
+                      <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex flex-col gap-2 min-w-[270px]">
+                          {/* Quick Validity Add Buttons: [+30 दिन], [+90 दिन], [+365 दिन] */}
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={actionLoadingId === `extend-${user.uid}-30`}
+                              onClick={(e) => handleExtendUserDays(user, 30, e)}
+                              className="flex-1 px-2 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[11px] font-bold transition flex items-center justify-center gap-1 shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+                              title="+30 दिन जोड़ें"
+                            >
+                              {actionLoadingId === `extend-${user.uid}-30` ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <span>+30 दिन</span>
+                              )}
+                            </button>
 
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-medium border ${
-                            user.subscription?.paymentStatus === 'active'
-                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                              : user.subscription?.paymentStatus === 'verification_pending'
-                              ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 animate-pulse'
-                              : user.subscription?.paymentStatus === 'expiring_soon'
-                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                              : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                          }`}>
-                            {user.subscription?.paymentStatus === 'verification_pending'
-                              ? 'Slip Pending'
-                              : (user.subscription?.paymentStatus || 'Active').replace('_', ' ')}
-                          </span>
+                            <button
+                              type="button"
+                              disabled={actionLoadingId === `extend-${user.uid}-90`}
+                              onClick={(e) => handleExtendUserDays(user, 90, e)}
+                              className="flex-1 px-2 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/40 text-[11px] font-bold transition flex items-center justify-center gap-1 shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+                              title="+90 दिन जोड़ें"
+                            >
+                              {actionLoadingId === `extend-${user.uid}-90` ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <span>+90 दिन</span>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={actionLoadingId === `extend-${user.uid}-365`}
+                              onClick={(e) => handleExtendUserDays(user, 365, e)}
+                              className="flex-1 px-2 py-1 rounded-lg bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/40 text-[11px] font-bold transition flex items-center justify-center gap-1 shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+                              title="+365 दिन जोड़ें"
+                            >
+                              {actionLoadingId === `extend-${user.uid}-365` ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <span>+365 दिन</span>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Manual Date Edit / Picker with "सेव करें (Update Date)" button */}
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="date"
+                              value={customDateInputs[user.uid] ?? (effectiveValidUntil ? effectiveValidUntil.slice(0, 10) : '')}
+                              onChange={(e) => setCustomDateInputs((prev) => ({ ...prev, [user.uid]: e.target.value }))}
+                              className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-amber-400 font-mono"
+                              title="Pick Custom Expiration Date"
+                            />
+                            <button
+                              type="button"
+                              disabled={!customDateInputs[user.uid] || actionLoadingId === `custom-date-${user.uid}`}
+                              onClick={(e) => handleSetCustomDate(user, e)}
+                              className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-[11px] font-bold transition flex items-center gap-1 cursor-pointer shrink-0 shadow-sm"
+                              title="सेव करें (Update Date)"
+                            >
+                              {actionLoadingId === `custom-date-${user.uid}` ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Save className="w-3.5 h-3.5" />
+                              )}
+                              <span>सेव करें (Update Date)</span>
+                            </button>
+                          </div>
+
+                          {/* Immediate Lock / Revoke Access: "सस्पेंड / लॉक करें (Deactivate)" button */}
+                          {!isAdmin && (
+                            <button
+                              type="button"
+                              disabled={actionLoadingId === `lock-deact-${user.uid}`}
+                              onClick={(e) => handleLockDeactivateUser(user, e)}
+                              className="w-full px-2 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-700/60 text-[11px] font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
+                              title="सस्पेंड / लॉक करें (Deactivate)"
+                            >
+                              {actionLoadingId === `lock-deact-${user.uid}` ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Ban className="w-3.5 h-3.5 text-rose-400" />
+                              )}
+                              <span>सस्पेंड / लॉक करें (Deactivate)</span>
+                            </button>
+                          )}
                         </div>
                       </td>
 
@@ -2285,9 +2437,14 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
               {filteredUsers.map((user) => {
                 const isAdmin = isSuperAdmin(user.email);
                 const isPending = user.status === 'pending';
-                const isBlocked = user.status === 'blocked' || user.status === 'deactivated';
+                const isBlocked = user.status === 'blocked' || user.status === 'deactivated' || user.status === 'rejected';
                 const isActive = user.status === 'active' || user.status === 'approved';
                 const isActionLoading = actionLoadingId === user.uid;
+                const effectiveValidUntil = user.validUntil || user.subscription?.validUntil || '';
+                const nowTime = Date.now();
+                const expiryTime = effectiveValidUntil ? new Date(effectiveValidUntil).getTime() : 0;
+                const isDateExpired = !expiryTime || expiryTime <= nowTime;
+                const daysRemaining = expiryTime > nowTime ? Math.max(0, Math.ceil((expiryTime - nowTime) / (1000 * 60 * 60 * 24))) : 0;
 
                 return (
                   <div
@@ -2395,6 +2552,110 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                       }`}>
                         {user.subscription?.paymentStatus === 'verification_pending' ? 'Verification Pending' : (user.subscription?.paymentStatus || 'Active').replace('_', ' ')}
                       </span>
+                    </div>
+
+                    {/* Mobile Dedicated User Validity Management Controls */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                          <span>वैधता प्रबंधन (Validity)</span>
+                        </span>
+
+                        {/* Badge Indicator: Active (Green) / Expired (Red) */}
+                        {!isDateExpired && effectiveValidUntil ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-2.5 h-2.5" />
+                            {daysRemaining} दिन शेष
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 inline-flex items-center gap-1">
+                            <AlertTriangle className="w-2.5 h-2.5" />
+                            समाप्त (Expired)
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Exact Expiration Date */}
+                      <div className="flex items-center justify-between text-xs py-1 px-2.5 rounded-lg bg-slate-950 border border-slate-850">
+                        <span className="text-slate-400 text-[11px]">अंतिम तिथि (Expiry Date):</span>
+                        <span className={`font-mono font-bold ${isDateExpired ? 'text-rose-400' : 'text-emerald-400'}`}>
+                          {effectiveValidUntil ? new Date(effectiveValidUntil).toLocaleDateString('hi-IN') : 'कोई तिथि नहीं'}
+                        </span>
+                      </div>
+
+                      {/* Quick Validity Add Buttons: [+30 दिन], [+90 दिन], [+365 दिन] */}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={actionLoadingId === `extend-${user.uid}-30`}
+                          onClick={(e) => handleExtendUserDays(user, 30, e)}
+                          className="flex-1 py-1 px-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[11px] font-bold transition flex items-center justify-center gap-1 shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+                          title="+30 दिन जोड़ें"
+                        >
+                          {actionLoadingId === `extend-${user.uid}-30` ? <RefreshCw className="w-3 h-3 animate-spin" /> : '+30 दिन'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actionLoadingId === `extend-${user.uid}-90`}
+                          onClick={(e) => handleExtendUserDays(user, 90, e)}
+                          className="flex-1 py-1 px-1 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/40 text-[11px] font-bold transition flex items-center justify-center gap-1 shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+                          title="+90 दिन जोड़ें"
+                        >
+                          {actionLoadingId === `extend-${user.uid}-90` ? <RefreshCw className="w-3 h-3 animate-spin" /> : '+90 दिन'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actionLoadingId === `extend-${user.uid}-365`}
+                          onClick={(e) => handleExtendUserDays(user, 365, e)}
+                          className="flex-1 py-1 px-1 rounded-lg bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/40 text-[11px] font-bold transition flex items-center justify-center gap-1 shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+                          title="+365 दिन जोड़ें"
+                        >
+                          {actionLoadingId === `extend-${user.uid}-365` ? <RefreshCw className="w-3 h-3 animate-spin" /> : '+365 दिन'}
+                        </button>
+                      </div>
+
+                      {/* Manual Date Edit / Picker */}
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="date"
+                          value={customDateInputs[user.uid] ?? (effectiveValidUntil ? effectiveValidUntil.slice(0, 10) : '')}
+                          onChange={(e) => setCustomDateInputs((prev) => ({ ...prev, [user.uid]: e.target.value }))}
+                          className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-400 font-mono"
+                        />
+                        <button
+                          type="button"
+                          disabled={!customDateInputs[user.uid] || actionLoadingId === `custom-date-${user.uid}`}
+                          onClick={(e) => handleSetCustomDate(user, e)}
+                          className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer shrink-0 shadow-sm"
+                          title="सेव करें (Update Date)"
+                        >
+                          {actionLoadingId === `custom-date-${user.uid}` ? (
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Save className="w-3.5 h-3.5" />
+                          )}
+                          <span>सेव करें (Update Date)</span>
+                        </button>
+                      </div>
+
+                      {/* Immediate Lock / Revoke Access */}
+                      {!isAdmin && (
+                        <button
+                          type="button"
+                          disabled={actionLoadingId === `lock-deact-${user.uid}`}
+                          onClick={(e) => handleLockDeactivateUser(user, e)}
+                          className="w-full py-1.5 px-3 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-700/60 text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
+                          title="सस्पेंड / लॉक करें (Deactivate)"
+                        >
+                          {actionLoadingId === `lock-deact-${user.uid}` ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Ban className="w-3.5 h-3.5 text-rose-400" />
+                          )}
+                          <span>सस्पेंड / लॉक करें (Deactivate)</span>
+                        </button>
+                      )}
                     </div>
 
                     {/* Action buttons on mobile */}
