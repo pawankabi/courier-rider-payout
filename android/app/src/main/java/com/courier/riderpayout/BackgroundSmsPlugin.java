@@ -2,16 +2,22 @@ package com.courier.riderpayout;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.telephony.SmsManager;
+import android.telephony.SubscriptionInfo;
+import android.telephony.SubscriptionManager;
+import androidx.core.app.ActivityCompat;
+
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
-import com.getcapacitor.annotation.PermissionCallback;
+
 import java.util.ArrayList;
+import java.util.List;
 
 @CapacitorPlugin(
     name = "BackgroundSms",
@@ -31,52 +37,27 @@ public class BackgroundSmsPlugin extends Plugin {
     public void sendSms(PluginCall call) {
         String phoneNumber = call.getString("phoneNumber");
         String message = call.getString("message");
+        Integer simSlot = call.getInt("simSlot", 0);
 
-        if (phoneNumber == null || phoneNumber.trim().isEmpty()) {
+        if (phoneNumber == null || phoneNumber.isEmpty()) {
             call.reject("Phone number is required");
             return;
         }
 
-        if (message == null || message.trim().isEmpty()) {
-            call.reject("Message is required");
+        if (message == null || message.isEmpty()) {
+            call.reject("Message content is required");
             return;
         }
 
         if (!hasRequiredPermissions()) {
-            requestPermissionForAlias("sms", call, "sendSmsPermissionCallback");
+            call.reject("SMS or PHONE_STATE permissions are missing");
             return;
         }
 
-        dispatchSms(call, phoneNumber, message);
-    }
-
-    @PermissionCallback
-    private void sendSmsPermissionCallback(PluginCall call) {
-        if (hasRequiredPermissions()) {
-            String phoneNumber = call.getString("phoneNumber");
-            String message = call.getString("message");
-            dispatchSms(call, phoneNumber, message);
-        } else {
-            call.reject("SMS permissions denied by user");
-        }
-    }
-
-    private void dispatchSms(PluginCall call, String phoneNumber, String message) {
         try {
-            SmsManager smsManager;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                Context context = getContext();
-                smsManager = context.getSystemService(SmsManager.class);
-            } else {
-                smsManager = SmsManager.getDefault();
-            }
-
-            if (smsManager == null) {
-                smsManager = SmsManager.getDefault();
-            }
-
-            // Divide message into multiple parts if length > 160 chars
+            SmsManager smsManager = getSmsManagerForSlot(simSlot);
             ArrayList<String> parts = smsManager.divideMessage(message);
+
             if (parts.size() > 1) {
                 smsManager.sendMultipartTextMessage(phoneNumber, null, parts, null, null);
             } else {
@@ -85,40 +66,45 @@ public class BackgroundSmsPlugin extends Plugin {
 
             JSObject ret = new JSObject();
             ret.put("success", true);
-            ret.put("partsCount", parts.size());
-            ret.put("recipient", phoneNumber);
+            ret.put("message", "SMS dispatched successfully");
             call.resolve(ret);
         } catch (Exception e) {
-            call.reject("Failed to send SMS: " + e.getMessage(), e);
+            call.reject("SMS dispatch failed: " + e.getMessage());
         }
     }
 
-    @PluginMethod
-    public void checkSmsPermissions(PluginCall call) {
-        JSObject ret = new JSObject();
-        ret.put("hasPermission", hasRequiredPermissions());
-        call.resolve(ret);
-    }
+    private SmsManager getSmsManagerForSlot(int targetSlot) {
+        Context context = getContext();
 
-    @PluginMethod
-    public void requestSmsPermissions(PluginCall call) {
-        if (hasRequiredPermissions()) {
-            JSObject ret = new JSObject();
-            ret.put("granted", true);
-            call.resolve(ret);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+            SubscriptionManager subscriptionManager = (SubscriptionManager) context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+            if (subscriptionManager != null && ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                List<SubscriptionInfo> subList = subscriptionManager.getActiveSubscriptionInfoList();
+                if (subList != null && !subList.isEmpty()) {
+                    for (SubscriptionInfo info : subList) {
+                        if (info.getSimSlotIndex() == targetSlot) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                return context.getSystemService(SmsManager.class).createForSubscriptionId(info.getSubscriptionId());
+                            } else {
+                                return SmsManager.getSmsManagerForSubscriptionId(info.getSubscriptionId());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return context.getSystemService(SmsManager.class);
         } else {
-            requestPermissionForAlias("sms", call, "requestPermissionsCallback");
+            return SmsManager.getDefault();
         }
     }
 
-    @PermissionCallback
-    private void requestPermissionsCallback(PluginCall call) {
-        JSObject ret = new JSObject();
-        ret.put("granted", hasRequiredPermissions());
-        call.resolve(ret);
-    }
-
-    private boolean hasRequiredPermissions() {
-        return getPermissionState("sms") == com.getcapacitor.PermissionState.GRANTED;
+    @Override
+    public boolean hasRequiredPermissions() {
+        Context context = getContext();
+        return ActivityCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED &&
+               ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
     }
 }
