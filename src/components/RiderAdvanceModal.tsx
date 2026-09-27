@@ -30,6 +30,7 @@ import {
   SmsDispatchResult
 } from '../services/smsService';
 import { InstantShareSuccessModal } from './InstantShareSuccessModal';
+import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 interface RiderAdvanceModalProps {
   rider: Rider;
@@ -95,6 +96,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     amount: number;
     message: string;
   } | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -314,16 +316,31 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         // 1-Tap direct native SMS trigger and instant share popup
         const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
         const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
-        try {
-          window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
-        } catch {}
-        setInstantShareData({
-          riderName: rider.name,
-          riderPhone: cleanPhone,
-          riderId: rider.id,
-          amount: validAmount,
-          message: autoMessage,
-        });
+
+        if (isNativeAndroid()) {
+          // Native Android (APK): Directly dispatch statement SMS via background SIM without opening external composer
+          sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
+            if (smsRes.success) {
+              setToastMessage('✅ सिम से SMS सफलतापूर्वक भेजा गया।');
+              setTimeout(() => setToastMessage(null), 3500);
+            } else {
+              setToastMessage(`⚠️ SMS त्रुटि: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
+              setTimeout(() => setToastMessage(null), 3500);
+            }
+          });
+        } else {
+          // Desktop / Web Browser fallback: trigger 1-tap SMS/WhatsApp fallback modal
+          try {
+            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
+          } catch {}
+          setInstantShareData({
+            riderName: rider.name,
+            riderPhone: cleanPhone,
+            riderId: rider.id,
+            amount: validAmount,
+            message: autoMessage,
+          });
+        }
 
         handleCancelEdit();
       } else {
@@ -398,16 +415,31 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         // 1-Tap direct native SMS trigger and instant share popup
         const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
         const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
-        try {
-          window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
-        } catch {}
-        setInstantShareData({
-          riderName: rider.name,
-          riderPhone: cleanPhone,
-          riderId: rider.id,
-          amount: validAmount,
-          message: autoMessage,
-        });
+
+        if (isNativeAndroid()) {
+          // Native Android (APK): Directly dispatch statement SMS via background SIM without opening external composer
+          sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
+            if (smsRes.success) {
+              setToastMessage('✅ सिम से SMS सफलतापूर्वक भेजा गया।');
+              setTimeout(() => setToastMessage(null), 3500);
+            } else {
+              setToastMessage(`⚠️ SMS त्रुटि: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
+              setTimeout(() => setToastMessage(null), 3500);
+            }
+          });
+        } else {
+          // Desktop / Web Browser fallback: trigger 1-tap SMS/WhatsApp fallback modal
+          try {
+            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
+          } catch {}
+          setInstantShareData({
+            riderName: rider.name,
+            riderPhone: cleanPhone,
+            riderId: rider.id,
+            amount: validAmount,
+            message: autoMessage,
+          });
+        }
 
         // Clear input fields and saved draft
         try {
@@ -463,6 +495,14 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
       onClick={onClose}
     >
+      {/* On-screen Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[60] bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-in slide-in-from-top duration-200">
+          <Check className="w-4 h-4 text-emerald-200 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       <div 
         id="rider-advance-modal-card"
         className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden my-auto animate-in fade-in"

@@ -1,0 +1,8 @@
+{
+	"appId": "com.courier.riderpayout",
+	"appName": "Courier Rider Payout",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	}
+}
