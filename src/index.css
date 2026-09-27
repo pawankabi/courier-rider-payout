@@ -6,16 +6,18 @@
     height: 100%;
     width: 100%;
   }
+
   body {
     overscroll-behavior-y: none;
     min-height: 100%;
     width: 100%;
     margin: 0;
-    padding: 0;
+    padding-top: max(env(safe-area-inset-top), 34px) !important;
+    padding-bottom: max(env(safe-area-inset-bottom), 16px) !important;
   }
 }
 
-/* Standalone & Production Viewport Shielding: Hide any unwanted debug widgets, floating developer prompts or injected parent frames */
+/* Standalone & Production Viewport Shielding: Hide any unwanted debug widgets, floating developer prompts */
 #aistudio-chat,
 .aistudio-chat-widget,
 .dev-tools-sidebar,
@@ -28,16 +30,19 @@
 
 /* Custom scrollbar styling for dense tables */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: #0f172a;
 }
+
 ::-webkit-scrollbar-thumb {
   background: #334155;
   border-radius: 9999px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
