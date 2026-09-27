@@ -596,25 +596,8 @@ export const RidersTab: React.FC<Props> = ({
               <span>+ Add New Rider</span>
             </button>
 
-                        {/* Khatabook Direct Pick from Contacts Button */}
+                                    {/* Khatabook Direct Pick from Contacts Button */}
             <button
-              type="button"
-              onClick={async () => {
-                setName('');
-                setPhone('');
-                setVehicleType('Hero Splendor');
-                setInitialStatus(true);
-                setPhoneError('');
-                setIsAddModalOpen(true);
-                await handlePickContact();
-              }}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold rounded-xl active:scale-95 transition"
-              title="सीधे फ़ोनबुक से नया राइडर जोड़ें"
-            >
-              <Phone className="w-4 h-4" />
-              <span>फ़ोनबुक से जोड़ें</span>
-            </button>
-
               type="button"
               onClick={async () => {
                 setName('');
