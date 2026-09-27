@@ -1376,10 +1376,6 @@ function MainCourierApp() {
           </button>
         </div>
       )}
-
-      {/* PWA Install Banner - Only visible to Master Admin */}
-      {isAdmin && <PWAInstallBanner variant="banner" />}
-
       {/* Subscription Alert & Renewal Banner - 3-day Expiry Alert */}
       <SubscriptionAlertBanner
         userSubscription={userSubscription}
@@ -1403,9 +1399,8 @@ function MainCourierApp() {
                 <h1 className="font-extrabold text-sm sm:text-base text-white tracking-tight leading-none">
                   Courier Payout Pro
                 </h1>
-                <span className="text-[10px] uppercase font-black px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                  PWA
-                </span>
+                
+                
               </div>
               <p className="text-[11px] text-slate-400 font-medium mt-0.5 hidden sm:block">
                 ₹13 Base + ₹2 Incentive Payout & Delivery Hub
@@ -1415,18 +1410,7 @@ function MainCourierApp() {
 
           {/* Header Action Items */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Header Balances Summary Strip (Total Unpaid & Total Advance Side-by-Side) */}
-            <div className="flex items-center gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-800/90 border border-slate-700/80 text-xs shadow-sm">
-              <div className="flex items-center gap-1 sm:gap-1.5">
-                <span className="text-slate-400 text-[11px] sm:text-xs">Total Unpaid:</span>
-                <strong className="text-amber-400 font-black text-xs sm:text-sm">{formatINR(totalUnpaidAmount)}</strong>
-              </div>
-              <span className="text-slate-600 font-bold">•</span>
-              <div className="flex items-center gap-1 sm:gap-1.5">
-                <span className="text-slate-400 text-[11px] sm:text-xs">Total Advance:</span>
-                <strong className="text-rose-300 font-black text-xs sm:text-sm">{formatINR(totalAdvanceAmount)}</strong>
-              </div>
-            </div>
+            
 
             {/* Today Quick Metric Badge */}
             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/80 text-xs">
