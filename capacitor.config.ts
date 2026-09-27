@@ -5,7 +5,8 @@ const config: CapacitorConfig = {
   appName: 'Courier Rider Payout',
   webDir: 'dist',
   server: {
-    androidScheme: 'https'
+    androidScheme: 'https',
+    hostname: 'courier-rider-payout.firebaseapp.com'
   }
 };
 
