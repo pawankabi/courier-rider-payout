@@ -25,6 +25,10 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Accept Android Licenses
+        run: |
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
       - name: Install Node Dependencies
         run: npm install
 
@@ -38,7 +42,7 @@ jobs:
         run: |
           cd android
           chmod +x ./gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
 
