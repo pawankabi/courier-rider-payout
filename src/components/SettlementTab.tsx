@@ -42,6 +42,7 @@ import {
   getWhatsAppUrl, 
   getNativeSmsUrl 
 } from '../services/smsService';
+import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 interface Props {
   riders: Rider[];
@@ -244,38 +245,51 @@ export const SettlementTab: React.FC<Props> = ({
     const statementUrl = generateStatementUrl(selectedRider.id);
 
     // Format SMS message text according to exact specification:
-    // "नमस्ते {riderName}, आपका {fromDate} से {toDate} का ₹{netSalary} वेतन जमा कर दिया गया है। विस्तृत पे-आउट व एडवांस स्लिप देखें: {statementUrl}"
-    const formattedSms = formatSalarySmsText({
-      riderName: selectedRider.name,
-      fromDate: formatDateDisplay(startDate),
-      toDate: formatDateDisplay(endDate),
-      netSalary: netPayableAmount,
-      statementUrl,
-    });
+    // Stating exact date range settled: "नमस्ते {riderName}, आपका {fromDate} से {toDate} तक का ₹{netSalary} पे-आउट सेटल कर दिया गया है। बकाया बैलेंस: ₹{remaining}..."
+    const remainingAdvance = Math.max(0, (Number(selectedRider.totalAdvance) || 0) - numericAdvance);
+    const cleanPhone = (selectedRider.phone || '').trim().replace(/\D/g, '').slice(-10);
+    const settlementSms = `नमस्ते ${selectedRider.name}, आपका ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक का ₹${netPayableAmount} पे-आउट सेटल कर दिया गया है। बकाया बैलेंस: ₹${remainingAdvance}। विस्तृत खाता लेजर: ${statementUrl}`;
 
-    const waUrl = getWhatsAppUrl(selectedRider.phone, formattedSms);
-    const smsUrl = getNativeSmsUrl(selectedRider.phone, formattedSms);
+    const waUrl = getWhatsAppUrl(selectedRider.phone, settlementSms);
+    const smsUrl = getNativeSmsUrl(selectedRider.phone, settlementSms);
 
-    // Trigger automated background API call (Fast2SMS / MSG91 / Webhook)
-    dispatchAutomatedSms({
-      riderPhone: selectedRider.phone,
-      riderName: selectedRider.name,
-      message: formattedSms,
-      type: 'salary',
-      statementUrl,
-      amount: netPayableAmount,
-    }).then((res) => {
-      setSalarySmsFeedback({
-        riderName: selectedRider.name,
-        phone: selectedRider.phone,
-        smsMessage: formattedSms,
-        statementUrl,
-        waUrl,
-        smsUrl,
-        statusText: res.message || 'वेतन SMS डिस्पैच सक्रिय!',
-        netSalary: netPayableAmount,
+    if (isNativeAndroid()) {
+      sendNativeBackgroundSms(cleanPhone, settlementSms).then((smsRes) => {
+        setSalarySmsFeedback({
+          riderName: selectedRider.name,
+          phone: selectedRider.phone,
+          smsMessage: settlementSms,
+          statementUrl,
+          waUrl,
+          smsUrl,
+          statusText: smsRes.success
+            ? '✅ सिम से पे-आउट सेटलमेंट SMS सफलतापूर्वक भेजा गया।'
+            : `⚠️ सिम SMS सूचना: ${smsRes.error || 'सिम से नहीं भेजा जा सका'}`,
+          netSalary: netPayableAmount,
+        });
       });
-    });
+    } else {
+      // Trigger automated background API call (Fast2SMS / MSG91 / Webhook)
+      dispatchAutomatedSms({
+        riderPhone: selectedRider.phone,
+        riderName: selectedRider.name,
+        message: settlementSms,
+        type: 'salary',
+        statementUrl,
+        amount: netPayableAmount,
+      }).then((res) => {
+        setSalarySmsFeedback({
+          riderName: selectedRider.name,
+          phone: selectedRider.phone,
+          smsMessage: settlementSms,
+          statementUrl,
+          waUrl,
+          smsUrl,
+          statusText: res.message || 'वेतन SMS डिस्पैच सक्रिय!',
+          netSalary: netPayableAmount,
+        });
+      });
+    }
   };
 
   // Open WhatsApp Slip with full advance deduction breakdown

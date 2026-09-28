@@ -313,30 +313,30 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           provider: apiResult.provider,
         });
 
-        // 1-Tap direct native SMS trigger and instant share popup
+        // 1-Tap direct native SIM SMS dispatch confirming advance amount & balance
         const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
-        const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
 
         if (isNativeAndroid()) {
-          sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
+          sendNativeBackgroundSms(cleanPhone, smsMessage).then((smsRes) => {
             if (smsRes.success) {
-              setToastMessage('✅ SMS ऐप खोला गया');
-              setTimeout(() => setToastMessage(null), 3000);
+              setToastMessage('✅ सिम से एडवांस SMS सफलतापूर्वक भेजा गया।');
+            } else {
+              setToastMessage(`⚠️ SMS सूचना: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
             }
+            setTimeout(() => setToastMessage(null), 3500);
           });
         } else {
           try {
-            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
+            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(smsMessage)}`, '_blank');
           } catch {}
+          setInstantShareData({
+            riderName: rider.name,
+            riderPhone: cleanPhone,
+            riderId: rider.id,
+            amount: validAmount,
+            message: smsMessage,
+          });
         }
-
-        setInstantShareData({
-          riderName: rider.name,
-          riderPhone: cleanPhone,
-          riderId: rider.id,
-          amount: validAmount,
-          message: autoMessage,
-        });
 
         handleCancelEdit();
       } else {
@@ -408,30 +408,30 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           provider: apiResult.provider,
         });
 
-        // 1-Tap direct native SMS trigger and instant share popup
+        // 1-Tap direct native SIM SMS dispatch confirming advance amount & balance
         const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
-        const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
 
         if (isNativeAndroid()) {
-          sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
+          sendNativeBackgroundSms(cleanPhone, smsMessage).then((smsRes) => {
             if (smsRes.success) {
-              setToastMessage('✅ SMS ऐप खोला गया');
-              setTimeout(() => setToastMessage(null), 3000);
+              setToastMessage('✅ सिम से एडवांस SMS सफलतापूर्वक भेजा गया।');
+            } else {
+              setToastMessage(`⚠️ SMS सूचना: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
             }
+            setTimeout(() => setToastMessage(null), 3500);
           });
         } else {
           try {
-            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
+            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(smsMessage)}`, '_blank');
           } catch {}
+          setInstantShareData({
+            riderName: rider.name,
+            riderPhone: cleanPhone,
+            riderId: rider.id,
+            amount: validAmount,
+            message: smsMessage,
+          });
         }
-
-        setInstantShareData({
-          riderName: rider.name,
-          riderPhone: cleanPhone,
-          riderId: rider.id,
-          amount: validAmount,
-          message: autoMessage,
-        });
 
         // Clear input fields and saved draft
         try {

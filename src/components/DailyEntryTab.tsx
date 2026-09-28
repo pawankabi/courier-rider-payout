@@ -31,7 +31,6 @@ import { EditEntryModal } from './EditEntryModal';
 import { getFestivalAlert } from '../data/festivals';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
 import { InstantShareSuccessModal } from './InstantShareSuccessModal';
-import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 const DAILY_ENTRY_DRAFT_KEY = 'courier_daily_entry_draft_v1';
 
@@ -265,42 +264,15 @@ export const DailyEntryTab: React.FC<Props> = ({
       notes: notes.trim(),
     });
 
-    // Construct automatic SMS / WhatsApp message and trigger direct native SMS fallback
-    const statementUrl = `https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
-    const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: ${statementUrl}`;
-    const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
-
-    if (isNativeAndroid()) {
-      sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
-        if (smsRes.success) {
-          setSubmittedToast('✅ SMS ऐप खोला गया');
-        }
-      });
-    } else {
-      try {
-        window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
-      } catch (smsErr) {
-        console.warn('Native SMS trigger notice:', smsErr);
-      }
-    }
-
-    // Display instant on-screen success prompt with 2 big 1-tap buttons (Send SMS / Send WhatsApp)
-    setInstantShareData({
-      riderName: rider.name,
-      riderPhone: cleanPhone,
-      riderId: rider.id,
-      amount: totalEarnings,
-      message: autoMessage,
-    });
+    // Explicit Rule: Saving a daily parcel record must NEVER send any SMS
+    setSubmittedToast(`Logged ${parcelCount} parcels for ${rider.name} (Total: ${formatINR(totalEarnings)})`);
+    setTimeout(() => setSubmittedToast(null), 3500);
 
     // Clear temporary draft ONLY when submitted successfully
     try {
       localStorage.removeItem(DAILY_ENTRY_DRAFT_KEY);
     } catch {}
     setIsDraftRestored(false);
-
-    setSubmittedToast(`Logged ${parcelCount} parcels for ${rider.name} (Total: ${formatINR(totalEarnings)})`);
-    setTimeout(() => setSubmittedToast(null), 3500);
 
     // Reset notes and prep next parcels for fast rapid entry
     setNotes('');

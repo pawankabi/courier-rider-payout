@@ -34,11 +34,21 @@ export function isNativeApp(): boolean {
 }
 
 /**
- * Safe permission check: Standard intents do not require dangerous background permissions.
- * Keeps banking apps and Google Play Protect 100% safe and unflagged.
+ * Seamlessly requests runtime SEND_SMS and READ_PHONE_STATE permissions when running inside native Android APK.
  */
 export async function ensureSmsPermissions(): Promise<boolean> {
-  return true;
+  if (!isNativeAndroid()) return true;
+  try {
+    const status = await BackgroundSms.checkSmsPermissions();
+    if (status && status.hasPermission) {
+      return true;
+    }
+    const req = await BackgroundSms.requestSmsPermissions();
+    return Boolean(req && req.granted);
+  } catch (err) {
+    console.warn('Error checking/requesting SMS permissions:', err);
+    return false;
+  }
 }
 
 export interface SendNativeSmsResult {
@@ -49,9 +59,9 @@ export interface SendNativeSmsResult {
 }
 
 /**
- * Safely dispatches an SMS using standard intent (sms: or native ACTION_SENDTO).
- * Zero dangerous background permissions (SEND_SMS / READ_SMS / READ_PHONE_STATE)
- * ensuring full compatibility with banking apps (GPay, PhonePe, Paytm) and Google Play Protect.
+ * Dispatches an SMS directly via the device's native SIM card in the background (Khatabook style).
+ * Automatically requests runtime permission and records into system sent messages.
+ * Falls back to web intent in non-native environments.
  */
 export async function sendNativeBackgroundSms(
   phoneNumber: string,
@@ -66,11 +76,23 @@ export async function sendNativeBackgroundSms(
     };
   }
 
-  // If in native Android container, try the native plugin which invokes standard Intent.ACTION_SENDTO
+  const targetNumber = `+91${cleanPhone}`;
+
   if (isNativeAndroid()) {
     try {
+      // 1. Ensure runtime SEND_SMS permission
+      const hasPermission = await ensureSmsPermissions();
+      if (!hasPermission) {
+        return {
+          success: false,
+          isNative: true,
+          error: 'SMS अनुमति अस्वीकृत (SMS permission denied in Android Settings)',
+        };
+      }
+
+      // 2. Dispatch directly via native SIM SmsManager
       const res = await BackgroundSms.sendSms({
-        phoneNumber: `+91${cleanPhone}`,
+        phoneNumber: targetNumber,
         message,
       });
 
@@ -78,29 +100,40 @@ export async function sendNativeBackgroundSms(
         return {
           success: true,
           isNative: true,
-          message: '✅ SMS संदेश तैयार है (SMS intent opened)',
+          message: '✅ सिम से SMS सफलतापूर्वक भेजा गया।',
+        };
+      } else {
+        return {
+          success: false,
+          isNative: true,
+          error: res?.message || 'सिम से SMS नहीं भेजा जा सका',
         };
       }
-    } catch (pluginErr) {
-      console.warn('Native intent notice, falling back to standard uri:', pluginErr);
+    } catch (pluginErr: any) {
+      console.error('Native SIM SMS dispatch error:', pluginErr);
+      return {
+        success: false,
+        isNative: true,
+        error: pluginErr?.message || 'सिम से SMS नहीं भेजा जा सका',
+      };
     }
   }
 
-  // Universal safe web standard fallback (sms:+91... URI)
+  // Web Browser / Desktop standard fallback
   try {
     const encodedBody = encodeURIComponent(message);
     const smsUri = `sms:+91${cleanPhone}?body=${encodedBody}`;
     window.open(smsUri, '_blank');
     return {
       success: true,
-      isNative: isNativeAndroid(),
+      isNative: false,
       message: '✅ SMS ऐप खोला गया',
     };
   } catch (err: any) {
     console.error('Failed to open standard SMS intent:', err);
     return {
       success: false,
-      isNative: isNativeAndroid(),
+      isNative: false,
       error: err?.message || 'SMS भेजने में विफलता',
     };
   }

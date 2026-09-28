@@ -40,6 +40,7 @@ import {
 } from '../utils/formatters';
 import { FestivalBannerCard } from './FestivalBannerCard';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
+import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 interface Props {
   riders: Rider[];
@@ -440,12 +441,30 @@ export const RidersTab: React.FC<Props> = ({
       }
     );
 
-    setPaidToast(
-      `Marked ${formatINR(stats.unpaidAmount)} as Paid for ${
-        rider.name
-      }. Balance updated in Firestore!`
-    );
-    setTimeout(() => setPaidToast(null), 4500);
+    // Precise SIM SMS dispatch on payout settlement stating exact date range and remaining balance
+    const cleanPhone = cleanPhoneNumber(rider.phone);
+    const statementUrl = generateStatementUrl(rider.id);
+    const netPayout = Math.max(0, stats.unpaidAmount - numAdvance);
+    const remainingAdvance = Math.max(0, (Number(rider.totalAdvance) || 0) - numAdvance);
+    const settlementSms = `नमस्ते ${rider.name}, आपका ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक का ₹${netPayout} पे-आउट सेटल कर दिया गया है। बकाया बैलेंस: ₹${remainingAdvance}। विस्तृत खाता लेजर: ${statementUrl}`;
+
+    if (isNativeAndroid()) {
+      sendNativeBackgroundSms(cleanPhone, settlementSms).then((smsRes) => {
+        if (smsRes.success) {
+          setPaidToast(`✅ सिम से पे-आउट सेटलमेंट SMS भेजा गया: ${rider.name}`);
+        } else {
+          setPaidToast(`⚠️ पे-आउट सेटल हुआ, SMS: ${smsRes.error || 'सिम SMS नहीं भेजा जा सका'}`);
+        }
+        setTimeout(() => setPaidToast(null), 4500);
+      });
+    } else {
+      setPaidToast(
+        `Marked ${formatINR(stats.unpaidAmount)} as Paid for ${
+          rider.name
+        }. Balance updated in Firestore!`
+      );
+      setTimeout(() => setPaidToast(null), 4500);
+    }
 
     setPayingRiderData(null);
     setAdvanceDeduction(0);
@@ -548,7 +567,8 @@ export const RidersTab: React.FC<Props> = ({
 
       {/* Header & Controls */}
       <div className="bg-slate-850 border border-slate-755 rounded-2xl p-4 sm:p-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-col gap-3">
+          {/* Top Title & Subtitle */}
           <div className="flex items-center gap-2.5">
             <div className="p-2.5 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
               <Users className="w-5 h-5" />
@@ -563,6 +583,48 @@ export const RidersTab: React.FC<Props> = ({
             </div>
           </div>
 
+          {/* Prominent Always-Visible 2-Column Summary Badges */}
+          <div className="grid grid-cols-2 gap-3 my-3">
+            {/* Card 1: Total Unpaid */}
+            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex flex-col justify-between shadow-sm">
+              <div className="flex items-center justify-between gap-1 flex-wrap">
+                <span className="text-xs sm:text-sm font-bold text-amber-400 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>कुल बकाया (Total Unpaid)</span>
+                </span>
+                <span className="text-[10px] sm:text-[11px] font-semibold text-amber-300/90 bg-amber-500/15 px-2 py-0.5 rounded-md border border-amber-500/30">
+                  {totalUnpaidParcels} pkts
+                </span>
+              </div>
+              <div className="text-lg sm:text-2xl font-black text-amber-300 mt-1">
+                {formatINR(totalUnpaidAmount)}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                {ridersWithUnpaid.length} राइडर पेंडिंग
+              </div>
+            </div>
+
+            {/* Card 2: Total Advance */}
+            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex flex-col justify-between shadow-sm">
+              <div className="flex items-center justify-between gap-1 flex-wrap">
+                <span className="text-xs sm:text-sm font-bold text-indigo-300 flex items-center gap-1.5">
+                  <IndianRupee className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span>कुल एडवांस (Total Advance)</span>
+                </span>
+                <span className="text-[10px] sm:text-[11px] font-semibold text-indigo-200/90 bg-indigo-500/15 px-2 py-0.5 rounded-md border border-indigo-500/30">
+                  {riders.filter((r) => Number(r.totalAdvance || 0) > 0).length} active
+                </span>
+              </div>
+              <div className="text-lg sm:text-2xl font-black text-indigo-200 mt-1">
+                {formatINR(totalAdvanceAmount)}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                कुल दिया गया एडवांस
+              </div>
+            </div>
+          </div>
+
+          {/* Action Buttons Row */}
           <div className="flex items-center gap-2 flex-wrap">
             {canAccessFestivalGreetings && (
               <button
@@ -1142,6 +1204,7 @@ export const RidersTab: React.FC<Props> = ({
       {/* Festival Greetings Modal */}
       {isFestivalModalOpen && canAccessFestivalGreetings && (
         <FestivalGreetingsModal
+          isOpen={isFestivalModalOpen}
           riders={riders}
           onClose={() => setIsFestivalModalOpen(false)}
           hubSignature={hubSignature}
