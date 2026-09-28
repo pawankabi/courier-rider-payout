@@ -14,7 +14,8 @@ import {
   ExternalLink,
   Eye,
   CheckCircle2,
-  FileText
+  FileText,
+  Zap
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { auth } from '../firebase';
@@ -47,6 +48,7 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
   onSubscriptionUpdated,
 }) => {
   const [liveQrUrl, setLiveQrUrl] = useState<string>('');
+  const [showQrCode, setShowQrCode] = useState(false);
   const [copiedUpi, setCopiedUpi] = useState(false);
   const [utrNumber, setUtrNumber] = useState('');
   const [slipFile, setSlipFile] = useState<File | null>(null);
@@ -350,14 +352,14 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
         ) : (
           /* Payment Grid: QR Code & Payment Instructions on Left, Upload Form on Right */
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
-            {/* LEFT COLUMN: QR CODE & PAYMENT INSTRUCTIONS */}
+            {/* LEFT COLUMN: 1-TAP UPI PAYMENT & INSTRUCTIONS */}
             <div className="md:col-span-6 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl flex flex-col justify-between">
-              <div className="space-y-3">
+              <div className="space-y-3.5">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
-                    <QrCode className="w-4 h-4 text-amber-400" />
+                    <CreditCard className="w-4 h-4 text-emerald-400" />
                     <h3 className="text-sm font-bold text-white">
-                      1. QR कोड स्कैन कर भुगतान करें
+                      1. त्वरित UPI भुगतान (1-Tap UPI Payment)
                     </h3>
                   </div>
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
@@ -365,28 +367,14 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
                   </span>
                 </div>
 
-                {/* QR Code Container */}
-                <div className="text-center p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
-                  {activeQrCodeUrl ? (
-                    <div className="inline-block p-3 bg-white rounded-xl shadow-lg border border-slate-300">
-                      <img
-                        src={activeQrCodeUrl}
-                        alt="Master Admin UPI QR Code"
-                        referrerPolicy="no-referrer"
-                        className="w-44 h-44 sm:w-48 sm:h-48 object-contain mx-auto"
-                      />
-                    </div>
-                  ) : (
-                    <div className="w-44 h-44 sm:w-48 sm:h-48 mx-auto flex flex-col items-center justify-center bg-slate-900 border border-dashed border-slate-800 rounded-xl text-slate-500 text-xs p-3">
-                      <QrCode className="w-8 h-8 text-slate-600 mb-1" />
-                      <span>QR कोड लोड हो रहा है...</span>
-                    </div>
-                  )}
-
-                  <p className="text-[11px] text-slate-400">
-                    Google Pay / PhonePe / Paytm / BHIM ऐप से स्कैन करें।
-                  </p>
-                </div>
+                {/* Prominent Full-Width UPI Button */}
+                <a
+                  href={`upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent('Courier Payout Pro')}&am=${monthlyFee}&cu=INR&tn=${encodeURIComponent('App Activation')}`}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-600 hover:from-emerald-400 hover:to-blue-500 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer text-center"
+                >
+                  <Zap className="w-5 h-5 fill-slate-950 shrink-0" />
+                  <span>Pay via UPI App (GPay / PhonePe / Paytm)</span>
+                </a>
 
                 {/* UPI ID Pill with 1-Tap Copy */}
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5">
@@ -416,6 +404,46 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Clean Toggle for QR Code Scanning */}
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowQrCode((prev) => !prev)}
+                    className="text-xs text-slate-400 hover:text-amber-300 flex items-center justify-center gap-1.5 mx-auto transition cursor-pointer font-medium py-1 px-3 rounded-lg hover:bg-slate-950 border border-slate-800/80"
+                  >
+                    <QrCode className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{showQrCode ? 'QR कोड छुपाएं (Hide QR Code)' : '📱 दूसरी डिवाइस से स्कैन करने हेतु QR कोड देखें (Show QR Code)'}</span>
+                  </button>
+                </div>
+
+                {/* Collapsible QR Code View */}
+                {showQrCode && (
+                  <div className="text-center p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2 animate-in fade-in duration-200">
+                    <span className="text-xs font-bold text-slate-200 block">
+                      UPI QR Code (Scan &amp; Pay ₹{monthlyFee})
+                    </span>
+                    {activeQrCodeUrl ? (
+                      <div className="inline-block p-3 bg-white rounded-xl shadow-lg border border-slate-300">
+                        <img
+                          src={activeQrCodeUrl}
+                          alt="Master Admin UPI QR Code"
+                          referrerPolicy="no-referrer"
+                          className="w-44 h-44 sm:w-48 sm:h-48 object-contain mx-auto"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-44 h-44 sm:w-48 sm:h-48 mx-auto flex flex-col items-center justify-center bg-slate-900 border border-dashed border-slate-800 rounded-xl text-slate-500 text-xs p-3">
+                        <QrCode className="w-8 h-8 text-slate-600 mb-1" />
+                        <span>QR कोड लोड हो रहा है...</span>
+                      </div>
+                    )}
+
+                    <p className="text-[11px] text-slate-400">
+                      Google Pay / PhonePe / Paytm / BHIM ऐप से स्कैन करें।
+                    </p>
+                  </div>
+                )}
 
                 {/* Payment Instructions Bullet List */}
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 space-y-1.5 text-slate-300 text-xs">

@@ -318,29 +318,25 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
 
         if (isNativeAndroid()) {
-          // Native Android (APK): Directly dispatch statement SMS via background SIM without opening external composer
           sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
             if (smsRes.success) {
-              setToastMessage('✅ सिम से SMS सफलतापूर्वक भेजा गया।');
-              setTimeout(() => setToastMessage(null), 3500);
-            } else {
-              setToastMessage(`⚠️ SMS त्रुटि: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
-              setTimeout(() => setToastMessage(null), 3500);
+              setToastMessage('✅ SMS ऐप खोला गया');
+              setTimeout(() => setToastMessage(null), 3000);
             }
           });
         } else {
-          // Desktop / Web Browser fallback: trigger 1-tap SMS/WhatsApp fallback modal
           try {
             window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
           } catch {}
-          setInstantShareData({
-            riderName: rider.name,
-            riderPhone: cleanPhone,
-            riderId: rider.id,
-            amount: validAmount,
-            message: autoMessage,
-          });
         }
+
+        setInstantShareData({
+          riderName: rider.name,
+          riderPhone: cleanPhone,
+          riderId: rider.id,
+          amount: validAmount,
+          message: autoMessage,
+        });
 
         handleCancelEdit();
       } else {
@@ -417,29 +413,25 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         const autoMessage = `नमस्ते ${rider.name}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(rider.id)}`;
 
         if (isNativeAndroid()) {
-          // Native Android (APK): Directly dispatch statement SMS via background SIM without opening external composer
           sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
             if (smsRes.success) {
-              setToastMessage('✅ सिम से SMS सफलतापूर्वक भेजा गया।');
-              setTimeout(() => setToastMessage(null), 3500);
-            } else {
-              setToastMessage(`⚠️ SMS त्रुटि: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
-              setTimeout(() => setToastMessage(null), 3500);
+              setToastMessage('✅ SMS ऐप खोला गया');
+              setTimeout(() => setToastMessage(null), 3000);
             }
           });
         } else {
-          // Desktop / Web Browser fallback: trigger 1-tap SMS/WhatsApp fallback modal
           try {
             window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
           } catch {}
-          setInstantShareData({
-            riderName: rider.name,
-            riderPhone: cleanPhone,
-            riderId: rider.id,
-            amount: validAmount,
-            message: autoMessage,
-          });
         }
+
+        setInstantShareData({
+          riderName: rider.name,
+          riderPhone: cleanPhone,
+          riderId: rider.id,
+          amount: validAmount,
+          message: autoMessage,
+        });
 
         // Clear input fields and saved draft
         try {

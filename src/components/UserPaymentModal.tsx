@@ -14,7 +14,10 @@ import {
   LogOut,
   ExternalLink,
   Receipt,
-  QrCode
+  QrCode,
+  Zap,
+  Copy,
+  Check
 } from 'lucide-react';
 import { auth } from '../firebase';
 import { UserSubscription, PaymentHistoryItem, checkSubscriptionLock } from '../types';
@@ -55,6 +58,15 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
   const [isReuploading, setIsReuploading] = useState(false);
   const [selectedHistorySlip, setSelectedHistorySlip] = useState<string | null>(null);
   const [liveDefaultQr, setLiveDefaultQr] = useState<string>('');
+  const [showQrCode, setShowQrCode] = useState(false);
+  const [copiedUpi, setCopiedUpi] = useState(false);
+  const upiId = 'pawankabiseraikella@okaxis';
+
+  const handleCopyUpi = () => {
+    navigator.clipboard.writeText(upiId);
+    setCopiedUpi(true);
+    setTimeout(() => setCopiedUpi(false), 2000);
+  };
 
   useEffect(() => {
     if (!userSubscription?.qrCodeUrl && !masterQrCodeUrl) {
@@ -472,31 +484,94 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
                     </span>
                   </div>
 
-                  {/* UPI QR Code Container */}
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-center space-y-2">
-                    <span className="text-xs font-bold text-slate-200 block">
-                      UPI QR Code (Google Pay / PhonePe / Paytm / BHIM)
-                    </span>
-                    <p className="text-[11px] text-slate-400">
-                      QR कोड स्कैन करें और <strong>₹{monthlyFee}</strong> का भुगतान कर स्क्रीनशॉट नीचे अपलोड करें।
-                    </p>
+                  {/* 1-Tap Direct UPI Intent Payment Flow (Prompt Requirement) */}
+                  <div className="space-y-3 p-4 rounded-2xl bg-gradient-to-br from-slate-950 to-slate-900 border border-slate-800 shadow-xl">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                        <CreditCard className="w-4 h-4 text-emerald-400" />
+                        <span>त्वरित UPI भुगतान (1-Tap UPI Payment)</span>
+                      </span>
+                      <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        Zero Fee
+                      </span>
+                    </div>
 
-                    {activeQrUrl ? (
-                      <div className="inline-block p-3 bg-white rounded-xl shadow-lg my-1 border border-slate-300">
-                        <img
-                          src={activeQrUrl}
-                          alt="Master Admin UPI QR Code"
-                          referrerPolicy="no-referrer"
-                          className="w-48 h-48 object-contain mx-auto"
-                        />
+                    {/* Prominent Full-Width UPI Button */}
+                    <a
+                      href={`upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent('Courier Payout Pro')}&am=${monthlyFee}&cu=INR&tn=${encodeURIComponent('App Activation')}`}
+                      className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-600 hover:from-emerald-400 hover:to-blue-500 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer"
+                    >
+                      <Zap className="w-5 h-5 fill-slate-950 shrink-0" />
+                      <span>Pay via UPI App (GPay / PhonePe / Paytm)</span>
+                    </a>
+
+                    {/* UPI ID Pill with 1-Tap Copy */}
+                    <div className="flex items-center justify-between gap-2 p-2.5 bg-slate-950 rounded-xl border border-slate-800">
+                      <div className="min-w-0">
+                        <span className="text-[10px] text-slate-400 block font-medium">UPI ID पर सीधे भुगतान हेतु:</span>
+                        <span className="font-mono text-xs font-bold text-amber-300 truncate select-all block mt-0.5">
+                          {upiId}
+                        </span>
                       </div>
-                    ) : (
-                      <div className="py-6 px-4 bg-slate-900 rounded-xl border border-dashed border-slate-800 text-slate-400 space-y-2">
-                        <QrCode className="w-10 h-10 mx-auto text-slate-600" />
-                        <p className="text-xs">UPI QR Code लोड हो रहा है...</p>
-                        <p className="text-[10px] text-slate-500">
-                          यदि QR कोड प्रदर्शित नहीं होता है, तो कृपया एडमिन से संपर्क करें।
+                      <button
+                        type="button"
+                        onClick={handleCopyUpi}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-1.5 transition active:scale-95 cursor-pointer shrink-0 border border-slate-700"
+                      >
+                        {copiedUpi ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-emerald-400">कॉपी हुआ!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy UPI ID</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Clean Toggle for QR Code Scanning */}
+                    <div className="pt-1 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setShowQrCode((prev) => !prev)}
+                        className="text-xs text-slate-400 hover:text-amber-300 flex items-center justify-center gap-1.5 mx-auto transition cursor-pointer font-medium py-1 px-3 rounded-lg hover:bg-slate-900 border border-slate-800/80"
+                      >
+                        <QrCode className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{showQrCode ? 'QR कोड छुपाएं (Hide QR Code)' : '📱 दूसरी डिवाइस से स्कैन करने हेतु QR कोड देखें (Show QR Code)'}</span>
+                      </button>
+                    </div>
+
+                    {/* Collapsible QR Code View */}
+                    {showQrCode && (
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-center space-y-2 animate-in fade-in duration-200">
+                        <span className="text-xs font-bold text-slate-200 block">
+                          UPI QR Code (Scan &amp; Pay ₹{monthlyFee})
+                        </span>
+                        <p className="text-[11px] text-slate-400">
+                          किसी भी UPI ऐप से स्कैन करें और <strong>₹{monthlyFee}</strong> का भुगतान कर रसीद नीचे अपलोड करें।
                         </p>
+
+                        {activeQrUrl ? (
+                          <div className="inline-block p-3 bg-white rounded-xl shadow-lg my-1 border border-slate-300">
+                            <img
+                              src={activeQrUrl}
+                              alt="Master Admin UPI QR Code"
+                              referrerPolicy="no-referrer"
+                              className="w-48 h-48 object-contain mx-auto"
+                            />
+                          </div>
+                        ) : (
+                          <div className="py-6 px-4 bg-slate-900 rounded-xl border border-dashed border-slate-800 text-slate-400 space-y-2">
+                            <QrCode className="w-10 h-10 mx-auto text-slate-600" />
+                            <p className="text-xs">UPI QR Code लोड हो रहा है...</p>
+                            <p className="text-[10px] text-slate-500">
+                              यदि QR कोड प्रदर्शित नहीं होता है, तो ऊपर दिए गए UPI ID पर सीधे भुगतान करें।
+                            </p>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

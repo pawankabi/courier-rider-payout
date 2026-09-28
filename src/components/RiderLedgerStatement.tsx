@@ -405,20 +405,6 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               <MessageCircle className="w-3.5 h-3.5" />
               <span>WhatsApp</span>
             </a>
-
-            {/* Explicit Sticky Top-Header Navigation: Clear "✕ Close" button at top-right corner */}
-            {onBackToApp && (
-              <button
-                id="khatabook-top-close-back-btn"
-                type="button"
-                onClick={onBackToApp}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-md shadow-red-900/40 border border-red-500/50 transition active:scale-95 cursor-pointer ml-1.5"
-                title="✕ Close and return to Riders list"
-              >
-                <X className="w-4 h-4 text-white" />
-                <span>✕ Close</span>
-              </button>
-            )}
           </div>
         </div>
       </header>

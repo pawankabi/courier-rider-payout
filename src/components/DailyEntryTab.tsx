@@ -271,30 +271,27 @@ export const DailyEntryTab: React.FC<Props> = ({
     const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
 
     if (isNativeAndroid()) {
-      // Native Android (APK): Directly dispatch statement SMS via background SIM without opening external composer
       sendNativeBackgroundSms(cleanPhone, autoMessage).then((smsRes) => {
         if (smsRes.success) {
-          setSubmittedToast('✅ सिम से SMS सफलतापूर्वक भेजा गया।');
-        } else {
-          setSubmittedToast(`⚠️ SMS सूचना: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
+          setSubmittedToast('✅ SMS ऐप खोला गया');
         }
       });
     } else {
-      // Desktop / Web Browser fallback: trigger 1-tap SMS/WhatsApp fallback modal
       try {
         window.open(`sms:${cleanPhone}?body=${encodeURIComponent(autoMessage)}`, '_blank');
       } catch (smsErr) {
         console.warn('Native SMS trigger notice:', smsErr);
       }
-
-      setInstantShareData({
-        riderName: rider.name,
-        riderPhone: cleanPhone,
-        riderId: rider.id,
-        amount: totalEarnings,
-        message: autoMessage,
-      });
     }
+
+    // Display instant on-screen success prompt with 2 big 1-tap buttons (Send SMS / Send WhatsApp)
+    setInstantShareData({
+      riderName: rider.name,
+      riderPhone: cleanPhone,
+      riderId: rider.id,
+      amount: totalEarnings,
+      message: autoMessage,
+    });
 
     // Clear temporary draft ONLY when submitted successfully
     try {

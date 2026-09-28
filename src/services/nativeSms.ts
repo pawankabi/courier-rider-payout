@@ -3,8 +3,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 export interface BackgroundSmsPlugin {
   sendSms(options: { phoneNumber: string; message: string }): Promise<{
     success: boolean;
-    recipient?: string;
-    partsCount?: number;
+    message?: string;
   }>;
   checkSmsPermissions(): Promise<{ hasPermission: boolean }>;
   requestSmsPermissions(): Promise<{ granted: boolean }>;
@@ -35,25 +34,11 @@ export function isNativeApp(): boolean {
 }
 
 /**
- * Checks and requests android.permission.SEND_SMS and android.permission.READ_PHONE_STATE permissions at runtime.
+ * Safe permission check: Standard intents do not require dangerous background permissions.
+ * Keeps banking apps and Google Play Protect 100% safe and unflagged.
  */
 export async function ensureSmsPermissions(): Promise<boolean> {
-  if (!isNativeAndroid()) {
-    return false;
-  }
-
-  try {
-    const status = await BackgroundSms.checkSmsPermissions();
-    if (status && status.hasPermission) {
-      return true;
-    }
-
-    const requestRes = await BackgroundSms.requestSmsPermissions();
-    return Boolean(requestRes && requestRes.granted);
-  } catch (err) {
-    console.warn('Native SMS permission check/request warning:', err);
-    return false;
-  }
+  return true;
 }
 
 export interface SendNativeSmsResult {
@@ -64,64 +49,67 @@ export interface SendNativeSmsResult {
 }
 
 /**
- * Sends a background SMS directly via the Android device default SIM card
- * without opening the system SMS composer intent.
+ * Safely dispatches an SMS using standard intent (sms: or native ACTION_SENDTO).
+ * Zero dangerous background permissions (SEND_SMS / READ_SMS / READ_PHONE_STATE)
+ * ensuring full compatibility with banking apps (GPay, PhonePe, Paytm) and Google Play Protect.
  */
 export async function sendNativeBackgroundSms(
   phoneNumber: string,
   message: string
 ): Promise<SendNativeSmsResult> {
-  if (!isNativeAndroid()) {
-    return {
-      success: false,
-      isNative: false,
-      message: 'Not running in native Android container',
-    };
-  }
-
   const cleanPhone = (phoneNumber || '').trim().replace(/\D/g, '').slice(-10);
   if (!cleanPhone || cleanPhone.length < 10) {
     return {
       success: false,
-      isNative: true,
+      isNative: isNativeAndroid(),
       error: 'अमान्य फोन नंबर (Invalid 10-digit phone number)',
     };
   }
 
+  // If in native Android container, try the native plugin which invokes standard Intent.ACTION_SENDTO
+  if (isNativeAndroid()) {
+    try {
+      const res = await BackgroundSms.sendSms({
+        phoneNumber: `+91${cleanPhone}`,
+        message,
+      });
+
+      if (res && res.success) {
+        return {
+          success: true,
+          isNative: true,
+          message: '✅ SMS संदेश तैयार है (SMS intent opened)',
+        };
+      }
+    } catch (pluginErr) {
+      console.warn('Native intent notice, falling back to standard uri:', pluginErr);
+    }
+  }
+
+  // Universal safe web standard fallback (sms:+91... URI)
   try {
-    const hasPerm = await ensureSmsPermissions();
-    if (!hasPerm) {
-      return {
-        success: false,
-        isNative: true,
-        error: 'SMS अनुमति अस्वीकृत (SMS permission denied)',
-      };
-    }
-
-    const res = await BackgroundSms.sendSms({
-      phoneNumber: `+91${cleanPhone}`,
-      message,
-    });
-
-    if (res && res.success) {
-      return {
-        success: true,
-        isNative: true,
-        message: '✅ सिम से SMS सफलतापूर्वक भेजा गया।',
-      };
-    }
-
+    const encodedBody = encodeURIComponent(message);
+    const smsUri = `sms:+91${cleanPhone}?body=${encodedBody}`;
+    window.open(smsUri, '_blank');
     return {
-      success: false,
-      isNative: true,
-      error: 'सिम से SMS भेजने में विफलता।',
+      success: true,
+      isNative: isNativeAndroid(),
+      message: '✅ SMS ऐप खोला गया',
     };
   } catch (err: any) {
-    console.error('sendNativeBackgroundSms error:', err);
+    console.error('Failed to open standard SMS intent:', err);
     return {
       success: false,
-      isNative: true,
-      error: err?.message || 'सिम से SMS भेजने में विफलता।',
+      isNative: isNativeAndroid(),
+      error: err?.message || 'SMS भेजने में विफलता',
     };
   }
+}
+
+/**
+ * Standard WhatsApp share link
+ */
+export function getWhatsAppShareUrl(phoneNumber: string, message: string): string {
+  const cleanPhone = (phoneNumber || '').trim().replace(/\D/g, '').slice(-10);
+  return `https://wa.me/91${cleanPhone}?text=${encodeURIComponent(message)}`;
 }

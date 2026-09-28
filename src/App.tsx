@@ -344,6 +344,20 @@ function MainCourierApp() {
   const canAccessFestivalGreetings = isSuperAdminUser || Boolean(userPermissions.festivalGreetings ?? userPermissions.canAccessFestivalGreetings);
   const canExportData = isSuperAdminUser || Boolean(userPermissions.canExportData);
 
+  // Derived active hub name (Admin configured or fallback)
+  const activeHubName = useMemo(() => {
+    const raw =
+      (currentUser as any)?.hubName ||
+      userRateConfig?.hubSignature ||
+      (userProfile as any)?.hubSignature ||
+      (userProfile as any)?.displayName ||
+      inspectedUser?.hubSignature ||
+      currentUser?.displayName ||
+      '';
+    const trimmed = (raw || '').trim();
+    return trimmed.length > 0 ? trimmed : 'सरायकेला कूरियर हब';
+  }, [currentUser, userRateConfig?.hubSignature, userProfile, inspectedUser?.hubSignature]);
+
   // Auto-redirect if current tab becomes restricted or if non-superadmin tries to access admin
   useEffect(() => {
     if (!isSuperAdminUser && activeTab === 'admin') {
@@ -1376,6 +1390,10 @@ function MainCourierApp() {
           </button>
         </div>
       )}
+
+      {/* PWA Install Banner - Only visible to Master Admin */}
+      {isAdmin && <PWAInstallBanner variant="banner" />}
+
       {/* Subscription Alert & Renewal Banner - 3-day Expiry Alert */}
       <SubscriptionAlertBanner
         userSubscription={userSubscription}
@@ -1386,12 +1404,15 @@ function MainCourierApp() {
         onOpenPayModal={() => setIsUserPaymentModalOpen(true)}
       />
 
-      {/* Top Application Header */}
-      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 shadow-sm">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+      {/* Top Application Header with Balanced Top Spacing for Notch/Camera/Safe Area */}
+      <header
+        className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shadow-sm pt-7 sm:pt-4"
+        style={{ paddingTop: 'max(1.75rem, env(safe-area-inset-top, 1.75rem))' }}
+      >
+        <div className="max-w-6xl mx-auto px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3">
           {/* Brand Logo & Name */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 p-0.5 shadow-md flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 p-0.5 shadow-md flex items-center justify-center shrink-0">
               <img src="/icon.svg" alt="Courier App Logo" className="w-7 h-7 rounded-lg" />
             </div>
             <div>
@@ -1399,19 +1420,15 @@ function MainCourierApp() {
                 <h1 className="font-extrabold text-sm sm:text-base text-white tracking-tight leading-none">
                   Courier Payout Pro
                 </h1>
-                
-                
               </div>
               <p className="text-[11px] text-slate-400 font-medium mt-0.5 hidden sm:block">
-                ₹13 Base + ₹2 Incentive Payout & Delivery Hub
+                ₹13 Base + ₹2 Incentive Payout & Delivery Hub • <span className="text-slate-300 font-semibold">{activeHubName}</span>
               </p>
             </div>
           </div>
 
           {/* Header Action Items */}
           <div className="flex items-center gap-2 sm:gap-3">
-            
-
             {/* Today Quick Metric Badge */}
             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/80 text-xs">
               <span className="text-slate-400">Today:</span>
@@ -1626,8 +1643,8 @@ function MainCourierApp() {
                 onClick={() => setActiveTab('entry')}
                 className={`py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition ${
                   activeTab === 'entry'
-                    ? 'border-blue-500 text-blue-400 bg-blue-500/5'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                    ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10'
+                    : 'border-transparent text-slate-400 hover:text-cyan-300'
                 }`}
               >
                 <PackagePlus className="w-4 h-4" />
@@ -1641,8 +1658,8 @@ function MainCourierApp() {
                 onClick={() => setActiveTab('riders')}
                 className={`py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition ${
                   activeTab === 'riders'
-                    ? 'border-blue-500 text-blue-400 bg-blue-500/5'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                    ? 'border-indigo-500 text-indigo-400 bg-indigo-500/10'
+                    : 'border-transparent text-slate-400 hover:text-indigo-300'
                 }`}
               >
                 <Users className="w-4 h-4" />
@@ -1656,8 +1673,8 @@ function MainCourierApp() {
                 onClick={() => setActiveTab('reports')}
                 className={`py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition ${
                   activeTab === 'reports'
-                    ? 'border-blue-500 text-blue-400 bg-blue-500/5'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                    ? 'border-purple-500 text-purple-400 bg-purple-500/10'
+                    : 'border-transparent text-slate-400 hover:text-purple-300'
                 }`}
               >
                 <BarChart3 className="w-4 h-4" />
@@ -1671,8 +1688,8 @@ function MainCourierApp() {
                 onClick={() => setActiveTab('settlement')}
                 className={`py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition relative ${
                   activeTab === 'settlement'
-                    ? 'border-blue-500 text-blue-400 bg-blue-500/5'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                    ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10'
+                    : 'border-transparent text-slate-400 hover:text-emerald-300'
                 }`}
               >
                 <Receipt className="w-4 h-4" />
@@ -1693,7 +1710,7 @@ function MainCourierApp() {
                 className={`py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition ${
                   activeTab === 'festivals'
                     ? 'border-amber-500 text-amber-400 bg-amber-500/10'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                    : 'border-transparent text-slate-400 hover:text-amber-300'
                 }`}
               >
                 <Sparkles className="w-4 h-4 text-amber-400" />
@@ -1711,13 +1728,13 @@ function MainCourierApp() {
                 onClick={() => setActiveTab('admin')}
                 className={`py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition ml-auto ${
                   activeTab === 'admin'
-                    ? 'border-amber-500 text-amber-400 bg-amber-500/10'
-                    : 'border-transparent text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/5'
+                    ? 'border-rose-500 text-rose-400 bg-rose-500/10'
+                    : 'border-transparent text-rose-400/80 hover:text-rose-300 hover:bg-rose-500/5'
                 }`}
               >
-                <Shield className="w-4 h-4 text-amber-400" />
+                <Shield className="w-4 h-4 text-rose-400" />
                 <span>Admin Dashboard</span>
-                <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 tracking-wider">
+                <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 tracking-wider">
                   MASTER
                 </span>
               </button>
@@ -1728,6 +1745,19 @@ function MainCourierApp() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-3.5 sm:px-6 py-5 pb-24 sm:pb-12">
+        {/* Hub Name Headline (Prominent & Multi-Color Gradient) */}
+        <div className="mb-6 pb-4 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 via-indigo-300 to-amber-300 bg-clip-text text-transparent drop-shadow">
+              {activeHubName}
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-400 font-medium mt-1 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block shadow-sm shadow-emerald-400 animate-pulse"></span>
+              <span>Authorized Dispatch & Payout Center</span>
+            </p>
+          </div>
+        </div>
+
         {activeTab === 'entry' && canAccessDailyEntry && (
           <DailyEntryTab
             key={`daily-entry-tab-${restoreRefreshKey}`}
@@ -1834,108 +1864,108 @@ function MainCourierApp() {
         )}
       </main>
 
-      {/* Mobile-First App Bottom Navigation Bar */}
+      {/* Mobile-First App Bottom Navigation Bar - Permanent Vibrant Colors */}
       <nav
         id="mobile-bottom-nav"
-        className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 px-2 py-1.5 shadow-2xl"
+        className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800/90 px-1.5 py-1.5 shadow-2xl"
       >
-        <div className="flex items-center justify-around max-w-md mx-auto">
-          {/* Daily Entry */}
+        <div className="flex items-center justify-between gap-1 max-w-lg mx-auto">
+          {/* 1. Daily Entry: Always Sky Blue / Cyan */}
           {canAccessDailyEntry && (
             <button
               id="mobile-nav-entry"
               onClick={() => setActiveTab('entry')}
-              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition ${
+              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all duration-200 text-cyan-400 ${
                 activeTab === 'entry'
-                  ? 'text-blue-400 bg-blue-500/10 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-500/20 border border-cyan-400/50 shadow-md shadow-cyan-500/25 ring-1 ring-cyan-400/40 font-black'
+                  : 'border border-transparent hover:bg-cyan-500/10 font-semibold'
               }`}
             >
-              <PackagePlus className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] leading-tight">Daily Entry</span>
+              <PackagePlus className={`w-5 h-5 mb-0.5 text-cyan-400 transition-transform ${activeTab === 'entry' ? 'scale-110 drop-shadow-[0_0_8px_rgba(34,211,238,0.7)]' : 'drop-shadow-[0_0_3px_rgba(34,211,238,0.3)]'}`} />
+              <span className={`text-[10px] leading-tight text-cyan-400 ${activeTab === 'entry' ? 'font-black' : 'font-semibold'}`}>Daily Entry</span>
             </button>
           )}
 
-          {/* Riders */}
+          {/* 2. Riders: Always Electric Blue / Indigo */}
           {canAccessRiders && (
             <button
               id="mobile-nav-riders"
               onClick={() => setActiveTab('riders')}
-              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition ${
+              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all duration-200 text-indigo-400 ${
                 activeTab === 'riders'
-                  ? 'text-blue-400 bg-blue-500/10 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-indigo-500/20 border border-indigo-400/50 shadow-md shadow-indigo-500/25 ring-1 ring-indigo-400/40 font-black'
+                  : 'border border-transparent hover:bg-indigo-500/10 font-semibold'
               }`}
             >
-              <Users className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] leading-tight">Riders</span>
+              <Users className={`w-5 h-5 mb-0.5 text-indigo-400 transition-transform ${activeTab === 'riders' ? 'scale-110 drop-shadow-[0_0_8px_rgba(129,140,248,0.7)]' : 'drop-shadow-[0_0_3px_rgba(129,140,248,0.3)]'}`} />
+              <span className={`text-[10px] leading-tight text-indigo-400 ${activeTab === 'riders' ? 'font-black' : 'font-semibold'}`}>Riders</span>
             </button>
           )}
 
-          {/* Reports */}
+          {/* 3. Reports: Always Purple / Violet */}
           {canAccessReports && (
             <button
               id="mobile-nav-reports"
               onClick={() => setActiveTab('reports')}
-              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition ${
+              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all duration-200 text-purple-400 ${
                 activeTab === 'reports'
-                  ? 'text-blue-400 bg-blue-500/10 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-purple-500/20 border border-purple-400/50 shadow-md shadow-purple-500/25 ring-1 ring-purple-400/40 font-black'
+                  : 'border border-transparent hover:bg-purple-500/10 font-semibold'
               }`}
             >
-              <BarChart3 className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] leading-tight">Reports</span>
+              <BarChart3 className={`w-5 h-5 mb-0.5 text-purple-400 transition-transform ${activeTab === 'reports' ? 'scale-110 drop-shadow-[0_0_8px_rgba(192,132,252,0.7)]' : 'drop-shadow-[0_0_3px_rgba(192,132,252,0.3)]'}`} />
+              <span className={`text-[10px] leading-tight text-purple-400 ${activeTab === 'reports' ? 'font-black' : 'font-semibold'}`}>Reports</span>
             </button>
           )}
 
-          {/* Settlement */}
+          {/* 4. Settlement: Always Emerald Green with bright golden alert dot */}
           {canAccessReports && (
             <button
               id="mobile-nav-settlement"
               onClick={() => setActiveTab('settlement')}
-              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition relative ${
+              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all duration-200 relative text-emerald-400 ${
                 activeTab === 'settlement'
-                  ? 'text-blue-400 bg-blue-500/10 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-emerald-500/20 border border-emerald-400/50 shadow-md shadow-emerald-500/25 ring-1 ring-emerald-400/40 font-black'
+                  : 'border border-transparent hover:bg-emerald-500/10 font-semibold'
               }`}
             >
-              <Receipt className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] leading-tight">Settlement</span>
+              <Receipt className={`w-5 h-5 mb-0.5 text-emerald-400 transition-transform ${activeTab === 'settlement' ? 'scale-110 drop-shadow-[0_0_8px_rgba(52,211,153,0.7)]' : 'drop-shadow-[0_0_3px_rgba(52,211,153,0.3)]'}`} />
+              <span className={`text-[10px] leading-tight text-emerald-400 ${activeTab === 'settlement' ? 'font-black' : 'font-semibold'}`}>Settlement</span>
               {unpaidCount > 0 && (
-                <span className="absolute top-1 right-2.5 w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                <span className="absolute top-1 right-2 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-slate-950 shadow-md shadow-amber-400 animate-pulse" />
               )}
             </button>
           )}
 
-          {/* Festivals */}
+          {/* 5. त्योहार: Always Warm Golden / Amber */}
           {canAccessFestivalGreetings && (
             <button
               id="mobile-nav-festivals"
               onClick={() => setActiveTab('festivals')}
-              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition ${
+              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all duration-200 text-amber-400 ${
                 activeTab === 'festivals'
-                  ? 'text-amber-400 bg-amber-500/15 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-amber-500/20 border border-amber-400/50 shadow-md shadow-amber-500/25 ring-1 ring-amber-400/40 font-black'
+                  : 'border border-transparent hover:bg-amber-500/10 font-semibold'
               }`}
             >
-              <Sparkles className="w-5 h-5 mb-0.5 text-amber-400" />
-              <span className="text-[10px] leading-tight">त्योहार</span>
+              <Sparkles className={`w-5 h-5 mb-0.5 text-amber-400 transition-transform ${activeTab === 'festivals' ? 'scale-110 drop-shadow-[0_0_8px_rgba(251,191,36,0.7)]' : 'drop-shadow-[0_0_3px_rgba(251,191,36,0.3)]'}`} />
+              <span className={`text-[10px] leading-tight text-amber-400 ${activeTab === 'festivals' ? 'font-black' : 'font-semibold'}`}>त्योहार</span>
             </button>
           )}
 
-          {/* Admin Tab - Only visible to Super Admin */}
+          {/* 6. Admin: Always Rose Gold / Crimson */}
           {isSuperAdminUser && (
             <button
               id="mobile-nav-admin"
               onClick={() => setActiveTab('admin')}
-              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition ${
+              className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all duration-200 text-rose-400 ${
                 activeTab === 'admin'
-                  ? 'text-amber-400 bg-amber-500/15 font-bold'
-                  : 'text-amber-400/70 hover:text-amber-300'
+                  ? 'bg-rose-500/20 border border-rose-400/50 shadow-md shadow-rose-500/25 ring-1 ring-rose-400/40 font-black'
+                  : 'border border-transparent hover:bg-rose-500/10 font-semibold'
               }`}
             >
-              <Shield className="w-5 h-5 mb-0.5 text-amber-400" />
-              <span className="text-[10px] leading-tight font-semibold">Admin</span>
+              <Shield className={`w-5 h-5 mb-0.5 text-rose-400 transition-transform ${activeTab === 'admin' ? 'scale-110 drop-shadow-[0_0_8px_rgba(251,113,133,0.7)]' : 'drop-shadow-[0_0_3px_rgba(251,113,133,0.3)]'}`} />
+              <span className={`text-[10px] leading-tight text-rose-400 ${activeTab === 'admin' ? 'font-black' : 'font-semibold'}`}>Admin</span>
             </button>
           )}
         </div>
