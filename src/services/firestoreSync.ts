@@ -229,6 +229,7 @@ export function normalizeUserSubscription(sub?: any): UserSubscription {
         : new Date().toISOString(),
     qrCodeUrl: typeof sub.qrCodeUrl === 'string' ? sub.qrCodeUrl : '',
     paymentStatus,
+    isPro: Boolean(sub.isPro || paymentStatus === 'active'),
     freeUntilDate,
     ...(lastSubmittedSlip ? { lastSubmittedSlip } : {}),
     paymentHistory,
@@ -358,6 +359,7 @@ export interface SyncProfileResult {
   isDeactivated: boolean;
   isBlocked: boolean;
   isApproved: boolean;
+  isPro?: boolean;
   role: 'admin' | 'user';
   permissions: UserPermissions;
   rateConfig: UserRateConfig;
@@ -501,6 +503,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       isDeactivated: isBlocked, 
       isBlocked, 
       isApproved,
+      isPro: Boolean(subscription.isPro || subscription.paymentStatus === 'active' || adminRole),
       role, 
       permissions, 
       rateConfig,
@@ -517,6 +520,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       isDeactivated: false, 
       isBlocked: false,
       isApproved: adminRole,
+      isPro: adminRole,
       role: adminRole ? 'admin' : 'user',
       permissions: { ...DEFAULT_USER_PERMISSIONS },
       rateConfig: { ...DEFAULT_USER_RATE_CONFIG },

@@ -1,6 +1,6 @@
 {
   "name": "Courier Rider Payout",
-  "description": "Mobile-first PWA for courier rider delivery tracking, ₹13 base + ₹2 incentive payout calculations, 15-day settlement, PDF export, and WhatsApp payment slips.",
+  "description": "Mobile-first PWA for courier rider delivery tracking, customizable rate cards & incentive payout calculations, settlement ledger, PDF export, SIM SMS receipts, and WhatsApp payment slips.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

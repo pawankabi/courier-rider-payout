@@ -24,7 +24,8 @@ import {
   Eye,
   Share2,
   Sparkles,
-  CreditCard
+  CreditCard,
+  Scale
 } from 'lucide-react';
 import { copyAppShareLink, SHARE_SUCCESS_MESSAGE } from './utils/shareLink';
 import { User, onAuthStateChanged } from 'firebase/auth';
@@ -99,6 +100,7 @@ import { FestivalGreetingsModal } from './components/FestivalGreetingsModal';
 import { SubscriptionAlertBanner } from './components/SubscriptionAlertBanner';
 import { UserPaymentModal } from './components/UserPaymentModal';
 import { PaywallLockScreen } from './components/PaywallLockScreen';
+import { LegalPoliciesModal } from './components/LegalPoliciesModal';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -206,14 +208,21 @@ function MainCourierApp() {
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [connectionBanner, setConnectionBanner] = useState<{ text: string; type: 'connecting' | 'connected' | 'offline' } | null>(null);
   const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
+  const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
 
   // User Permissions & Dynamic Rate Config (Admin Overrides)
   const [userPermissions, setUserPermissions] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS);
   const [userRateConfig, setUserRateConfig] = useState<UserRateConfig>(DEFAULT_USER_RATE_CONFIG);
   const [userSubscription, setUserSubscription] = useState<UserSubscription>(DEFAULT_USER_SUBSCRIPTION);
   const [isUserPaymentModalOpen, setIsUserPaymentModalOpen] = useState(false);
+  const [paymentModalReason, setPaymentModalReason] = useState<string | undefined>(undefined);
   const [masterQrCodeUrl, setMasterQrCodeUrl] = useState<string>('');
   const [hasAutoOpenedPaymentModal, setHasAutoOpenedPaymentModal] = useState<string | null>(null);
+
+  const openSubscriptionModal = (reason?: string) => {
+    setPaymentModalReason(reason);
+    setIsUserPaymentModalOpen(true);
+  };
 
   // Real-time in-app statement compilation for instant 0ms Khatabook view
   const inAppLedgerInitialStatement = useMemo<PublicRiderStatement | null>(() => {
@@ -282,6 +291,7 @@ function MainCourierApp() {
     validUntil?: string;
     displayName?: string;
     name?: string;
+    isPro?: boolean;
   } | null>(null);
 
   // Automatic Expiry Cut-Off ticker: ticks every 5 seconds to ensure instant automatic cut-off
@@ -318,12 +328,28 @@ function MainCourierApp() {
   // const daysLeft = Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24));
   const daysLeft = expiryTime > now ? Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24)) : 0;
 
-  // Strict Subscription Lock Check
+  // Freemium / Pro Status Evaluator
+  const isProUser = Boolean(
+    isSuperAdminUser ||
+    userProfile?.isPro === true ||
+    userSubscription?.isPro === true ||
+    (userSubscription?.planType === 'paid' &&
+      userSubscription?.paymentStatus === 'active' &&
+      (!userSubscription.validUntil || new Date(userSubscription.validUntil).getTime() > now)) ||
+    (typeof window !== 'undefined' && localStorage.getItem('cp_current_is_pro') === 'true')
+  );
+
+  // Strict Subscription Lock Check: Only blocks paid users who have expired or need verification
   const subscriptionLock = useMemo(() => {
     return checkSubscriptionLock(userSubscription, isSuperAdminUser);
   }, [userSubscription, isSuperAdminUser]);
 
-  const isPaywallLocked = Boolean(currentUser && !isSuperAdminUser && (isPendingApproval || isExpired || subscriptionLock.isLocked));
+  const isPaywallLocked = Boolean(
+    currentUser &&
+    !isSuperAdminUser &&
+    userSubscription?.planType === 'paid' &&
+    subscriptionLock.isLocked
+  );
 
   // Automatic Popup on Login for Expiring Soon warnings (if not locked)
   useEffect(() => {
@@ -742,44 +768,56 @@ function MainCourierApp() {
             setIsPending(false);
             setIsDeactivated(false);
           }
+
+          // 4. Pro vs Freemium Gate:
+          // Free tier users store riders & parcels locally only (NO Firebase cloud sync for free tier).
+          // Pro users unlock full Firebase cloud synchronization and multi-device backup.
+          const isCurrentPro = Boolean(
+            profileResult.isPro === true ||
+            profileResult.subscription?.isPro === true ||
+            (profileResult.subscription?.planType === 'paid' && profileResult.subscription?.paymentStatus === 'active') ||
+            (typeof window !== 'undefined' && (localStorage.getItem('cp_current_is_pro') === 'true' || localStorage.getItem(`cp_is_pro_${user.uid}`) === 'true'))
+          );
+
+          if (isCurrentPro) {
+            migrateLocalStorageToFirestore(user.uid).catch((migErr) => {
+              console.error('Migration error:', migErr);
+            });
+
+            unsubscribeFirestore = subscribeToUserData(
+              user.uid,
+              {
+                onRiders: (newRiders) => {
+                  const userRiders = newRiders.filter((r) => isEntityOwnedByUser(r, user.uid, user.email));
+                  setRiders(userRiders);
+                  saveRidersToStorage(userRiders, user.uid);
+                  setSyncStatus('synced');
+                },
+                onDeliveries: (newDeliveries) => {
+                  const userDeliveries = newDeliveries.filter((d) => isEntityOwnedByUser(d, user.uid, user.email));
+                  setEntries(userDeliveries);
+                  saveDeliveriesToStorage(userDeliveries, user.uid);
+                  setSyncStatus('synced');
+                },
+                onSettlements: (newSettlements) => {
+                  const userSettlements = newSettlements.filter((s) => isEntityOwnedByUser(s, user.uid, user.email));
+                  setSettlements(userSettlements);
+                  saveSettlementsToStorage(userSettlements, user.uid);
+                  setSyncStatus('synced');
+                },
+                onError: (err) => {
+                  console.error('Firestore sync error:', err);
+                  setSyncStatus('offline');
+                },
+              },
+              user.email
+            );
+          } else {
+            setSyncStatus('local');
+          }
         }).catch((err) => {
           console.error('Error in syncUserProfile background task:', err);
         });
-
-        // 4. Migrate only this specific user's pending offline data in background
-        migrateLocalStorageToFirestore(user.uid).catch((migErr) => {
-          console.error('Migration error:', migErr);
-        });
-
-        // 5. Subscribe to real-time Firestore updates strictly scoped to users/{user.uid}/*
-        unsubscribeFirestore = subscribeToUserData(
-          user.uid,
-          {
-            onRiders: (newRiders) => {
-              const userRiders = newRiders.filter((r) => isEntityOwnedByUser(r, user.uid, user.email));
-              setRiders(userRiders);
-              saveRidersToStorage(userRiders, user.uid);
-              setSyncStatus('synced');
-            },
-            onDeliveries: (newDeliveries) => {
-              const userDeliveries = newDeliveries.filter((d) => isEntityOwnedByUser(d, user.uid, user.email));
-              setEntries(userDeliveries);
-              saveDeliveriesToStorage(userDeliveries, user.uid);
-              setSyncStatus('synced');
-            },
-            onSettlements: (newSettlements) => {
-              const userSettlements = newSettlements.filter((s) => isEntityOwnedByUser(s, user.uid, user.email));
-              setSettlements(userSettlements);
-              saveSettlementsToStorage(userSettlements, user.uid);
-              setSyncStatus('synced');
-            },
-            onError: (err) => {
-              console.error('Firestore sync error:', err);
-              setSyncStatus('offline');
-            },
-          },
-          user.email
-        );
       } else {
         // Logged out / Local mode
         setUserProfile(null);
@@ -841,7 +879,7 @@ function MainCourierApp() {
     const updated = [newEntry, ...entries];
     updateEntries(updated);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await saveDeliveryToFirestore(targetUid, newEntry, currentOwnerEmail);
@@ -849,6 +887,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error saving delivery to Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -866,7 +906,7 @@ function MainCourierApp() {
     const updated = entries.map((e) => (e.id === updatedEntry.id ? entryWithOwnership : e));
     updateEntries(updated);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await saveDeliveryToFirestore(targetUid, entryWithOwnership, currentOwnerEmail);
@@ -874,6 +914,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error updating delivery to Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -882,7 +924,7 @@ function MainCourierApp() {
     const updated = entries.filter((e) => e.id !== id);
     updateEntries(updated);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await deleteDeliveryFromFirestore(targetUid, id);
@@ -890,6 +932,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error deleting delivery from Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -913,7 +957,7 @@ function MainCourierApp() {
     const updated = [...riders, newRider];
     updateRiders(updated);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await saveRiderToFirestore(targetUid, newRider, currentOwnerEmail);
@@ -921,6 +965,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error saving rider to Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -932,7 +978,7 @@ function MainCourierApp() {
     }));
     updateRiders(indexedRiders);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await updateRidersOrderInFirestore(targetUid, indexedRiders);
@@ -940,6 +986,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error saving reordered riders to Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -965,7 +1013,7 @@ function MainCourierApp() {
     );
     updateEntries(updatedEntries);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await saveRiderToFirestore(targetUid, riderWithOwnership, currentOwnerEmail);
@@ -977,6 +1025,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error updating rider in Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -985,7 +1035,7 @@ function MainCourierApp() {
     const updated = riders.filter((r) => r.id !== id);
     updateRiders(updated);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await deleteRiderFromFirestore(targetUid, id);
@@ -993,6 +1043,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error deleting rider from Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -1107,7 +1159,7 @@ function MainCourierApp() {
           const updatedRiders = riders.map((r) => (r.id === targetRider.id ? updatedRider : r));
           setRiders(updatedRiders);
           saveRidersToStorage(updatedRiders, targetUid);
-          if (targetUid) {
+          if (isProUser && targetUid) {
             saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch(() => {});
           }
         }
@@ -1127,7 +1179,7 @@ function MainCourierApp() {
       }
     }
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
         await batchUpdateDeliveriesAndSettlement(targetUid, changedEntries, newSettlement, currentOwnerEmail);
@@ -1135,6 +1187,8 @@ function MainCourierApp() {
       } catch (err) {
         console.error('Error batch updating deliveries in Firestore', err);
       }
+    } else {
+      setSyncStatus('local');
     }
   };
 
@@ -1147,12 +1201,14 @@ function MainCourierApp() {
     setRiders(updatedRiders);
     saveRidersToStorage(updatedRiders, targetUid);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       try {
         await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
       } catch (err) {
         console.warn('Error saving rider advance to Firestore:', err);
       }
+    } else {
+      setSyncStatus('local');
     }
 
     try {
@@ -1183,12 +1239,14 @@ function MainCourierApp() {
     setRiders(updatedRiders);
     saveRidersToStorage(updatedRiders, targetUid);
 
-    if (targetUid) {
+    if (isProUser && targetUid) {
       try {
         await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
       } catch (err) {
         console.warn('Error updating rider after advance delete:', err);
       }
+    } else {
+      setSyncStatus('local');
     }
 
     try {
@@ -1433,7 +1491,7 @@ function MainCourierApp() {
 
       {/* Top Application Header with Balanced Top Spacing for Notch/Camera/Safe Area */}
       <header
-        className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shadow-sm pt-7 sm:pt-4"
+        className="sticky top-0 z-40 bg-gradient-to-r from-indigo-950/80 via-purple-950/60 to-slate-900/80 border-b border-indigo-700/40 shadow-lg shadow-indigo-950/30 backdrop-blur-md pt-7 sm:pt-4"
         style={{ paddingTop: 'max(1.75rem, env(safe-area-inset-top, 1.75rem))' }}
       >
         <div className="max-w-6xl mx-auto px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3">
@@ -1543,12 +1601,27 @@ function MainCourierApp() {
               </div>
             )}
 
+            {/* Free Tier: Enable Cloud Backup & Upgrade Button */}
+            {!isProUser && (
+              <button
+                id="header-enable-cloud-sync-btn"
+                type="button"
+                onClick={() => openSubscriptionModal('cloud_backup')}
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-black shadow-md shadow-blue-600/25 border border-blue-400/40 transition active:scale-95 cursor-pointer shrink-0"
+                title="Enable Realtime Firebase Cloud Backup & Multi-Device Sync (Pro)"
+              >
+                <Cloud className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">☁️ Enable Cloud Sync</span>
+                <span className="sm:hidden">Cloud Sync</span>
+              </button>
+            )}
+
             {/* Regular User Persistent Header Shortcut Button: "💳 Subscription / Pay & Slip" */}
             {currentUser && !isSuperAdminUser && (
               <button
                 id="header-user-subscription-btn"
                 type="button"
-                onClick={() => setIsUserPaymentModalOpen(true)}
+                onClick={() => openSubscriptionModal('manual')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-bold shadow-md shadow-amber-600/20 border border-amber-500/40 transition active:scale-95 cursor-pointer shrink-0"
                 title="💳 Subscription / Pay & Slip: View fee, scan QR code, or submit payment slip"
               >
@@ -1558,17 +1631,33 @@ function MainCourierApp() {
               </button>
             )}
 
+            {/* Universally Accessible Legal & Compliance Policies Header Button */}
+            <button
+              id="header-legal-policies-btn"
+              type="button"
+              onClick={() => setIsLegalPoliciesModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+              title="About Us, Pricing, Privacy Policy & Refund Terms (PayU & Play Store Compliance)"
+            >
+              <Scale className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">About & Policies</span>
+              <span className="sm:hidden">Policies</span>
+            </button>
+
             {/* User Account & Cloud Sync Menu */}
             <UserAccountMenu
               user={currentUser}
               syncStatus={syncStatus}
+              isProUser={isProUser}
               onOpenAuth={(mode) => {
                 setAuthModalMode(mode || 'signin');
                 setIsAuthModalOpen(true);
               }}
               onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
               onOpenSyncOldApp={isAdmin ? () => setIsSyncOldAppModalOpen(true) : undefined}
-              onOpenSubscription={!isSuperAdminUser ? () => setIsUserPaymentModalOpen(true) : undefined}
+              onOpenSubscription={!isSuperAdminUser ? () => openSubscriptionModal('manual') : undefined}
+              onEnableCloudBackup={() => openSubscriptionModal('cloud_backup')}
+              onOpenLegalPolicies={() => setIsLegalPoliciesModalOpen(true)}
             />
           </div>
         </div>
@@ -1662,7 +1751,7 @@ function MainCourierApp() {
         )}
 
         {/* Desktop / Tablet Navigation Tabs */}
-        <div className="hidden sm:block border-t border-slate-800/80 bg-slate-900/60">
+        <div className="hidden sm:block border-t border-indigo-900/40 bg-indigo-950/30 backdrop-blur-md">
           <div className="max-w-6xl mx-auto px-4 flex space-x-1">
             {canAccessDailyEntry && (
               <button
@@ -1817,6 +1906,8 @@ function MainCourierApp() {
             onViewLedger={handleViewLedger}
             canAccessFestivalGreetings={canAccessFestivalGreetings}
             hubSignature={userRateConfig?.hubSignature}
+            isProUser={isProUser}
+            onOpenSubscriptionModal={openSubscriptionModal}
           />
         )}
 
@@ -1888,6 +1979,7 @@ function MainCourierApp() {
             }}
             inspectedUserId={inspectedUser?.uid}
             onOpenSyncOldApp={() => setIsSyncOldAppModalOpen(true)}
+            hubName={activeHubName}
           />
         )}
       </main>
@@ -1895,7 +1987,7 @@ function MainCourierApp() {
       {/* Mobile-First App Bottom Navigation Bar - Permanent Vibrant Colors */}
       <nav
         id="mobile-bottom-nav"
-        className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800/90 px-1.5 py-1.5 shadow-2xl"
+        className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-950/90 backdrop-blur-2xl border-t border-indigo-900/40 px-1.5 py-1.5 shadow-2xl"
       >
         <div className="flex items-center justify-between gap-1 max-w-lg mx-auto">
           {/* 1. Daily Entry: Always Sky Blue / Cyan */}
@@ -2017,19 +2109,45 @@ function MainCourierApp() {
       )}
 
       {/* Regular User Subscription / Payment Slip Modal */}
-      {currentUser && !isSuperAdminUser && (
+      {!isSuperAdminUser && (
         <UserPaymentModal
           isOpen={isUserPaymentModalOpen}
           onClose={() => setIsUserPaymentModalOpen(false)}
           userSubscription={userSubscription}
-          userId={currentUser.uid}
-          userEmail={currentUser.email}
+          userId={currentUser?.uid || 'local_user'}
+          userEmail={currentUser?.email || null}
+          userName={currentUser?.displayName || userProfile?.name || 'Hub Manager'}
           masterQrCodeUrl={masterQrCodeUrl}
           isSuperAdmin={isSuperAdminUser}
-          onSubscriptionUpdated={(updated) => setUserSubscription(updated)}
+          reason={paymentModalReason}
+          onSubscriptionUpdated={(updated) => {
+            setUserSubscription(updated);
+            if (updated.paymentStatus === 'active') {
+              setIsPending(false);
+              setIsDeactivated(false);
+              try {
+                localStorage.setItem('cp_current_is_pro', 'true');
+              } catch (e) {}
+              if (currentUser) {
+                setSyncStatus('syncing');
+                migrateLocalStorageToFirestore(currentUser.uid)
+                  .then(() => setSyncStatus('synced'))
+                  .catch(console.error);
+              }
+            }
+          }}
           onSuccessToast={(msg) => setToastMessage({ text: msg, type: 'success' })}
         />
       )}
+
+      {/* Universal Legal & Compliance Policies Modal (PayU, Google Play & Regulatory compliance) */}
+      <LegalPoliciesModal
+        isOpen={isLegalPoliciesModalOpen}
+        onClose={() => setIsLegalPoliciesModalOpen(false)}
+        platformName="Courier Rider Payout"
+        supportEmail="support@courierpayoutpro.com"
+        supportPhone="+91 9110913070"
+      />
 
       {/* In-App Khatabook Statement / Ledger Screen Overlay with sticky top Close/Back button */}
       {viewingLedgerRiderId && (

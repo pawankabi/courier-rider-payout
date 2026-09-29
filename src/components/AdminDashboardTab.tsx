@@ -47,7 +47,11 @@ import {
   Receipt,
   History,
   Save,
-  X
+  X,
+  Building2,
+  Scale,
+  RotateCcw,
+  Lock
 } from 'lucide-react';
 import { 
   AppUser, 
@@ -101,13 +105,15 @@ interface AdminDashboardTabProps {
   onInspectUser?: (user: AppUser) => void;
   inspectedUserId?: string | null;
   onOpenSyncOldApp?: () => void;
+  hubName?: string;
 }
 
 export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ 
   currentAdminEmail,
   onInspectUser,
   inspectedUserId,
-  onOpenSyncOldApp
+  onOpenSyncOldApp,
+  hubName
 }) => {
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1035,27 +1041,27 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       )}
 
       {/* Header Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-gradient-to-br from-rose-950/60 via-red-950/35 to-slate-900/70 border border-rose-500/40 rounded-2xl p-6 shadow-lg shadow-rose-950/25 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <Shield className="w-3.5 h-3.5 text-amber-400" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+              <Shield className="w-3.5 h-3.5 text-rose-400" />
               Master Admin Panel
             </span>
-            <span className="text-xs text-slate-400 font-mono">
+            <span className="text-xs text-rose-200/80 font-mono">
               Restricted to: {SUPER_ADMIN_EMAIL}
             </span>
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
             User Registry & Access Approvals
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-sm text-slate-300 mt-1">
             Review new user sign-up requests, approve or block access, inspect user workspaces, and configure rider rates.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="px-3.5 py-2 rounded-xl bg-slate-800/80 border border-slate-700/80 text-xs flex items-center gap-2 text-slate-300">
+          <div className="px-3.5 py-2 rounded-xl bg-slate-900/80 border border-rose-500/30 text-xs flex items-center gap-2 text-rose-200">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span>Real-Time Firestore Connected</span>
           </div>
@@ -1063,7 +1069,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       </div>
 
       {/* SECTION: Admin Section Tab Switcher */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-2 bg-slate-900/90 border border-slate-800 rounded-2xl shadow-lg">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-2 bg-gradient-to-r from-rose-950/30 via-slate-900/90 to-slate-900/90 border border-rose-500/30 rounded-2xl shadow-lg backdrop-blur-md">
         <div className="flex items-center gap-2 flex-wrap">
           <button
             id="admin-nav-users-tab"

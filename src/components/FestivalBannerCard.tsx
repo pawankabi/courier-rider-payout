@@ -54,7 +54,7 @@ export const FestivalBannerCard: React.FC<Props> = ({ riders, hubSignature }) =>
     <>
       <div 
         id="festival-greetings-card"
-        className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-950/70 via-slate-900 to-rose-950/60 border border-amber-500/35 p-4 sm:p-5 shadow-xl transition hover:border-amber-500/55 space-y-3"
+        className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-600/25 via-orange-600/20 to-amber-950/35 border border-amber-500/40 shadow-md shadow-orange-950/20 backdrop-blur-md p-4 sm:p-5 transition hover:border-amber-500/60 space-y-3"
       >
         {/* Decorative ambient light */}
         <div className="absolute -top-16 -right-16 w-56 h-56 bg-amber-500/12 rounded-full blur-3xl pointer-events-none" />

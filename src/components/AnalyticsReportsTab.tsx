@@ -172,17 +172,17 @@ export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownlo
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
       {/* Header & Controls Card */}
-      <div className="bg-slate-850 border border-slate-750 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+      <div className="bg-gradient-to-br from-purple-950/60 via-fuchsia-950/35 to-slate-900/70 border border-purple-500/40 shadow-lg shadow-purple-950/25 rounded-2xl p-4 sm:p-6 backdrop-blur-md space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="p-2.5 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
+            <div className="p-2.5 rounded-xl bg-purple-600/25 text-fuchsia-300 border border-purple-400/40 shadow-sm">
               <BarChart3 className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
                 Analytics & Date Range Reports
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-300">
                 Filter by rider, custom date ranges, audit base + incentive, and export PDF statements
               </p>
             </div>
@@ -492,7 +492,7 @@ export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownlo
       </div>
 
       {/* Day-Wise Breakdown Table */}
-      <div className="bg-slate-850 border border-slate-750 rounded-2xl p-4 sm:p-6 shadow-xl">
+      <div className="bg-gradient-to-br from-purple-950/40 via-slate-900/80 to-slate-900/90 border border-purple-500/30 rounded-2xl p-4 sm:p-6 shadow-xl backdrop-blur-md">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
           <div>
             <h3 className="text-sm sm:text-base font-bold text-white">

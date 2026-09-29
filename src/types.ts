@@ -188,6 +188,7 @@ export interface UserSubscription {
   validUntil: string; // ISO date string
   qrCodeUrl: string;
   paymentStatus: UserPaymentStatus;
+  isPro?: boolean;
   freeUntilDate?: string; // Optional time-bound free trial date (e.g. YYYY-MM-DD or ISO)
   lastSubmittedSlip?: UserSubmittedSlip;
   paymentHistory?: PaymentHistoryItem[];

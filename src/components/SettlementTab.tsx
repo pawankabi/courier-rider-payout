@@ -381,17 +381,17 @@ export const SettlementTab: React.FC<Props> = ({
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
       {/* Header & Filter Card */}
-      <div className="bg-slate-850 border border-slate-750 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+      <div className="bg-gradient-to-br from-emerald-900/50 via-amber-950/40 to-slate-900/75 border border-emerald-400/40 shadow-lg shadow-emerald-950/30 rounded-2xl p-4 sm:p-6 backdrop-blur-md space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="p-2.5 rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
+            <div className="p-2.5 rounded-xl bg-emerald-500/25 text-emerald-300 border border-emerald-400/40 shadow-sm">
               <Receipt className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
                 15-Day / Custom Payout Settlement
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-300">
                 Advance deductions, instant balance clearance, PDF statements, and WhatsApp slips
               </p>
             </div>
@@ -584,7 +584,7 @@ export const SettlementTab: React.FC<Props> = ({
       {/* NEW: Advance Payment Deduction Section */}
       <div
         id="advance-payment-deduction-section"
-        className="bg-gradient-to-br from-slate-850 to-slate-900 border border-amber-500/30 rounded-2xl p-4 sm:p-5 shadow-xl relative overflow-hidden"
+        className="bg-gradient-to-br from-amber-950/40 via-slate-900/80 to-slate-900 border border-amber-500/40 rounded-2xl p-4 sm:p-5 shadow-xl backdrop-blur-md relative overflow-hidden"
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
@@ -863,7 +863,7 @@ export const SettlementTab: React.FC<Props> = ({
       )}
 
       {/* Payout Summary & "Mark as Paid" Action Card */}
-      <div className="bg-gradient-to-br from-slate-850 via-slate-850 to-slate-900 border border-slate-750 rounded-2xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-br from-emerald-950/50 via-amber-950/30 to-slate-900/80 border border-emerald-500/40 rounded-2xl p-5 sm:p-6 shadow-xl backdrop-blur-md relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-800">
           <div>
             <div className="flex items-center gap-2">

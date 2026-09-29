@@ -16,26 +16,33 @@ import {
   ChevronDown,
   Download,
   CloudDownload,
-  CreditCard
+  CreditCard,
+  Scale
 } from 'lucide-react';
 import { auth } from '../firebase';
 
 interface Props {
   user: FirebaseUser | null;
   syncStatus: 'synced' | 'syncing' | 'offline' | 'local';
+  isProUser?: boolean;
   onOpenAuth: (mode?: 'signin' | 'signup') => void;
   onDownloadBackup?: () => void;
   onOpenSyncOldApp?: () => void;
   onOpenSubscription?: () => void;
+  onEnableCloudBackup?: () => void;
+  onOpenLegalPolicies?: () => void;
 }
 
 export const UserAccountMenu: React.FC<Props> = ({ 
   user, 
   syncStatus, 
+  isProUser = false,
   onOpenAuth, 
   onDownloadBackup, 
   onOpenSyncOldApp,
-  onOpenSubscription
+  onOpenSubscription,
+  onEnableCloudBackup,
+  onOpenLegalPolicies
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -159,31 +166,51 @@ export const UserAccountMenu: React.FC<Props> = ({
                 <Cloud className="w-3.5 h-3.5 text-blue-400" />
                 Cloud Firestore Sync:
               </span>
-              {syncStatus === 'synced' ? (
+              {isProUser && syncStatus === 'synced' ? (
                 <span className="text-emerald-400 font-bold flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3" />
-                  Live Active
+                  Live Active (Pro)
                 </span>
-              ) : syncStatus === 'syncing' ? (
+              ) : isProUser && syncStatus === 'syncing' ? (
                 <span className="text-amber-400 font-bold flex items-center gap-1">
                   <RefreshCw className="w-3 h-3 animate-spin" />
                   Syncing...
                 </span>
-              ) : (
+              ) : isProUser && syncStatus === 'offline' ? (
                 <span className="text-amber-400 font-bold flex items-center gap-1">
                   <CloudOff className="w-3 h-3" />
-                  Local Cache Active
+                  Offline Cache
+                </span>
+              ) : (
+                <span className="text-amber-300 font-bold flex items-center gap-1">
+                  <CloudOff className="w-3 h-3 text-amber-400" />
+                  Local Device Only
                 </span>
               )}
             </div>
             <div className="text-slate-400 text-[10px] leading-relaxed flex items-start gap-1.5 pt-1">
               <Smartphone className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
               <span>
-                {syncStatus === 'offline'
-                  ? 'Device is temporarily operating in local offline cache. Changes will automatically sync when network re-establishes.'
-                  : 'All riders, daily parcels, and settlement records sync instantly across your phones and laptops.'}
+                {isProUser
+                  ? 'All riders, daily parcels, and settlement records sync instantly across your phones and laptops.'
+                  : 'Free Tier: Rider and parcel data are saved locally on this device only without Firebase cloud sync.'}
               </span>
             </div>
+
+            {!isProUser && onEnableCloudBackup && (
+              <button
+                type="button"
+                id="enable-cloud-backup-menu-btn"
+                onClick={() => {
+                  setIsOpen(false);
+                  onEnableCloudBackup();
+                }}
+                className="w-full mt-2 py-2 px-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-black shadow-md shadow-blue-600/25 transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Cloud className="w-3.5 h-3.5" />
+                <span>Enable Firebase Cloud Backup (Pro)</span>
+              </button>
+            )}
           </div>
 
           {/* User Security info */}
@@ -217,6 +244,20 @@ export const UserAccountMenu: React.FC<Props> = ({
             >
               <CloudDownload className="w-3.5 h-3.5 text-amber-400" />
               <span>Sync from Old App URL</span>
+            </button>
+          )}
+
+          {/* Legal Policies & Compliance action */}
+          {onOpenLegalPolicies && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onOpenLegalPolicies();
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold transition cursor-pointer"
+            >
+              <Scale className="w-3.5 h-3.5 text-amber-400" />
+              <span>About Us & Policies</span>
             </button>
           )}
 

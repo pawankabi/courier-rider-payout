@@ -72,6 +72,8 @@ interface Props {
   settlements?: SettlementRecord[];
   canAccessFestivalGreetings?: boolean;
   hubSignature?: string;
+  isProUser?: boolean;
+  onOpenSubscriptionModal?: (reason?: string) => void;
 }
 
 export const RidersTab: React.FC<Props> = ({
@@ -89,6 +91,8 @@ export const RidersTab: React.FC<Props> = ({
   onViewLedger,
   canAccessFestivalGreetings = false,
   hubSignature,
+  isProUser = true,
+  onOpenSubscriptionModal,
 }) => {
   // Status Filter State: 'unpaid' (Default) or 'all'
   const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all'>(() => {
@@ -183,6 +187,14 @@ export const RidersTab: React.FC<Props> = ({
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 1. Freemium Gate: Free users can add up to 3 riders locally
+    if (!isProUser && riders.length >= 3) {
+      setIsAddModalOpen(false);
+      onOpenSubscriptionModal?.('free_limit_reached');
+      return;
+    }
+
     const cleanPhone = cleanPhoneNumber(phone);
 
     if (!name.trim()) {
@@ -570,18 +582,18 @@ export const RidersTab: React.FC<Props> = ({
       )}
 
       {/* Header & Controls */}
-      <div className="bg-slate-850 border border-slate-755 rounded-2xl p-4 sm:p-6 shadow-xl">
+      <div className="bg-gradient-to-br from-blue-950/60 via-sky-900/35 to-slate-900/70 border border-blue-500/40 shadow-lg shadow-blue-950/25 rounded-2xl p-4 sm:p-6 backdrop-blur-md">
         <div className="flex flex-col gap-3">
           {/* Top Title & Subtitle */}
           <div className="flex items-center gap-2.5">
-            <div className="p-2.5 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
+            <div className="p-2.5 rounded-xl bg-blue-600/25 text-sky-300 border border-blue-400/40 shadow-sm">
               <Users className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
                 Riders & Delivery Fleet
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-300">
                 Track unpaid balances, settle payouts, call or WhatsApp riders directly & manage sequence
               </p>
             </div>
@@ -589,40 +601,40 @@ export const RidersTab: React.FC<Props> = ({
 
           {/* Prominent Always-Visible 2-Column Summary Badges */}
           <div className="grid grid-cols-2 gap-3 my-3">
-            {/* Card 1: Total Unpaid */}
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex flex-col justify-between shadow-sm">
+            {/* Card 1: Total Unpaid (Distinct glowing Red/Coral) */}
+            <div className="bg-gradient-to-br from-rose-950/70 via-red-950/50 to-slate-900/80 border border-rose-500/50 rounded-xl p-3 flex flex-col justify-between shadow-md shadow-rose-950/30">
               <div className="flex items-center justify-between gap-1 flex-wrap">
-                <span className="text-xs sm:text-sm font-bold text-amber-400 flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="text-xs sm:text-sm font-bold text-rose-300 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                   <span>कुल बकाया (Total Unpaid)</span>
                 </span>
-                <span className="text-[10px] sm:text-[11px] font-semibold text-amber-300/90 bg-amber-500/15 px-2 py-0.5 rounded-md border border-amber-500/30">
+                <span className="text-[10px] sm:text-[11px] font-semibold text-rose-200 bg-rose-500/25 px-2 py-0.5 rounded-md border border-rose-500/40">
                   {totalUnpaidParcels} pkts
                 </span>
               </div>
-              <div className="text-lg sm:text-2xl font-black text-amber-300 mt-1">
+              <div className="text-lg sm:text-2xl font-black text-rose-200 mt-1">
                 {formatINR(totalUnpaidAmount)}
               </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">
+              <div className="text-[10px] text-rose-300/80 mt-0.5 font-medium">
                 {ridersWithUnpaid.length} राइडर पेंडिंग
               </div>
             </div>
 
-            {/* Card 2: Total Advance */}
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex flex-col justify-between shadow-sm">
+            {/* Card 2: Total Advance (Deep Violet/Purple) */}
+            <div className="bg-gradient-to-br from-purple-950/70 via-violet-950/50 to-slate-900/80 border border-purple-500/50 rounded-xl p-3 flex flex-col justify-between shadow-md shadow-purple-950/30">
               <div className="flex items-center justify-between gap-1 flex-wrap">
-                <span className="text-xs sm:text-sm font-bold text-indigo-300 flex items-center gap-1.5">
-                  <IndianRupee className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="text-xs sm:text-sm font-bold text-purple-300 flex items-center gap-1.5">
+                  <IndianRupee className="w-3.5 h-3.5 text-purple-400 shrink-0" />
                   <span>कुल एडवांस (Total Advance)</span>
                 </span>
-                <span className="text-[10px] sm:text-[11px] font-semibold text-indigo-200/90 bg-indigo-500/15 px-2 py-0.5 rounded-md border border-indigo-500/30">
+                <span className="text-[10px] sm:text-[11px] font-semibold text-purple-200 bg-purple-500/25 px-2 py-0.5 rounded-md border border-purple-500/40">
                   {riders.filter((r) => Number(r.totalAdvance || 0) > 0).length} active
                 </span>
               </div>
-              <div className="text-lg sm:text-2xl font-black text-indigo-200 mt-1">
+              <div className="text-lg sm:text-2xl font-black text-purple-200 mt-1">
                 {formatINR(totalAdvanceAmount)}
               </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">
+              <div className="text-[10px] text-purple-300/80 mt-0.5 font-medium">
                 कुल दिया गया एडवांस
               </div>
             </div>
@@ -648,6 +660,10 @@ export const RidersTab: React.FC<Props> = ({
               id="open-add-rider-modal-btn"
               type="button"
               onClick={() => {
+                if (!isProUser && riders.length >= 3) {
+                  onOpenSubscriptionModal?.('free_limit_reached');
+                  return;
+                }
                 setName('');
                 setPhone('');
                 setVehicleType('Hero Splendor');
@@ -666,6 +682,10 @@ export const RidersTab: React.FC<Props> = ({
             <button
               type="button"
               onClick={async () => {
+                if (!isProUser && riders.length >= 3) {
+                  onOpenSubscriptionModal?.('free_limit_reached');
+                  return;
+                }
                 setName('');
                 setPhone('');
                 setVehicleType('Hero Splendor');
@@ -681,6 +701,43 @@ export const RidersTab: React.FC<Props> = ({
               <span>फ़ोनबुक से जोड़ें</span>
             </button>
           </div>
+
+          {/* Freemium Limit Status Banner for Free Tier Users */}
+          {!isProUser && (
+            <div 
+              id="free-tier-rider-limit-banner"
+              className="mt-3 p-3 rounded-2xl bg-gradient-to-r from-blue-950/70 via-slate-900 to-indigo-950/70 border border-blue-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-md"
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="p-1.5 rounded-xl bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                  <Users className="w-4 h-4" />
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white">
+                      Free Tier: {riders.length}/3 Riders Used
+                    </span>
+                    <span className="text-[10px] px-2 py-0.2 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                      Local Device Only
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    मुफ़्त में 3 राइडर तक लोकल स्टोरेज में उपयोग करें। असीमित राइडर व क्लाउड सिंक हेतु प्रो हब में अपग्रेड करें।
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                id="upgrade-pro-hub-free-limit-btn"
+                onClick={() => onOpenSubscriptionModal?.('free_limit_reached')}
+                className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 text-xs font-black shadow-md transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+                <span>Upgrade to Pro Hub</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Toolbar: Unpaid Only Toggle, Status Tabs, Sorting & Search */}
@@ -757,7 +814,7 @@ export const RidersTab: React.FC<Props> = ({
                 onDragStart={(e) => handleDragStart(e, rider.id)}
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, rider.id)}
-                className="bg-slate-850 border border-slate-755 rounded-2xl p-4 sm:p-5 shadow-lg hover:border-slate-600 transition"
+                className="bg-slate-900/80 border border-slate-800/90 hover:border-blue-500/40 rounded-2xl p-4 sm:p-5 shadow-md hover:shadow-blue-950/20 backdrop-blur-sm transition"
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   {/* Left: Info & Contacts */}

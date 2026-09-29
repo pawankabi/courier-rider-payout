@@ -45,15 +45,6 @@ export const INITIAL_RIDERS: Rider[] = [
     active: true,
     order: 2,
   },
-  {
-    id: 'rider_4',
-    name: 'Vikas Verma',
-    phone: '9988776655',
-    vehicleType: 'Bajaj Pulsar (Bike)',
-    joinedDate: '2026-04-05',
-    active: true,
-    order: 3,
-  },
 ];
 
 function generateInitialDeliveries(riders: Rider[]): DeliveryEntry[] {
@@ -65,12 +56,12 @@ function generateInitialDeliveries(riders: Rider[]): DeliveryEntry[] {
     { daysAgo: 0, riderIdx: 2, parcels: 48, inc: false, status: 'Unpaid' as const },
     { daysAgo: 1, riderIdx: 0, parcels: 70, inc: true, status: 'Unpaid' as const },
     { daysAgo: 1, riderIdx: 1, parcels: 58, inc: false, status: 'Unpaid' as const },
-    { daysAgo: 1, riderIdx: 3, parcels: 62, inc: true, status: 'Unpaid' as const },
+    { daysAgo: 1, riderIdx: 2, parcels: 62, inc: true, status: 'Unpaid' as const },
     { daysAgo: 2, riderIdx: 0, parcels: 60, inc: true, status: 'Unpaid' as const },
     { daysAgo: 2, riderIdx: 2, parcels: 55, inc: true, status: 'Unpaid' as const },
     { daysAgo: 3, riderIdx: 1, parcels: 45, inc: false, status: 'Paid' as const, paidAt: '2026-09-09T14:30:00.000Z' },
     { daysAgo: 4, riderIdx: 0, parcels: 72, inc: true, status: 'Paid' as const, paidAt: '2026-09-08T18:00:00.000Z' },
-    { daysAgo: 5, riderIdx: 3, parcels: 50, inc: false, status: 'Paid' as const, paidAt: '2026-09-08T18:00:00.000Z' },
+    { daysAgo: 5, riderIdx: 1, parcels: 50, inc: false, status: 'Paid' as const, paidAt: '2026-09-08T18:00:00.000Z' },
     { daysAgo: 6, riderIdx: 2, parcels: 64, inc: true, status: 'Paid' as const, paidAt: '2026-09-07T11:20:00.000Z' },
   ];
 

@@ -356,26 +356,26 @@ export const DailyEntryTab: React.FC<Props> = ({
       )}
 
       {/* Main Form Card */}
-      <div className="bg-slate-850 border border-slate-750 rounded-2xl p-4 sm:p-6 shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-br from-emerald-950/60 via-teal-900/40 to-slate-900/70 border border-emerald-500/40 shadow-lg shadow-emerald-950/25 rounded-2xl p-4 sm:p-6 backdrop-blur-md relative overflow-hidden">
         {/* Subtle decorative background glow */}
-        <div className="absolute -top-24 -right-24 w-60 h-60 bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -top-24 -right-24 w-60 h-60 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
 
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2.5">
-            <div className="p-2.5 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
+            <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/35">
               <Package className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
                 Daily Delivery Entry
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-300">
                 Log rider deliveries with automatic ₹13 base & ₹2 incentive payout computation
               </p>
             </div>
           </div>
 
-          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs font-medium text-slate-300">
+          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/80 border border-emerald-500/30 text-xs font-medium text-emerald-200">
             <Coins className="w-3.5 h-3.5 text-amber-400" />
             <span>Base: ₹13 | Incentive: ₹2</span>
           </div>
@@ -705,7 +705,7 @@ export const DailyEntryTab: React.FC<Props> = ({
       </div>
 
       {/* Recent Entries Section */}
-      <div className="bg-slate-850 border border-slate-750 rounded-2xl p-4 sm:p-6 shadow-xl">
+      <div className="bg-gradient-to-br from-emerald-950/40 via-slate-900/80 to-slate-900/90 border border-emerald-500/30 rounded-2xl p-4 sm:p-6 shadow-xl backdrop-blur-md">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-sm sm:text-base font-bold text-white">Recent Delivery Entries</h3>
