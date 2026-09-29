@@ -81,6 +81,7 @@ export interface DeliveryEntry {
   paidAt?: string;
   advanceAmount?: number;
   advanceDate?: string;
+  advanceReason?: string;
   settlementId?: string;
   notes?: string;
   createdAt: string;
@@ -104,6 +105,7 @@ export interface SettlementRecord {
   grossTotal: number;
   advanceAmount: number;
   advanceDate?: string;
+  advanceReason?: string;
   netTotal: number;
   paidAt: string;
   status: 'PAID';

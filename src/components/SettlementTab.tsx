@@ -20,7 +20,8 @@ import {
   X,
   ArrowRight,
   TrendingDown,
-  Phone
+  Phone,
+  IndianRupee
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { DeliveryEntry, Rider, SettlementRecord } from '../types';
@@ -48,6 +49,7 @@ interface Props {
   riders: Rider[];
   entries: DeliveryEntry[];
   settlements?: SettlementRecord[];
+  hubName?: string;
   onMarkEntriesPaid: (
     entryIds: string[],
     advanceAmount: number,
@@ -62,6 +64,7 @@ interface Props {
       baseAmount: number;
       incentiveAmount: number;
       grossTotal: number;
+      advanceReason?: string;
     }
   ) => void;
   onToggleEntryStatus: (entryId: string) => void;
@@ -73,6 +76,7 @@ export const SettlementTab: React.FC<Props> = ({
   riders,
   entries,
   settlements = [],
+  hubName,
   onMarkEntriesPaid,
   onToggleEntryStatus,
   onNavigateToRiders,
@@ -86,9 +90,10 @@ export const SettlementTab: React.FC<Props> = ({
   const [endDate, setEndDate] = useState<string>(getTodayDateString());
   const [statusFilter, setStatusFilter] = useState<'All' | 'Unpaid' | 'Paid'>('All');
 
-  // Advance Payment States (Default: 0 and empty date)
+  // Advance Payment States (Auto-populated with lifetime advance, date, and purpose)
   const [advanceAmount, setAdvanceAmount] = useState<number | string>(0);
   const [advanceDate, setAdvanceDate] = useState<string>('');
+  const [advanceReason, setAdvanceReason] = useState<string>('');
 
   // WhatsApp Slip Modal State
   const [slipData, setSlipData] = useState<WhatsAppSlipData | null>(null);
@@ -159,21 +164,19 @@ export const SettlementTab: React.FC<Props> = ({
     );
   }, [settlements, selectedRider, startDate, endDate]);
 
-  // If selecting an already settled period, auto-populate the saved advance deduction
+  // Auto-populate advance deduction: If selecting an already settled period, use saved record;
+  // otherwise, auto-deduct total lifetime advance of the rider (independent of selected date range)
   useEffect(() => {
     if (matchingSettlement) {
       setAdvanceAmount(matchingSettlement.advanceAmount || 0);
       setAdvanceDate(matchingSettlement.advanceDate || '');
+      setAdvanceReason(matchingSettlement.advanceReason || '');
     } else {
-      // Check if entries have an advance recorded
-      const entryWithAdvance = filteredEntries.find((e) => (e.advanceAmount || 0) > 0);
-      if (entryWithAdvance) {
-        setAdvanceAmount(entryWithAdvance.advanceAmount || 0);
-        setAdvanceDate(entryWithAdvance.advanceDate || '');
-      } else {
-        setAdvanceAmount(0);
-        setAdvanceDate('');
-      }
+      // Auto-deduct entire active advance balance of the rider
+      const lifetimeAdv = Number(selectedRider?.totalAdvance) || 0;
+      setAdvanceAmount(lifetimeAdv);
+      setAdvanceDate(getTodayDateString());
+      setAdvanceReason('');
     }
   }, [selectedRiderId, startDate, endDate, matchingSettlement]);
 
@@ -188,9 +191,13 @@ export const SettlementTab: React.FC<Props> = ({
   const totalIncentiveAmount = filteredEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
   const grossTotal = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
 
-  // Real-Time Calculation with Advance Deduction
+  // Real-Time Calculation with Advance Deduction:
+  // Gross Earning = Sum of daily deliveries within the selected Date Range
+  // Total Advance Deducted = Entire active advance balance of the rider
+  // Net Settlement = Gross Earning - Total Advance
   const numericAdvance = Math.max(0, Number(advanceAmount) || 0);
-  const netPayableAmount = Math.max(0, grossTotal - numericAdvance);
+  const netSettlement = grossTotal - numericAdvance;
+  const netPayableAmount = Math.max(0, netSettlement);
 
   const unpaidGross = filteredEntries
     .filter((e) => e.status === 'Unpaid')
@@ -208,6 +215,7 @@ export const SettlementTab: React.FC<Props> = ({
   const handleResetAdvance = () => {
     setAdvanceAmount(0);
     setAdvanceDate('');
+    setAdvanceReason('');
   };
 
   // Mark all entries as Paid
@@ -228,6 +236,7 @@ export const SettlementTab: React.FC<Props> = ({
       baseAmount: totalBaseAmount,
       incentiveAmount: totalIncentiveAmount,
       grossTotal,
+      advanceReason: advanceReason.trim() || undefined,
     });
 
     // Fire celebratory confetti!
@@ -244,11 +253,18 @@ export const SettlementTab: React.FC<Props> = ({
     // Generate canonical public ledger link for the rider: ${window.location.origin}/statement/${rider.id}
     const statementUrl = generateStatementUrl(selectedRider.id);
 
-    // Format SMS message text according to exact specification:
-    // Stating exact date range settled: "नमस्ते {riderName}, आपका {fromDate} से {toDate} तक का ₹{netSalary} पे-आउट सेटल कर दिया गया है। बकाया बैलेंस: ₹{remaining}..."
-    const remainingAdvance = Math.max(0, (Number(selectedRider.totalAdvance) || 0) - numericAdvance);
+    // Format Dynamic SIM Background SMS on settlement:
+    // If Net Settlement >= 0:
+    // "नमस्ते [Rider], आपका दिनांक [From Date] से [To Date] तक कुल पारिश्रमिक ₹[Gross] बना है। आपका कुल एडवांस ₹[Advance] समायोजित कर कुल नेट भुगतान ₹[Net] कर दिया गया है। धन्यवाद - [Hub Name]"
+    // If Net Settlement < 0 (Overpaid / Recovery Due):
+    // "नमस्ते [Rider], आपका दिनांक [From Date] से [To Date] तक का कुल पारिश्रमिक ₹[Gross] बना, जबकि आपका कुल एडवांस ₹[Advance] था। हिसाब के उपरांत आपसे ₹[Math.abs(Net)] लेना शेष है। कृपया यह राशि आज ही कार्यालय में जमा कर दें ताकि अन्य डिलीवरी साथियों को भुगतान किया जा सके। आपके सहयोग के लिए धन्यवाद - [Hub Name]"
     const cleanPhone = (selectedRider.phone || '').trim().replace(/\D/g, '').slice(-10);
-    const settlementSms = `नमस्ते ${selectedRider.name}, आपका ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक का ₹${netPayableAmount} पे-आउट सेटल कर दिया गया है। बकाया बैलेंस: ₹${remainingAdvance}। विस्तृत खाता लेजर: ${statementUrl}`;
+    const effectiveHubName = (hubName || '').trim() || 'सरायकेला कूरियर हब';
+
+    const settlementSms =
+      netSettlement >= 0
+        ? `नमस्ते ${selectedRider.name}, आपका दिनांक ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक कुल पारिश्रमिक ₹${grossTotal} बना है। आपका कुल एडवांस ₹${numericAdvance} समायोजित कर कुल नेट भुगतान ₹${netSettlement} कर दिया गया है। धन्यवाद - ${effectiveHubName}`
+        : `नमस्ते ${selectedRider.name}, आपका दिनांक ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक का कुल पारिश्रमिक ₹${grossTotal} बना, जबकि आपका कुल एडवांस ₹${numericAdvance} था। हिसाब के उपरांत आपसे ₹${Math.abs(netSettlement)} लेना शेष है। कृपया यह राशि आज ही कार्यालय में जमा कर दें ताकि अन्य डिलीवरी साथियों को भुगतान किया जा सके। आपके सहयोग के लिए धन्यवाद - ${effectiveHubName}`;
 
     const waUrl = getWhatsAppUrl(selectedRider.phone, settlementSms);
     const smsUrl = getNativeSmsUrl(selectedRider.phone, settlementSms);
@@ -307,6 +323,7 @@ export const SettlementTab: React.FC<Props> = ({
       totalAmount: grossTotal,
       advanceAmount: numericAdvance,
       advanceDate: advanceDate || undefined,
+      advanceReason: advanceReason.trim() || undefined,
       netAmount: netPayableAmount,
       status: unpaidGross === 0 && grossTotal > 0 ? 'PAID' : 'UNPAID',
       settledDate: unpaidGross === 0 ? new Date().toISOString() : undefined,
@@ -444,7 +461,7 @@ export const SettlementTab: React.FC<Props> = ({
               >
                 {riders.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.name} • {r.phone}
+                    {r.name} • +91 {r.phone} {Number(r.totalAdvance || 0) > 0 ? `(एडवांस: ${formatINR(r.totalAdvance || 0)})` : ''}
                   </option>
                 ))}
               </select>
@@ -453,12 +470,22 @@ export const SettlementTab: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Direct Call & WhatsApp Contact Pill for Selected Rider */}
+            {/* Direct Call & WhatsApp Contact Pill with Active Advance Badge */}
             {selectedRider && (
               <div className="mt-2 flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-755 text-xs">
-                <span className="text-slate-300 font-mono text-[11px] truncate">
-                  +91 {selectedRider.phone}
-                </span>
+                <div className="flex items-center gap-2 truncate">
+                  <span className="text-slate-300 font-mono text-[11px] truncate">
+                    +91 {selectedRider.phone}
+                  </span>
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border shrink-0 ${
+                    Number(selectedRider.totalAdvance || 0) > 0
+                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}>
+                    <IndianRupee className="w-3 h-3 text-indigo-400" />
+                    <span>एडवांस: {formatINR(selectedRider.totalAdvance || 0)}</span>
+                  </span>
+                </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <a
                     id="call-settlement-rider-btn"
@@ -569,26 +596,38 @@ export const SettlementTab: React.FC<Props> = ({
                 <h3 className="font-bold text-sm sm:text-base text-white">
                   Deduct Advance Payment (Optional)
                 </h3>
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">
-                  Cash / Fuel Advance
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                  कुल एक्टिव एडवांस: {formatINR(selectedRider?.totalAdvance || 0)}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Deduct early payouts or loan advances prior to finalizing the settlement
+                कुल एक्टिव एडवांस राशि स्वचालित रूप से समायोजित की जाएगी
               </p>
             </div>
           </div>
 
-          {numericAdvance > 0 && (
-            <button
-              type="button"
-              onClick={handleResetAdvance}
-              className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-amber-400 transition"
-            >
-              <X className="w-3.5 h-3.5" />
-              <span>Reset Advance</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {(selectedRider?.totalAdvance || 0) > 0 && Number(advanceAmount) !== (selectedRider?.totalAdvance || 0) && (
+              <button
+                type="button"
+                onClick={() => setAdvanceAmount(selectedRider?.totalAdvance || 0)}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-300 hover:text-white bg-indigo-500/20 px-2.5 py-1 rounded-lg border border-indigo-500/30 transition"
+                title="Use entire lifetime advance"
+              >
+                <span>कुल एडवांस भरें ({formatINR(selectedRider?.totalAdvance || 0)})</span>
+              </button>
+            )}
+            {numericAdvance > 0 && (
+              <button
+                type="button"
+                onClick={handleResetAdvance}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-amber-400 transition"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Reset Advance</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Advance Input Controls */}
@@ -664,6 +703,21 @@ export const SettlementTab: React.FC<Props> = ({
                 : 'Leave blank if advance date is not specified'}
             </p>
           </div>
+
+          {/* Field 3: Advance Reason / Purpose */}
+          <div className="sm:col-span-12 space-y-1.5 pt-1 border-t border-slate-800/80">
+            <label className="block text-xs font-semibold text-slate-300">
+              एडवांस देने का कारण (Reason / Purpose):
+            </label>
+            <input
+              id="advance-reason-input"
+              type="text"
+              placeholder="e.g., Fuel / Bike Repair / Cash Advance / Emergency"
+              value={advanceReason}
+              onChange={(e) => setAdvanceReason(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 transition"
+            />
+          </div>
         </div>
 
         {/* Real-time Calculation Breakdown Strip */}
@@ -685,19 +739,59 @@ export const SettlementTab: React.FC<Props> = ({
               {numericAdvance > 0 && advanceDate && (
                 <span className="text-[10px] text-slate-400">({formatDateDisplay(advanceDate)})</span>
               )}
+              {numericAdvance > 0 && advanceReason && (
+                <span className="text-[10px] text-amber-300/80 max-w-[150px] truncate">[{advanceReason}]</span>
+              )}
             </div>
             <span className="text-slate-600 hidden sm:inline">=</span>
           </div>
 
           <div className="flex items-center gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-slate-800">
-            <span className="font-semibold text-emerald-400 uppercase tracking-wider text-[11px]">
-              Final Net Payable:
-            </span>
-            <span className="text-base sm:text-lg font-black text-emerald-300">
-              {formatINR(netPayableAmount)}
-            </span>
+            {netSettlement >= 0 ? (
+              <div className="flex items-center gap-2 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/30">
+                <span className="font-bold text-emerald-400 uppercase tracking-wider text-[11px]">
+                  FINAL NET PAYABLE:
+                </span>
+                <span className="text-base sm:text-lg font-black text-emerald-300">
+                  {formatINR(netSettlement)}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 bg-rose-500/15 px-3 py-1.5 rounded-xl border border-rose-500/40">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span className="font-bold text-rose-300 uppercase tracking-wider text-[11px]">
+                  राइडर से लेना बाकी (Recovery Due):
+                </span>
+                <span className="text-base sm:text-lg font-black text-rose-200">
+                  {formatINR(Math.abs(netSettlement))}
+                </span>
+              </div>
+            )}
           </div>
         </div>
+
+        {/* Prominent Recovery Due Alert Banner when advance exceeds gross */}
+        {netSettlement < 0 && (
+          <div className="mt-3 p-3.5 rounded-xl bg-gradient-to-r from-rose-950/60 via-amber-950/40 to-slate-900 border border-rose-500/50 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+              <div>
+                <p className="text-rose-200 font-bold">
+                  कुल एक्टिव एडवांस ({formatINR(numericAdvance)}) इस अवधि के पारिश्रमिक ({formatINR(grossTotal)}) से अधिक है।
+                </p>
+                <p className="text-[11px] text-slate-300 mt-0.5">
+                  हिसाब के उपरांत शेष राशि राइडर के लेजर में रिकवरी हेतु दर्ज रहेगी।
+                </p>
+              </div>
+            </div>
+            <div className="text-rose-300 font-bold flex items-center gap-2 shrink-0">
+              <span className="text-xs uppercase">राइडर से लेना बाकी:</span>
+              <span className="text-rose-100 text-sm font-black bg-rose-900/80 px-2.5 py-1 rounded-lg border border-rose-500/60 shadow">
+                {formatINR(Math.abs(netSettlement))}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Instant Salary Settlement SMS Trigger Feedback Banner */}
@@ -838,16 +932,26 @@ export const SettlementTab: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* 4. Final Net Payable Total */}
-          <div className="p-3.5 rounded-xl bg-slate-900/90 border border-emerald-500/40">
-            <div className="text-[10px] uppercase font-bold text-emerald-400">
-              Final Net Payable Total
+          {/* 4. Final Net Payable Total / Recovery Due */}
+          <div className={`p-3.5 rounded-xl bg-slate-900/90 border ${
+            netSettlement >= 0 ? 'border-emerald-500/40' : 'border-rose-500/50'
+          }`}>
+            <div className={`text-[10px] uppercase font-bold ${
+              netSettlement >= 0 ? 'text-emerald-400' : 'text-rose-400'
+            }`}>
+              {netSettlement >= 0 ? 'Final Net Payable Total' : 'राइडर से लेना बाकी (Recovery Due)'}
             </div>
-            <div className="text-lg sm:text-xl font-black text-emerald-300 mt-1">
-              {formatINR(netPayableAmount)}
+            <div className={`text-lg sm:text-xl font-black mt-1 ${
+              netSettlement >= 0 ? 'text-emerald-300' : 'text-rose-200'
+            }`}>
+              {netSettlement >= 0 ? formatINR(netSettlement) : formatINR(Math.abs(netSettlement))}
             </div>
             <div className="text-[11px] text-slate-300 mt-0.5 font-medium">
-              {unpaidGross === 0 && grossTotal > 0 ? (
+              {netSettlement < 0 ? (
+                <span className="text-rose-300 font-semibold">
+                  एडवांस अधिक है: {formatINR(Math.abs(netSettlement))} रिकवर करना बाकी
+                </span>
+              ) : unpaidGross === 0 && grossTotal > 0 ? (
                 <span className="text-emerald-400 font-bold">✓ Fully Settled</span>
               ) : (
                 <span>Unpaid Gross: {formatINR(unpaidGross)}</span>

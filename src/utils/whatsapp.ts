@@ -11,6 +11,7 @@ export interface WhatsAppSlipData {
   totalAmount: number; // Gross Total
   advanceAmount?: number;
   advanceDate?: string;
+  advanceReason?: string;
   netAmount?: number; // Final Net Amount
   status: 'PAID' | 'UNPAID';
   settledDate?: string;
@@ -36,6 +37,7 @@ export function generateWhatsAppMessage(data: WhatsAppSlipData): string {
   const advance = data.advanceAmount || 0;
   const netTotal = data.netAmount !== undefined ? data.netAmount : Math.max(0, grossTotal - advance);
   const advanceDateText = advance > 0 && data.advanceDate ? ` (Date: ${formatDateDisplay(data.advanceDate)})` : '';
+  const advanceReasonText = advance > 0 && data.advanceReason ? ` [कारण: ${data.advanceReason}]` : '';
 
   return (
     `📦 *COURIER RIDER PAYOUT SLIP* 📦\n` +
@@ -50,7 +52,7 @@ export function generateWhatsAppMessage(data: WhatsAppSlipData): string {
     `• Base Payout: *${formatINR(data.baseAmount)}* (@ ₹13)\n` +
     `• Total Incentive: *${formatINR(data.incentiveAmount)}* (@ ₹2)\n` +
     `• Gross Total: *${formatINR(grossTotal)}*\n` +
-    `• Advance Deducted: *${advance > 0 ? `-${formatINR(advance)}` : '₹0'}*${advanceDateText}\n` +
+    `• Advance Deducted: *${advance > 0 ? `-${formatINR(advance)}` : '₹0'}*${advanceDateText}${advanceReasonText}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `💰 *FINAL NET ${data.status === 'PAID' ? 'PAID' : 'PAYABLE'} AMOUNT:* *${formatINR(netTotal)}*\n` +
     `📌 *PAYMENT STATUS:* ${statusEmoji} *${data.status}*` +

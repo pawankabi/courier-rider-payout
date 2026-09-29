@@ -1056,7 +1056,8 @@ function MainCourierApp() {
         grossTotal: settlementDetails.grossTotal,
         advanceAmount: advanceAmount,
         advanceDate: advanceDate || undefined,
-        netTotal: Math.max(0, settlementDetails.grossTotal - advanceAmount),
+        advanceReason: (settlementDetails as any).advanceReason || undefined,
+        netTotal: settlementDetails.grossTotal - advanceAmount,
         paidAt: nowIso,
         status: 'PAID',
         createdBy: currentOwnerId,
@@ -1071,11 +1072,37 @@ function MainCourierApp() {
       // Auto-deduct advance from rider running total if advance was deducted in settlement
       if (advanceAmount > 0) {
         const targetRider = riders.find((r) => r.id === settlementDetails.riderId);
-        if (targetRider && (targetRider.totalAdvance || 0) > 0) {
-          const remainingAdv = Math.max(0, (targetRider.totalAdvance || 0) - advanceAmount);
+        if (targetRider) {
+          const currentAdv = Number(targetRider.totalAdvance) || 0;
+          const gross = Number(settlementDetails.grossTotal) || 0;
+          // If gross >= advanceAmount: entire advance deducted, remaining is Math.max(0, currentAdv - advanceAmount)
+          // If gross < advanceAmount: advance exceeds gross, recovery due remains (advanceAmount - gross)
+          const remainingAdv = gross >= advanceAmount
+            ? Math.max(0, currentAdv - advanceAmount)
+            : Math.max(0, advanceAmount - gross);
+
+          const deductedPortion = Math.min(advanceAmount, gross);
+          const advanceLogs = targetRider.advances ? [...targetRider.advances] : [];
+          if (deductedPortion > 0) {
+            advanceLogs.unshift({
+              id: `settle_adj_${Date.now()}`,
+              riderId: targetRider.id,
+              amount: -deductedPortion,
+              date: advanceDate || settlementDetails.endDate,
+              reason: (settlementDetails as any).advanceReason
+                ? `सेटलमेंट समायोजन: ${(settlementDetails as any).advanceReason}`
+                : `सेटलमेंट समायोजन (${settlementDetails.startDate} से ${settlementDetails.endDate})`,
+              runningBalance: remainingAdv,
+              createdAt: nowIso,
+              createdBy: currentOwnerId,
+              settlementId: settlementId,
+            });
+          }
+
           const updatedRider: Rider = {
             ...targetRider,
             totalAdvance: remainingAdv,
+            advances: advanceLogs,
           };
           const updatedRiders = riders.map((r) => (r.id === targetRider.id ? updatedRider : r));
           setRiders(updatedRiders);
@@ -1806,6 +1833,7 @@ function MainCourierApp() {
             riders={dashboardRiders}
             entries={dashboardEntries}
             settlements={dashboardSettlements}
+            hubName={activeHubName}
             onMarkEntriesPaid={handleMarkEntriesPaid}
             onToggleEntryStatus={handleToggleEntryStatus}
             onNavigateToRiders={() => setActiveTab('riders')}

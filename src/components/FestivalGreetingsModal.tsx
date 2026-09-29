@@ -135,7 +135,7 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
         if (res.success) {
           handleMarkSent(rider.id);
           setSmsFeedbackToast({
-            message: `✅ ${rider.name} को त्योहार शुभकामना SMS सफलतापूर्वक भेजा गया।`,
+            message: `✅ ${rider.name} को त्योहार SMS भेजा गया।`,
             type: 'success',
           });
         } else {
@@ -152,7 +152,7 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
           window.open(url, '_blank', 'noopener,noreferrer');
         } catch {}
         setSmsFeedbackToast({
-          message: `✅ ${rider.name} को त्योहार शुभकामना SMS सफलतापूर्वक भेजा गया।`,
+          message: `✅ ${rider.name} को त्योहार SMS भेजा गया।`,
           type: 'success',
         });
       }

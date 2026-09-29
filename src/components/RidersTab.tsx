@@ -441,12 +441,16 @@ export const RidersTab: React.FC<Props> = ({
       }
     );
 
-    // Precise SIM SMS dispatch on payout settlement stating exact date range and remaining balance
+    // Precise SIM SMS dispatch on payout settlement stating exact date range, gross, advance adjustment and net
     const cleanPhone = cleanPhoneNumber(rider.phone);
-    const statementUrl = generateStatementUrl(rider.id);
-    const netPayout = Math.max(0, stats.unpaidAmount - numAdvance);
-    const remainingAdvance = Math.max(0, (Number(rider.totalAdvance) || 0) - numAdvance);
-    const settlementSms = `नमस्ते ${rider.name}, आपका ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक का ₹${netPayout} पे-आउट सेटल कर दिया गया है। बकाया बैलेंस: ₹${remainingAdvance}। विस्तृत खाता लेजर: ${statementUrl}`;
+    const grossPayout = stats.unpaidAmount;
+    const netPayout = grossPayout - numAdvance;
+    const effectiveHub = (hubSignature || '').trim() || 'सरायकेला कूरियर हब';
+
+    const settlementSms =
+      netPayout >= 0
+        ? `नमस्ते ${rider.name}, आपका दिनांक ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक कुल पारिश्रमिक ₹${grossPayout} बना है। आपका कुल एडवांस ₹${numAdvance} समायोजित कर कुल नेट भुगतान ₹${netPayout} कर दिया गया है। धन्यवाद - ${effectiveHub}`
+        : `नमस्ते ${rider.name}, आपका दिनांक ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक का कुल पारिश्रमिक ₹${grossPayout} बना, जबकि आपका कुल एडवांस ₹${numAdvance} था। हिसाब के उपरांत आपसे ₹${Math.abs(netPayout)} लेना शेष है। कृपया यह राशि आज ही कार्यालय में जमा कर दें ताकि अन्य डिलीवरी साथियों को भुगतान किया जा सके। आपके सहयोग के लिए धन्यवाद - ${effectiveHub}`;
 
     if (isNativeAndroid()) {
       sendNativeBackgroundSms(cleanPhone, settlementSms).then((smsRes) => {
