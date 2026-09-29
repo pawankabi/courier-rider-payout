@@ -31,6 +31,7 @@ import {
   isFestivalGreetingSentWithin24Hours,
   FestivalGreetingSentRecord
 } from '../utils/storage';
+import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 interface Props {
   isOpen: boolean;
@@ -67,6 +68,8 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
     return loadFestivalGreetingSentRecords();
   });
   const [copiedRiderId, setCopiedRiderId] = useState<string | null>(null);
+  const [smsFeedbackToast, setSmsFeedbackToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [sendingRiderId, setSendingRiderId] = useState<string | null>(null);
 
   // Smooth Escape key handler to return smoothly without freeze
   React.useEffect(() => {
@@ -119,6 +122,49 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
     const url = buildWhatsAppGreetingUrl(rider.phone, personalizedMessage);
     handleMarkSent(rider.id);
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleSendSimSms = async (rider: Rider) => {
+    const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
+    const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
+
+    setSendingRiderId(rider.id);
+    try {
+      if (isNativeAndroid()) {
+        const res = await sendNativeBackgroundSms(cleanPhone, personalizedMessage);
+        if (res.success) {
+          handleMarkSent(rider.id);
+          setSmsFeedbackToast({
+            message: `✅ ${rider.name} को त्योहार शुभकामना SMS सफलतापूर्वक भेजा गया।`,
+            type: 'success',
+          });
+        } else {
+          setSmsFeedbackToast({
+            message: `⚠️ ${rider.name} को SMS नहीं भेजा जा सका: ${res.error || 'सिम SMS त्रुटि'}`,
+            type: 'error',
+          });
+        }
+      } else {
+        // Desktop / web browser fallback
+        const url = buildSmsGreetingUrl(rider.phone, personalizedMessage);
+        handleMarkSent(rider.id);
+        try {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        } catch {}
+        setSmsFeedbackToast({
+          message: `✅ ${rider.name} को त्योहार शुभकामना SMS सफलतापूर्वक भेजा गया।`,
+          type: 'success',
+        });
+      }
+    } catch (err: any) {
+      setSmsFeedbackToast({
+        message: `⚠️ ${rider.name} को SMS भेजने में त्रुटि: ${err?.message || 'असफल'}`,
+        type: 'error',
+      });
+    } finally {
+      setSendingRiderId(null);
+      setTimeout(() => setSmsFeedbackToast(null), 4500);
+    }
   };
 
   const handleSendSms = (rider: Rider) => {
@@ -185,6 +231,27 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* SMS Feedback Toast Notification */}
+        {smsFeedbackToast && (
+          <div className="mx-4 mt-3 p-3 rounded-xl bg-slate-950 border border-amber-500/50 shadow-xl flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-2">
+              <span className="text-base">
+                {smsFeedbackToast.type === 'success' ? '📱' : '⚠️'}
+              </span>
+              <span className={`text-xs font-bold ${smsFeedbackToast.type === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}>
+                {smsFeedbackToast.message}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSmsFeedbackToast(null)}
+              className="text-slate-400 hover:text-white p-1 rounded"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Modal Scrollable Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
@@ -442,19 +509,32 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
                   />
                 </div>
                 {nextUnsentRider && (
-                  <button
-                    type="button"
-                    onClick={() => handleSendWhatsApp(nextUnsentRider)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition active:scale-95"
-                  >
-                    <Send className="w-3 h-3" />
-                    <span>Send: {nextUnsentRider.name}</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleSendSimSms(nextUnsentRider)}
+                      disabled={sendingRiderId === nextUnsentRider.id}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white font-bold text-xs rounded-xl shadow border border-amber-400/40 transition active:scale-95"
+                      title={`Send Native SIM SMS to ${nextUnsentRider.name}`}
+                    >
+                      <MessageSquare className="w-3 h-3 text-amber-200" />
+                      <span>SIM: {nextUnsentRider.name}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendWhatsApp(nextUnsentRider)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition active:scale-95"
+                      title={`Send WhatsApp to ${nextUnsentRider.name}`}
+                    >
+                      <Send className="w-3 h-3" />
+                      <span>WA: {nextUnsentRider.name}</span>
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
 
-            {/* Rider List with Direct Call, WhatsApp & SMS Sending */}
+            {/* Rider List with Direct Call, SIM SMS & WhatsApp Sending */}
             <div className="divide-y divide-slate-800/80 rounded-xl bg-slate-850 border border-slate-750 max-h-64 overflow-y-auto">
               {riders.length === 0 ? (
                 <div className="p-6 text-center text-xs text-slate-400">
@@ -503,7 +583,7 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
                         </div>
                       </div>
 
-                      {/* Action buttons: Copy, SMS, WhatsApp */}
+                      {/* Action buttons: Copy, Call, SIM SMS, WhatsApp */}
                       <div className="flex items-center gap-1.5 shrink-0">
                         {/* Copy button */}
                         <button
@@ -519,16 +599,6 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
                           )}
                         </button>
 
-                        {/* Direct SMS button */}
-                        <button
-                          type="button"
-                          onClick={() => handleSendSms(rider)}
-                          className="p-1.5 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition"
-                          title={`Send SMS greeting to ${rider.name}`}
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                        </button>
-
                         {/* Direct Call button */}
                         <a
                           href={`tel:${rider.phone}`}
@@ -537,6 +607,25 @@ export const FestivalGreetingsModal: React.FC<Props> = ({
                         >
                           <Phone className="w-3.5 h-3.5" />
                         </a>
+
+                        {/* Dedicated SIM SMS button */}
+                        <button
+                          type="button"
+                          id={`send-festival-sim-sms-${rider.id}`}
+                          onClick={() => handleSendSimSms(rider)}
+                          disabled={sendingRiderId === rider.id}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer ${
+                            sendingRiderId === rider.id
+                              ? 'bg-amber-600/40 text-amber-200 border border-amber-500/40 opacity-75'
+                              : sentStatus.isSent
+                              ? 'bg-slate-800 text-amber-300 border border-amber-500/30 hover:bg-amber-500/20'
+                              : 'bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white border border-amber-400/40 shadow-sm shadow-amber-600/25'
+                          }`}
+                          title={`Send Native Background SIM SMS greeting to ${rider.name}`}
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-amber-200" />
+                          <span>{sendingRiderId === rider.id ? 'Sending...' : 'SIM SMS'}</span>
+                        </button>
 
                         {/* Send on WhatsApp button */}
                         <button
