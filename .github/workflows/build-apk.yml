@@ -2,15 +2,13 @@ name: Build Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
       - name: Checkout Source Code
@@ -27,43 +25,37 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android Licenses
-        run: |
-          yes | sdkmanager --licenses || true
-        continue-on-error: true
-        timeout-minutes: 2
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Install Node Dependencies
-        run: npm install
+        run: npm ci || npm install
 
       - name: Build Web Assets
-        run: npm run build
         env:
           CI: false
+        run: npm run build
 
       - name: Sync Capacitor Android
-        run: npx cap sync android
+        run: |
+          npx cap sync android || npx cap copy android
 
       - name: Make Gradlew Executable
-        run: chmod +x ./android/gradlew
-        if: hashFiles('android/gradlew') != ''
+        run: chmod +x android/gradlew
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Build Debug APK
         run: |
           cd android
-          ./gradlew assembleDebug --stacktrace
-        env:
-          ANDROID_HOME: /usr/local/lib/android/sdk
-          CI: false
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK File
         uses: actions/upload-artifact@v4
-        if: success()
         with:
-          name: Courier-Rider-Payout-App
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: Courier-Rider-Payout-Debug-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
