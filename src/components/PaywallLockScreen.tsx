@@ -22,6 +22,8 @@ import { auth } from '../firebase';
 import { UserSubscription, UserSubmittedSlip } from '../types';
 import { submitUserPaymentSlip, getDefaultSubscriptionConfig, SUPER_ADMIN_EMAIL } from '../services/firestoreSync';
 import { validateImageFile, compressAndEncodeImage } from '../utils/imageUpload';
+import { PublicComplianceFooter } from './PublicComplianceFooter';
+import { LegalPoliciesModal, PolicyTab } from './LegalPoliciesModal';
 
 interface PaywallLockScreenProps {
   currentUser: User;
@@ -59,6 +61,13 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [isReuploading, setIsReuploading] = useState(false);
   const [enlargedSlipUrl, setEnlargedSlipUrl] = useState<string | null>(null);
+  const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
+  const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
+
+  const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
+    setLegalPoliciesInitialTab(tab);
+    setIsLegalPoliciesModalOpen(true);
+  };
 
   const upiId = 'pawankabiseraikella@okaxis';
   const monthlyFee = typeof userSubscription?.monthlyFee === 'number' && userSubscription.monthlyFee > 0
@@ -601,10 +610,29 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
         </div>
       )}
 
-      {/* Footer Note */}
-      <footer className="max-w-4xl w-full mx-auto pt-4 border-t border-slate-900 text-center text-[11px] text-slate-500">
-        कूरियर पे-आउट प्रो • सुरक्षित मल्टी-किरायेदार डेटाबेस • एडमिन सहायता: {SUPER_ADMIN_EMAIL}
-      </footer>
+      {/* Fixed Public Compliance Footer across all views */}
+      <PublicComplianceFooter
+        onOpenPolicy={handleOpenLegalPolicies}
+        platformName="Courier Rider Payout"
+        merchantName="Pawan Kabi"
+        supportPhone="+91 9110913070"
+        supportEmail="pawankabiseraikella@gmail.com"
+        supportAddress="Saraikela, Jharkhand, India"
+        operatingHours="Mon - Sat, 10:00 AM - 07:00 PM IST"
+      />
+
+      {/* Universal Legal & Compliance Policies Modal */}
+      <LegalPoliciesModal
+        isOpen={isLegalPoliciesModalOpen}
+        onClose={() => setIsLegalPoliciesModalOpen(false)}
+        initialTab={legalPoliciesInitialTab}
+        platformName="Courier Rider Payout"
+        merchantName="Pawan Kabi"
+        supportEmail="pawankabiseraikella@gmail.com"
+        supportPhone="+91 9110913070"
+        supportAddress="Saraikela, Jharkhand, India"
+        operatingHours="Mon - Sat, 10:00 AM - 07:00 PM IST"
+      />
     </div>
   );
 };

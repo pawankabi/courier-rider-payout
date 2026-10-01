@@ -100,7 +100,8 @@ import { FestivalGreetingsModal } from './components/FestivalGreetingsModal';
 import { SubscriptionAlertBanner } from './components/SubscriptionAlertBanner';
 import { UserPaymentModal } from './components/UserPaymentModal';
 import { PaywallLockScreen } from './components/PaywallLockScreen';
-import { LegalPoliciesModal } from './components/LegalPoliciesModal';
+import { LegalPoliciesModal, PolicyTab } from './components/LegalPoliciesModal';
+import { PublicComplianceFooter } from './components/PublicComplianceFooter';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -209,6 +210,12 @@ function MainCourierApp() {
   const [connectionBanner, setConnectionBanner] = useState<{ text: string; type: 'connecting' | 'connected' | 'offline' } | null>(null);
   const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
   const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
+  const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
+
+  const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
+    setLegalPoliciesInitialTab(tab);
+    setIsLegalPoliciesModalOpen(true);
+  };
 
   // User Permissions & Dynamic Rate Config (Admin Overrides)
   const [userPermissions, setUserPermissions] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS);
@@ -1635,7 +1642,7 @@ function MainCourierApp() {
             <button
               id="header-legal-policies-btn"
               type="button"
-              onClick={() => setIsLegalPoliciesModalOpen(true)}
+              onClick={() => handleOpenLegalPolicies('about')}
               className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
               title="About Us, Pricing, Privacy Policy & Refund Terms (PayU & Play Store Compliance)"
             >
@@ -1657,7 +1664,7 @@ function MainCourierApp() {
               onOpenSyncOldApp={isAdmin ? () => setIsSyncOldAppModalOpen(true) : undefined}
               onOpenSubscription={!isSuperAdminUser ? () => openSubscriptionModal('manual') : undefined}
               onEnableCloudBackup={() => openSubscriptionModal('cloud_backup')}
-              onOpenLegalPolicies={() => setIsLegalPoliciesModalOpen(true)}
+              onOpenLegalPolicies={() => handleOpenLegalPolicies('about')}
             />
           </div>
         </div>
@@ -1984,6 +1991,17 @@ function MainCourierApp() {
         )}
       </main>
 
+      {/* Fixed Public Compliance Footer across all views (Accessible on main page without login) */}
+      <PublicComplianceFooter
+        onOpenPolicy={handleOpenLegalPolicies}
+        platformName="Courier Rider Payout"
+        merchantName="Pawan Kabi"
+        supportPhone="+91 9110913070"
+        supportEmail="pawankabiseraikella@gmail.com"
+        supportAddress="Saraikela, Jharkhand, India"
+        operatingHours="Mon - Sat, 10:00 AM - 07:00 PM IST"
+      />
+
       {/* Mobile-First App Bottom Navigation Bar - Permanent Vibrant Colors */}
       <nav
         id="mobile-bottom-nav"
@@ -2144,9 +2162,13 @@ function MainCourierApp() {
       <LegalPoliciesModal
         isOpen={isLegalPoliciesModalOpen}
         onClose={() => setIsLegalPoliciesModalOpen(false)}
+        initialTab={legalPoliciesInitialTab}
         platformName="Courier Rider Payout"
-        supportEmail="support@courierpayoutpro.com"
+        merchantName="Pawan Kabi"
+        supportEmail="pawankabiseraikella@gmail.com"
         supportPhone="+91 9110913070"
+        supportAddress="Saraikela, Jharkhand, India"
+        operatingHours="Mon - Sat, 10:00 AM - 07:00 PM IST"
       />
 
       {/* In-App Khatabook Statement / Ledger Screen Overlay with sticky top Close/Back button */}
