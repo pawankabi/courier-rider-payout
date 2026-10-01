@@ -100,7 +100,7 @@ import { AdminBillingExpiryAndSlips } from './AdminBillingExpiryAndSlips';
 import { FreeToPaidConversionModal } from './FreeToPaidConversionModal';
 import { AdminPaymentHistoryModal } from './AdminPaymentHistoryModal';
 
-interface AdminDashboardTabProps {
+export interface AdminDashboardTabProps {
   currentAdminEmail?: string | null;
   onInspectUser?: (user: AppUser) => void;
   inspectedUserId?: string | null;

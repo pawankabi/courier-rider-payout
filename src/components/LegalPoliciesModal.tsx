@@ -21,11 +21,10 @@ import {
   Zap,
   UserCheck
 } from 'lucide-react';
-import { formatINR } from '../utils/formatters';
 
 export type PolicyTab = 'about' | 'pricing' | 'terms' | 'privacy' | 'refund';
 
-interface LegalPoliciesModalProps {
+export interface LegalPoliciesModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialTab?: PolicyTab;

@@ -33,7 +33,7 @@ import {
 } from '../utils/storage';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
-interface Props {
+export interface FestivalGreetingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   riders: Rider[];
@@ -41,7 +41,7 @@ interface Props {
   hubSignature?: string;
 }
 
-export const FestivalGreetingsModal: React.FC<Props> = ({
+export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   isOpen,
   onClose,
   riders,

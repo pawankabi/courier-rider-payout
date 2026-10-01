@@ -45,7 +45,7 @@ import {
 } from '../services/smsService';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
-interface Props {
+export interface SettlementTabProps {
   riders: Rider[];
   entries: DeliveryEntry[];
   settlements?: SettlementRecord[];
@@ -72,7 +72,7 @@ interface Props {
   onViewLedger?: (riderId: string) => void;
 }
 
-export const SettlementTab: React.FC<Props> = ({
+export const SettlementTab: React.FC<SettlementTabProps> = ({
   riders,
   entries,
   settlements = [],
