@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Courier Rider Payout</string>
     <string name="title_activity_main">Courier Rider Payout</string>
-    <string name="package_name">com.courier.riderpayout</string>
-    <string name="custom_url_scheme">com.courier.riderpayout</string>
+    <string name="package_name">com.courierpayout.app</string>
+    <string name="custom_url_scheme">com.courierpayout.app</string>
 </resources>

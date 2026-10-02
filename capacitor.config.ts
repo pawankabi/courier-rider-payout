@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.courier.riderpayout',
+  appId: 'com.courierpayout.app',
   appName: 'Courier Rider Payout',
   webDir: 'dist',
   server: {
