@@ -186,6 +186,37 @@ export interface OpenRazorpayOptions {
 }
 
 /**
+ * Calculates cumulative plan expiry date:
+ * - If user is currently ACTIVE (existingExpiresAt is valid and in the future):
+ *   baseTime = new Date(existingExpiresAt).getTime()
+ * - If user is EXPIRED or has no previous plan:
+ *   baseTime = Date.now()
+ * - Returns finalExpiresAt = new Date(baseTime + durationDays * 24 * 60 * 60 * 1000).toISOString()
+ */
+export function calculateCumulativeExpiry(
+  existingExpiresAt: string | null | undefined,
+  durationDays: number
+): { finalExpiresAt: string; baseTime: number; isExtended: boolean } {
+  const now = Date.now();
+  const safeDays = Math.max(1, durationDays || 1);
+  const durationMs = safeDays * 24 * 60 * 60 * 1000;
+
+  let baseTime = now;
+  let isExtended = false;
+
+  if (existingExpiresAt && typeof existingExpiresAt === 'string' && existingExpiresAt.trim().length > 0) {
+    const existingTime = new Date(existingExpiresAt).getTime();
+    if (!isNaN(existingTime) && existingTime > now) {
+      baseTime = existingTime;
+      isExtended = true;
+    }
+  }
+
+  const finalExpiresAt = new Date(baseTime + durationMs).toISOString();
+  return { finalExpiresAt, baseTime, isExtended };
+}
+
+/**
  * Triggers the Razorpay Standard Checkout Modal
  */
 export async function openRazorpayCheckout({
@@ -240,60 +271,7 @@ export async function openRazorpayCheckout({
     image: 'https://cdn-icons-png.flaticon.com/512/2830/2830312.png',
     handler: async function (response: RazorpaySuccessResponse) {
       try {
-        const userRef = doc(db, 'users', resolvedUserId);
-        const allUserRef = doc(db, 'all_users', resolvedUserId);
-        const paymentDocRef = doc(db, 'razorpay_payments', response.razorpay_payment_id);
-
-        const durationDays = plan.durationDays || (plan.id === 'plan_test_1day' ? 1 : 30);
-        const expiresIso = plan.id === 'plan_test_1day' || durationDays === 1
-          ? new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString()
-          : new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
-
-        const updateData = {
-          isPro: true,
-          isApproved: true,
-          status: 'approved',
-          subscriptionStatus: 'active',
-          plan: plan.name,
-          planId: plan.id,
-          lastPaymentId: response.razorpay_payment_id,
-          lastPaymentAt: new Date().toISOString(),
-          planActivatedAt: new Date().toISOString(),
-          planExpiresAt: expiresIso,
-          validUntil: expiresIso,
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Direct, awaited write to Firestore
-        await Promise.all([
-          setDoc(userRef, updateData, { merge: true }),
-          setDoc(allUserRef, updateData, { merge: true }),
-          setDoc(
-            paymentDocRef,
-            {
-              paymentId: response.razorpay_payment_id,
-              userId: resolvedUserId,
-              userEmail: user.email || auth.currentUser?.email || '',
-              planId: plan.id,
-              planName: plan.name,
-              amount: plan.price,
-              status: 'captured',
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          ).catch((e) => console.warn('Payment audit doc log error:', e)),
-        ]);
-
-        // Immediate local unlock
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('isPro', 'true');
-          localStorage.setItem('subscriptionStatus', 'active');
-          localStorage.setItem('cp_current_is_pro', 'true');
-          localStorage.setItem(`cp_is_pro_${resolvedUserId}`, 'true');
-          localStorage.setItem('cp_last_payment_id', response.razorpay_payment_id);
-          localStorage.removeItem('cp_pending_checkout');
-        }
-
+        console.log('Razorpay payment successful, activating plan with cumulative extension...', response.razorpay_payment_id);
         const activationResult = await activateUserPlanImmediately(
           resolvedUserId,
           plan.id,
@@ -364,6 +342,9 @@ export interface RazorpayTransactionRecord {
 /**
  * Helper to immediately activate user plan with merge: true in Firestore and update localStorage.
  * Updates both users/{userId} and all_users/{userId} documents.
+ * Implements CUMULATIVE EXPIRY EXTENSION:
+ * - If user is currently active (existingExpiresAt > now), extends from existingExpiresAt.
+ * - If user is expired or new, starts from Date.now().
  */
 export async function activateUserPlanImmediately(
   userId: string,
@@ -374,6 +355,7 @@ export async function activateUserPlanImmediately(
   subscription: UserSubscription;
   validUntil: string;
   plan: RazorpayPlan;
+  isExtended?: boolean;
 }> {
   const effectiveUserId = (
     userId ||
@@ -385,43 +367,76 @@ export async function activateUserPlanImmediately(
   const effectiveEmail = userEmail || auth.currentUser?.email || null;
   const matchedPlan = RAZORPAY_PLANS.find((p) => p.id === planId) || RAZORPAY_PLANS[1];
   const durationDays = matchedPlan.durationDays || (matchedPlan.id === 'plan_test_1day' ? 1 : 30);
-  const durationMs = durationDays * 24 * 60 * 60 * 1000;
 
   const now = Date.now();
   const activatedAt = new Date(now).toISOString();
 
-  // Read current subscription to preserve prior payment history and extend expiration if active
+  // Read current subscription and existing expiry to support cumulative renewal
   const userRef = doc(db, 'users', effectiveUserId);
   const allUserRef = doc(db, 'all_users', effectiveUserId);
 
   let currentSub = createDefaultUserSubscription();
+  let existingExpiresAt: string | null = null;
+
   try {
     const [userSnap, allSnap] = await Promise.all([
       getDoc(userRef).catch(() => null),
       getDoc(allUserRef).catch(() => null),
     ]);
 
-    if (userSnap && userSnap.exists() && userSnap.data()?.subscription) {
-      currentSub = normalizeUserSubscription(userSnap.data().subscription);
-    } else if (allSnap && allSnap.exists() && allSnap.data()?.subscription) {
-      currentSub = normalizeUserSubscription(allSnap.data().subscription);
+    if (userSnap && userSnap.exists()) {
+      const data = userSnap.data();
+      if (data?.subscription) {
+        currentSub = normalizeUserSubscription(data.subscription);
+      }
+      existingExpiresAt = data?.planExpiresAt || data?.validUntil || data?.subscription?.validUntil || null;
+    }
+
+    if (allSnap && allSnap.exists()) {
+      const allData = allSnap.data();
+      if (!currentSub || currentSub.paymentStatus !== 'active') {
+        if (allData?.subscription) {
+          currentSub = normalizeUserSubscription(allData.subscription);
+        }
+      }
+      if (!existingExpiresAt) {
+        existingExpiresAt = allData?.planExpiresAt || allData?.validUntil || allData?.subscription?.validUntil || null;
+      }
     }
   } catch (err) {
     console.warn('Could not read existing subscription in activateUserPlanImmediately:', err);
   }
 
-  let baseTimestamp = now;
-  if (currentSub.validUntil && currentSub.paymentStatus === 'active' && matchedPlan.id !== 'plan_test_1day') {
-    const existingExpiry = new Date(currentSub.validUntil).getTime();
-    if (!isNaN(existingExpiry) && existingExpiry > now) {
-      baseTimestamp = existingExpiry;
+  // Fallback to currentSub.validUntil
+  if (!existingExpiresAt && currentSub?.validUntil) {
+    existingExpiresAt = currentSub.validUntil;
+  }
+
+  // Fallback to localStorage if active
+  if (!existingExpiresAt && typeof window !== 'undefined') {
+    const storedExpires = localStorage.getItem('cp_plan_expires_at');
+    if (storedExpires) {
+      existingExpiresAt = storedExpires;
+    } else {
+      try {
+        const storedSubRaw = localStorage.getItem(`cp_sub_${effectiveUserId}`);
+        if (storedSubRaw) {
+          const storedSub = JSON.parse(storedSubRaw);
+          if (storedSub?.validUntil) {
+            existingExpiresAt = storedSub.validUntil;
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
     }
   }
 
-  // 1-Day Trial Pass expires in exactly 24 hours from activation
-  const finalExpiresAt = matchedPlan.id === 'plan_test_1day' || durationDays === 1
-    ? new Date(now + 1 * 24 * 60 * 60 * 1000).toISOString()
-    : new Date(baseTimestamp + durationMs).toISOString();
+  // 1. CUMULATIVE EXPIRY EXTENSION:
+  // - If user is currently ACTIVE (existingExpiresAt > now): baseTime = new Date(existingExpiresAt).getTime()
+  // - If user is EXPIRED or has no previous plan: baseTime = Date.now()
+  // - finalExpiresAt = new Date(baseTime + durationDays * 24 * 60 * 60 * 1000).toISOString()
+  const { finalExpiresAt, isExtended } = calculateCumulativeExpiry(existingExpiresAt, durationDays);
 
   const historyItem = {
     id: `rzp_${paymentId}`,
@@ -431,7 +446,7 @@ export async function activateUserPlanImmediately(
     slipUrl: 'RAZORPAY_LIVE_ONLINE_SUCCESS',
     approvedBy: 'razorpay_live_auto_approval',
     status: 'success',
-    notes: `Razorpay Live: ${matchedPlan.displayName} (${durationDays} Days) • ID: ${paymentId}`,
+    notes: `Razorpay Live: ${matchedPlan.displayName} (${durationDays} Days) • ID: ${paymentId}${isExtended ? ' [Cumulative Extension]' : ''}`,
   };
 
   const updatedSub: UserSubscription = {
@@ -469,6 +484,22 @@ export async function activateUserPlanImmediately(
       const txHistory = rawHistory ? JSON.parse(rawHistory) : [];
       localStorage.setItem('cp_razorpay_transactions', JSON.stringify([txRecord, ...txHistory]));
       localStorage.setItem('cp_last_razorpay_tx', JSON.stringify(txRecord));
+      localStorage.removeItem('cp_pending_checkout');
+
+      // Dispatch global state sync
+      window.dispatchEvent(
+        new CustomEvent('courier-payout:plan-activated', {
+          detail: {
+            userId: effectiveUserId,
+            plan: matchedPlan,
+            subscription: updatedSub,
+            validUntil: finalExpiresAt,
+            planExpiresAt: finalExpiresAt,
+            paymentId,
+            isExtended,
+          },
+        })
+      );
     } catch (e) {
       console.warn('Failed to update localStorage in activateUserPlanImmediately:', e);
     }
@@ -518,7 +549,7 @@ export async function activateUserPlanImmediately(
         { merge: true }
       ).catch((e) => console.warn('Could not record razorpay payment document:', e)),
     ]);
-    console.log('Successfully written activation payload to Firestore for user:', effectiveUserId);
+    console.log('Successfully written activation payload to Firestore for user:', effectiveUserId, 'Expires:', finalExpiresAt, 'Extended:', isExtended);
   } catch (err) {
     console.error('CRITICAL: Error writing activation to Firestore:', err);
   }
@@ -536,6 +567,7 @@ export async function activateUserPlanImmediately(
     subscription: updatedSub,
     validUntil: finalExpiresAt,
     plan: matchedPlan,
+    isExtended,
   };
 }
 
@@ -687,82 +719,18 @@ export async function manualInstantUnlock(
     : `pay_${cleanInput}`;
 
   try {
-    const userRef = doc(db, 'users', effectiveUserId);
-    const allUserRef = doc(db, 'all_users', effectiveUserId);
-
-    const now = Date.now();
-    const activatedAt = new Date(now).toISOString();
-    const durationDays = matchedPlan.durationDays || (matchedPlan.id === 'plan_test_1day' ? 1 : 30);
-    const expiresAt = matchedPlan.id === 'plan_test_1day' || durationDays === 1
-      ? new Date(now + 1 * 24 * 60 * 60 * 1000).toISOString()
-      : new Date(now + durationDays * 24 * 60 * 60 * 1000).toISOString();
-
-    const historyItem = {
-      id: `rzp_${paymentRef}`,
-      date: activatedAt,
-      amount: matchedPlan.price,
-      utr: paymentRef,
-      slipUrl: 'MANUAL_VERIFIED_ONLINE',
-      approvedBy: 'manual_instant_unlock',
-      status: 'success',
-      notes: `Direct Verified: ${isPhone ? `Mobile ${cleanInput}` : `Payment ${cleanInput}`}`,
-    };
-
-    const updatedSub: UserSubscription = {
-      ...createDefaultUserSubscription(),
-      planType: 'paid',
-      paymentStatus: 'active',
-      isPro: true,
-      monthlyFee: matchedPlan.price,
-      validUntil: expiresAt,
-      paymentHistory: [historyItem],
-    };
-
-    const updateData: any = {
-      isPro: true,
-      isApproved: true,
-      status: 'approved',
-      subscriptionStatus: 'active',
-      plan: matchedPlan.name,
-      planId: matchedPlan.id,
-      lastPaymentId: paymentRef,
-      verifiedIdentifier: cleanInput,
-      planActivatedAt: activatedAt,
-      planExpiresAt: expiresAt,
-      validUntil: expiresAt,
-      updatedAt: activatedAt,
-      subscription: updatedSub,
-    };
-
-    if (userEmail || auth.currentUser?.email) {
-      updateData.email = userEmail || auth.currentUser?.email;
-    }
-
-    // Direct, awaited Firestore write
-    await Promise.all([
-      setDoc(userRef, updateData, { merge: true }),
-      setDoc(allUserRef, updateData, { merge: true }),
-    ]);
-
-    // Direct local unlock
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('isPro', 'true');
-      localStorage.setItem('subscriptionStatus', 'active');
-      localStorage.setItem('cp_current_is_pro', 'true');
-      localStorage.setItem(`cp_is_pro_${effectiveUserId}`, 'true');
-      localStorage.setItem(`cp_sub_${effectiveUserId}`, JSON.stringify(updatedSub));
-      localStorage.setItem('cp_plan_expires_at', expiresAt);
-      localStorage.setItem('cp_user_status', 'approved');
-      localStorage.setItem('cp_last_plan', matchedPlan.name);
-      localStorage.setItem('cp_last_payment_id', paymentRef);
-      localStorage.removeItem('cp_pending_checkout');
-    }
+    const res = await activateUserPlanImmediately(
+      effectiveUserId,
+      planId,
+      paymentRef,
+      userEmail
+    );
 
     return {
       success: true,
-      message: `खाता तुरंत सक्रिय कर दिया गया है! ${matchedPlan.displayName} अनलॉक हुआ।`,
-      subscription: updatedSub,
-      validUntil: expiresAt,
+      message: `खाता तुरंत सक्रिय कर दिया गया है! ${res.plan.displayName} अनलॉक हुआ (${new Date(res.validUntil).toLocaleDateString('hi-IN')} तक मान्य)।`,
+      subscription: res.subscription,
+      validUntil: res.validUntil,
     };
   } catch (err: any) {
     console.error('Error in manualInstantUnlock:', err);

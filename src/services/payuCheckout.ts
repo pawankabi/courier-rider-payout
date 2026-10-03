@@ -227,6 +227,7 @@ export async function executePayuAutoApproval(
     localStorage.setItem('cp_current_is_pro', 'true');
     localStorage.setItem(`cp_sub_${userId}`, JSON.stringify(updatedSub));
     localStorage.setItem(`cp_is_pro_${userId}`, 'true');
+    localStorage.setItem('cp_plan_expires_at', newValidUntilIso);
   } catch (err) {
     console.warn('Failed to cache pro status to localStorage', err);
   }
@@ -237,6 +238,7 @@ export async function executePayuAutoApproval(
       subscription: updatedSub,
       status: 'approved',
       validUntil: newValidUntilIso,
+      planExpiresAt: newValidUntilIso,
       isPro: true,
       isApproved: true,
       lastPaymentAt: serverTimestamp(),
@@ -247,6 +249,7 @@ export async function executePayuAutoApproval(
       subscription: updatedSub,
       status: 'approved',
       validUntil: newValidUntilIso,
+      planExpiresAt: newValidUntilIso,
       isPro: true,
       isApproved: true,
       email: userEmail,
@@ -261,6 +264,7 @@ export async function executePayuAutoApproval(
       subscription: updatedSub,
       status: 'approved',
       validUntil: newValidUntilIso,
+      planExpiresAt: newValidUntilIso,
       isPro: true,
       isApproved: true,
       lastPaymentAt: serverTimestamp(),
@@ -271,6 +275,7 @@ export async function executePayuAutoApproval(
       subscription: updatedSub,
       status: 'approved',
       validUntil: newValidUntilIso,
+      planExpiresAt: newValidUntilIso,
       isPro: true,
       isApproved: true,
       email: userEmail,

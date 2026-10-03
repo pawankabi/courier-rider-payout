@@ -579,7 +579,7 @@ export function subscribeToCurrentUserDoc(
       : { ...DEFAULT_USER_RATE_CONFIG };
     const hubSignature = mergedData.hubSignature || rateConfig.hubSignature || '';
     const subscription = normalizeUserSubscription(mergedData.subscription);
-    const validUntil = mergedData.validUntil || subscription.validUntil || '';
+    const validUntil = mergedData.planExpiresAt || mergedData.validUntil || subscription.validUntil || '';
 
     onUpdate({ 
       status, 
@@ -808,7 +808,7 @@ export async function extendUserValidity(
       const snap = await getDoc(allUserRef);
       if (snap.exists()) {
         const data = snap.data();
-        const existing = data.validUntil || data.subscription?.validUntil;
+        const existing = data.planExpiresAt || data.validUntil || data.subscription?.validUntil;
         if (existing) {
           const parsed = new Date(existing).getTime();
           if (!isNaN(parsed) && parsed > Date.now()) {
@@ -824,6 +824,7 @@ export async function extendUserValidity(
   const payload = {
     status: 'approved',
     validUntil: newValidUntil,
+    planExpiresAt: newValidUntil,
     'subscription.validUntil': newValidUntil,
     'subscription.paymentStatus': 'active',
     approvedAt: new Date().toISOString(),
@@ -873,6 +874,7 @@ export async function setUserValidityDate(
   const payload = {
     status: 'approved',
     validUntil: finalIso,
+    planExpiresAt: finalIso,
     'subscription.validUntil': finalIso,
     'subscription.paymentStatus': 'active',
     statusUpdatedAt: serverTimestamp(),

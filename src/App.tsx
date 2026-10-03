@@ -868,6 +868,44 @@ function MainCourierApp() {
     };
   }, []);
 
+  // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
+  useEffect(() => {
+    const handlePlanActivated = (e: Event) => {
+      const customEvent = e as CustomEvent<{
+        userId?: string;
+        plan?: any;
+        subscription?: UserSubscription;
+        validUntil?: string;
+        planExpiresAt?: string;
+        isExtended?: boolean;
+      }>;
+      const detail = customEvent.detail;
+      if (detail) {
+        if (detail.subscription) {
+          setUserSubscription(detail.subscription);
+        }
+        const effectiveExpiry = detail.validUntil || detail.planExpiresAt;
+        if (effectiveExpiry) {
+          setUserProfile((prev) => ({
+            ...(prev || {}),
+            status: 'approved',
+            validUntil: effectiveExpiry,
+            planExpiresAt: effectiveExpiry,
+            isPro: true,
+          }));
+        }
+        setIsPending(false);
+        setIsDeactivated(false);
+        setActiveTab('entry');
+      }
+    };
+
+    window.addEventListener('courier-payout:plan-activated', handlePlanActivated);
+    return () => {
+      window.removeEventListener('courier-payout:plan-activated', handlePlanActivated);
+    };
+  }, []);
+
   // Target user id: regular user's UID or the inspected user's UID when Super Admin is in inspection mode
   const targetUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
 
@@ -1464,6 +1502,7 @@ function MainCourierApp() {
             ...(prev || {}),
             status: 'approved',
             validUntil: updated.validUntil,
+            planExpiresAt: updated.validUntil,
             isPro: true,
             displayName: currentUser?.displayName || prev?.displayName,
             name: currentUser?.displayName || prev?.name,
