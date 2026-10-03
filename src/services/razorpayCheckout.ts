@@ -747,3 +747,93 @@ export async function manualInstantUnlock(
     };
   }
 }
+
+/**
+ * Reconciles pending checkout when the user returns from an external UPI payment application
+ * (PhonePe / Google Pay / Paytm / BHIM) or when the native Capacitor app resumes.
+ */
+export async function reconcilePendingCheckoutOnResume(
+  currentUserUid?: string,
+  currentUserEmail?: string | null
+): Promise<{ reconciled: boolean; subscription?: UserSubscription; validUntil?: string }> {
+  if (typeof window === 'undefined') {
+    return { reconciled: false };
+  }
+
+  try {
+    const pendingRaw = localStorage.getItem('cp_pending_checkout');
+    if (!pendingRaw) {
+      return { reconciled: false };
+    }
+
+    let pendingData: any = null;
+    try {
+      pendingData = JSON.parse(pendingRaw);
+    } catch {
+      localStorage.removeItem('cp_pending_checkout');
+      return { reconciled: false };
+    }
+
+    const targetUserId = (currentUserUid || pendingData?.userId || auth.currentUser?.uid || '').trim();
+    if (!targetUserId) {
+      return { reconciled: false };
+    }
+
+    // Ignore checkouts older than 3 hours
+    const ageMs = Date.now() - (pendingData?.initiatedAt || 0);
+    if (ageMs > 3 * 60 * 60 * 1000) {
+      localStorage.removeItem('cp_pending_checkout');
+      return { reconciled: false };
+    }
+
+    console.log('Reconciling pending checkout on app resume for user:', targetUserId, pendingData);
+
+    // 1. Check if user document in Firestore already has recorded payment or is active
+    const checkResult = await checkRecentPaymentInFirestore(targetUserId);
+    if (checkResult.found && checkResult.paymentId) {
+      console.log('Recent payment found in Firestore on resume! Activating user plan immediately...', checkResult);
+      const res = await activateUserPlanImmediately(
+        targetUserId,
+        checkResult.planId || pendingData.planId || 'growth',
+        checkResult.paymentId,
+        currentUserEmail || auth.currentUser?.email
+      );
+      localStorage.removeItem('cp_pending_checkout');
+      return { reconciled: true, subscription: res.subscription, validUntil: res.validUntil };
+    }
+
+    // 2. Direct read of users/{userId} and all_users/{userId} to check isPro / subscriptionStatus
+    const [userSnap, allSnap] = await Promise.all([
+      getDoc(doc(db, 'users', targetUserId)).catch(() => null),
+      getDoc(doc(db, 'all_users', targetUserId)).catch(() => null),
+    ]);
+
+    const activeDoc = (userSnap?.exists() && (userSnap.data()?.isPro || userSnap.data()?.subscriptionStatus === 'active'))
+      ? userSnap.data()
+      : (allSnap?.exists() && (allSnap.data()?.isPro || allSnap.data()?.subscriptionStatus === 'active'))
+      ? allSnap.data()
+      : null;
+
+    if (activeDoc) {
+      console.log('User document is already active in Firestore on resume!');
+      localStorage.removeItem('cp_pending_checkout');
+      localStorage.setItem('isPro', 'true');
+      localStorage.setItem('subscriptionStatus', 'active');
+      localStorage.setItem('cp_current_is_pro', 'true');
+      localStorage.setItem(`cp_is_pro_${targetUserId}`, 'true');
+      if (activeDoc.validUntil || activeDoc.planExpiresAt) {
+        localStorage.setItem('cp_plan_expires_at', activeDoc.planExpiresAt || activeDoc.validUntil);
+      }
+      return {
+        reconciled: true,
+        subscription: activeDoc.subscription,
+        validUntil: activeDoc.planExpiresAt || activeDoc.validUntil,
+      };
+    }
+  } catch (err) {
+    console.warn('Error in reconcilePendingCheckoutOnResume:', err);
+  }
+
+  return { reconciled: false };
+}
+

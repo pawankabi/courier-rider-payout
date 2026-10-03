@@ -102,7 +102,8 @@ import { UserPaymentModal } from './components/UserPaymentModal';
 import { PaywallLockScreen } from './components/PaywallLockScreen';
 import { LegalPoliciesModal, PolicyTab } from './components/LegalPoliciesModal';
 import { PublicComplianceFooter } from './components/PublicComplianceFooter';
-import { activateUserPlanImmediately } from './services/razorpayCheckout';
+import { App as CapacitorApp } from '@capacitor/app';
+import { activateUserPlanImmediately, reconcilePendingCheckoutOnResume } from './services/razorpayCheckout';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -905,6 +906,68 @@ function MainCourierApp() {
       window.removeEventListener('courier-payout:plan-activated', handlePlanActivated);
     };
   }, []);
+
+  // 2. Capacitor Native & Web App Resume Listener (reconciles pending checkout when returning from UPI app)
+  useEffect(() => {
+    let appStateHandle: any = null;
+
+    const handleResume = async () => {
+      const pendingRaw = localStorage.getItem('cp_pending_checkout');
+      if (pendingRaw) {
+        console.log('App resumed from external UPI app / background. Reconciling pending checkout...');
+        const result = await reconcilePendingCheckoutOnResume(currentUser?.uid, currentUser?.email);
+        if (result.reconciled) {
+          if (result.subscription) {
+            setUserSubscription(result.subscription);
+          }
+          if (result.validUntil) {
+            setUserProfile((prev) => ({
+              ...(prev || {}),
+              status: 'approved',
+              validUntil: result.validUntil,
+              planExpiresAt: result.validUntil,
+              isPro: true,
+            }));
+          }
+          setIsPending(false);
+          setIsDeactivated(false);
+          setActiveTab('entry');
+        }
+      }
+    };
+
+    // Capacitor Native appStateChange listener
+    try {
+      CapacitorApp.addListener('appStateChange', (state) => {
+        if (state.isActive) {
+          handleResume();
+        }
+      }).then((handle) => {
+        appStateHandle = handle;
+      }).catch((e) => {
+        console.warn('Capacitor App listener notice:', e);
+      });
+    } catch (e) {
+      console.warn('CapacitorApp not available in current context:', e);
+    }
+
+    // Web visibility & pageshow fallback (for mobile Chrome/Safari returning from UPI intent)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        handleResume();
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pageshow', handleResume);
+
+    return () => {
+      if (appStateHandle && typeof appStateHandle.remove === 'function') {
+        appStateHandle.remove();
+      }
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pageshow', handleResume);
+    };
+  }, [currentUser]);
 
   // Target user id: regular user's UID or the inspected user's UID when Super Admin is in inspection mode
   const targetUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
