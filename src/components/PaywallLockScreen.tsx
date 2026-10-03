@@ -201,9 +201,9 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
           name: userProfile?.displayName || userProfile?.name || currentUser.displayName || 'PAWAN KABI',
           phone: (userProfile as any)?.phone || (userProfile as any)?.contact || '9110913070',
         },
-        onSuccess: async (response, paidPlan) => {
+        onSuccess: async (response, paidPlan, updatedSub) => {
           try {
-            const updated = await executeRazorpayAutoApproval(currentUser.uid, currentUser.email || null, paidPlan, response);
+            const updated = updatedSub || (await executeRazorpayAutoApproval(currentUser.uid, currentUser.email || null, paidPlan, response));
             if (onSubscriptionUpdated) {
               onSubscriptionUpdated(updated);
             }

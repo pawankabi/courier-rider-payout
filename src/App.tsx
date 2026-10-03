@@ -325,15 +325,13 @@ function MainCourierApp() {
   const now = currentTime;
   const expiryTime = userProfile?.validUntil
     ? new Date(userProfile.validUntil).getTime()
+    : (userProfile as any)?.planExpiresAt
+    ? new Date((userProfile as any).planExpiresAt).getTime()
     : userSubscription?.validUntil
     ? new Date(userSubscription.validUntil).getTime()
-    : 0;
-  const isExpired = !expiryTime || now > expiryTime;
-  const isPendingApproval = userProfile ? userProfile.status !== 'approved' : true;
-
-  // 3-Day Expiry Warning Banner Calculation (Requirement 2):
-  // const daysLeft = Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24));
-  const daysLeft = expiryTime > now ? Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24)) : 0;
+    : (typeof window !== 'undefined' && localStorage.getItem('cp_plan_expires_at')
+    ? new Date(localStorage.getItem('cp_plan_expires_at')!).getTime()
+    : 0);
 
   // Freemium / Pro Status Evaluator
   const isProUser = Boolean(
@@ -343,8 +341,20 @@ function MainCourierApp() {
     (userSubscription?.planType === 'paid' &&
       userSubscription?.paymentStatus === 'active' &&
       (!userSubscription.validUntil || new Date(userSubscription.validUntil).getTime() > now)) ||
-    (typeof window !== 'undefined' && localStorage.getItem('cp_current_is_pro') === 'true')
+    (typeof window !== 'undefined' && (
+      localStorage.getItem('isPro') === 'true' ||
+      localStorage.getItem('subscriptionStatus') === 'active' ||
+      localStorage.getItem('cp_current_is_pro') === 'true' ||
+      (currentUser && localStorage.getItem(`cp_is_pro_${currentUser.uid}`) === 'true')
+    ))
   );
+
+  const isExpired = isProUser ? (expiryTime > 0 && now > expiryTime) : (!expiryTime || now > expiryTime);
+  const isPendingApproval = isProUser ? false : (userProfile ? (userProfile.status !== 'approved' && userProfile.status !== 'active') : true);
+
+  // 3-Day Expiry Warning Banner Calculation (Requirement 2):
+  // const daysLeft = Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24));
+  const daysLeft = expiryTime > now ? Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24)) : 0;
 
   // Strict Subscription Lock Check: Only blocks paid users who have expired or need verification
   const subscriptionLock = useMemo(() => {
@@ -354,6 +364,7 @@ function MainCourierApp() {
   const isPaywallLocked = Boolean(
     currentUser &&
     !isSuperAdminUser &&
+    !isProUser &&
     userSubscription?.planType === 'paid' &&
     subscriptionLock.isLocked
   );
@@ -855,6 +866,33 @@ function MainCourierApp() {
       }
     };
   }, []);
+
+  // Global listener for instant Razorpay plan activation event
+  useEffect(() => {
+    const handlePlanActivated = (e: any) => {
+      const detail = e.detail;
+      if (!detail) return;
+      if (detail.subscription) {
+        setUserSubscription(detail.subscription);
+      }
+      setUserProfile((prev) => ({
+        ...(prev || {}),
+        status: 'approved',
+        validUntil: detail.validUntil,
+        isPro: true,
+        displayName: currentUser?.displayName || prev?.displayName,
+        name: currentUser?.displayName || prev?.name,
+      }));
+      setIsPending(false);
+      setIsDeactivated(false);
+      setActiveTab('entry');
+    };
+
+    window.addEventListener('courier-payout:plan-activated', handlePlanActivated);
+    return () => {
+      window.removeEventListener('courier-payout:plan-activated', handlePlanActivated);
+    };
+  }, [currentUser]);
 
   // Target user id: regular user's UID or the inspected user's UID when Super Admin is in inspection mode
   const targetUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
@@ -1428,22 +1466,37 @@ function MainCourierApp() {
         onRefreshStatus={async () => {
           if (currentUser) {
             const res = await syncUserProfile(currentUser);
+            const isNowPro = Boolean(res.isPro || res.subscription?.isPro || localStorage.getItem('isPro') === 'true');
             setUserProfile({
-              status: res.status,
+              status: isNowPro ? 'approved' : res.status,
               validUntil: res.validUntil,
               displayName: currentUser.displayName || undefined,
               name: currentUser.displayName || undefined,
+              isPro: isNowPro,
             });
             if (res.subscription) {
               setUserSubscription(res.subscription);
+            }
+            if (isNowPro) {
+              setIsPending(false);
+              setIsDeactivated(false);
+              setActiveTab('entry');
             }
           }
         }}
         onSubscriptionUpdated={(updated) => {
           setUserSubscription(updated);
-          if (updated.validUntil) {
-            setUserProfile((prev) => (prev ? { ...prev, validUntil: updated.validUntil } : null));
-          }
+          setUserProfile((prev) => ({
+            ...(prev || {}),
+            status: 'approved',
+            validUntil: updated.validUntil,
+            isPro: true,
+            displayName: currentUser?.displayName || prev?.displayName,
+            name: currentUser?.displayName || prev?.name,
+          }));
+          setIsPending(false);
+          setIsDeactivated(false);
+          setActiveTab('entry');
         }}
       />
     );

@@ -561,11 +561,17 @@ export function subscribeToCurrentUserDoc(
   let mergedData: any = {};
 
   const processAndNotify = () => {
-    const rawStatus = (mergedData.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected') || 'pending';
-    const status = adminRole ? 'active' : rawStatus;
+    const isProSubscription = Boolean(
+      mergedData.isPro ||
+      mergedData.subscriptionStatus === 'active' ||
+      mergedData.subscription?.isPro ||
+      mergedData.subscription?.paymentStatus === 'active'
+    );
+    const rawStatus = (mergedData.status as 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected') || (isProSubscription ? 'approved' : 'pending');
+    const status = adminRole ? 'active' : (rawStatus === 'pending' && isProSubscription ? 'approved' : rawStatus);
     const isPending = !adminRole && status === 'pending';
     const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked' || status === 'rejected');
-    const isApproved = adminRole || status === 'approved' || status === 'active';
+    const isApproved = adminRole || status === 'approved' || status === 'active' || isProSubscription;
 
     const permissions = normalizeUserPermissions(mergedData.permissions);
     const rateConfig = mergedData.rateConfig 
@@ -622,10 +628,11 @@ export function subscribeToCurrentUserDoc(
     (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
+        mergedData = { ...mergedData, ...data };
         if (data.subscription) {
           mergedData.subscription = data.subscription;
-          processAndNotify();
         }
+        processAndNotify();
       }
     },
     (error) => {

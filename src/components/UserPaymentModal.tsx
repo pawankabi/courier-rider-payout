@@ -205,9 +205,9 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
           name: userName && userName.trim().length > 0 ? userName : 'PAWAN KABI',
           phone: userPhone && userPhone.trim().length >= 10 ? userPhone : '9110913070',
         },
-        onSuccess: async (response, paidPlan) => {
+        onSuccess: async (response, paidPlan, updatedSub) => {
           try {
-            const updated = await executeRazorpayAutoApproval(userId, userEmail || null, paidPlan, response);
+            const updated = updatedSub || (await executeRazorpayAutoApproval(userId, userEmail || null, paidPlan, response));
             onSubscriptionUpdated?.(updated);
             setRazorpaySuccessData({
               plan: paidPlan,

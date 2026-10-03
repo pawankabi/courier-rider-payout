@@ -1,5 +1,5 @@
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db, auth } from '../firebase';
 import { UserSubscription, createDefaultUserSubscription } from '../types';
 import { normalizeUserSubscription } from './firestoreSync';
 
@@ -142,7 +142,7 @@ export interface OpenRazorpayOptions {
     phone?: string;
   };
   customKeyId?: string;
-  onSuccess: (response: RazorpaySuccessResponse, plan: RazorpayPlan) => void | Promise<void>;
+  onSuccess: (response: RazorpaySuccessResponse, plan: RazorpayPlan, updatedSub?: UserSubscription) => void | Promise<void>;
   onDismiss?: () => void;
   onError?: (err: Error) => void;
 }
@@ -174,9 +174,27 @@ export async function openRazorpayCheckout({
     name: 'Courier Rider Payout',
     description: 'Subscription Plan Payout Service',
     image: 'https://cdn-icons-png.flaticon.com/512/2830/2830312.png',
-    handler: function (response: RazorpaySuccessResponse) {
+    handler: async function (response: RazorpaySuccessResponse) {
       try {
-        onSuccess(response, plan);
+        const resolvedUserId = (
+          user?.id ||
+          (user as any)?.uid ||
+          auth.currentUser?.uid ||
+          (typeof window !== 'undefined' ? localStorage.getItem('cp_current_uid') : null) ||
+          'current_user'
+        ).trim();
+
+        // 1. BULLETPROOF FRONTEND AUTO-ACTIVATION IMMEDIATELY INSIDE HANDLER
+        const activationResult = await activateUserPlanImmediately(
+          resolvedUserId,
+          plan.id,
+          response.razorpay_payment_id,
+          user.email || auth.currentUser?.email
+        );
+
+        if (onSuccess) {
+          await onSuccess(response, plan, activationResult.subscription);
+        }
       } catch (err: any) {
         console.error('Error in Razorpay success callback:', err);
         onError?.(err);
@@ -235,38 +253,53 @@ export interface RazorpayTransactionRecord {
 }
 
 /**
- * On successful payment:
- * - Update user's subscription state to active immediately.
- * - Save transaction record with date, plan, and payment ID.
- * - Updates users/{userId} and all_users/{userId} in Firestore.
- * - Refreshes local storage cache.
+ * Helper to immediately activate user plan with merge: true in Firestore and update localStorage.
+ * Updates both users/{userId} and all_users/{userId} documents.
  */
-export async function executeRazorpayAutoApproval(
+export async function activateUserPlanImmediately(
   userId: string,
-  userEmail: string | null,
-  plan: RazorpayPlan,
-  response: RazorpaySuccessResponse
-): Promise<UserSubscription> {
-  const userRef = doc(db, 'users', userId);
-  const allUserRef = doc(db, 'all_users', userId);
+  planId: string,
+  paymentId: string,
+  userEmail?: string | null
+): Promise<{
+  subscription: UserSubscription;
+  validUntil: string;
+  plan: RazorpayPlan;
+}> {
+  const effectiveUserId = (
+    userId ||
+    auth.currentUser?.uid ||
+    (typeof window !== 'undefined' ? localStorage.getItem('cp_current_uid') : null) ||
+    'current_user'
+  ).trim();
+
+  const effectiveEmail = userEmail || auth.currentUser?.email || null;
+  const matchedPlan = RAZORPAY_PLANS.find((p) => p.id === planId) || RAZORPAY_PLANS[0];
+  const durationDays = matchedPlan.durationDays || 30;
+
+  const now = Date.now();
+  const activatedAt = new Date(now).toISOString();
+
+  // Read current subscription to preserve prior payment history and extend expiration if active
+  const userRef = doc(db, 'users', effectiveUserId);
+  const allUserRef = doc(db, 'all_users', effectiveUserId);
 
   let currentSub = createDefaultUserSubscription();
   try {
-    const snap = await getDoc(userRef);
-    if (snap.exists() && snap.data()?.subscription) {
-      currentSub = normalizeUserSubscription(snap.data().subscription);
-    } else {
-      const allSnap = await getDoc(allUserRef);
-      if (allSnap.exists() && allSnap.data()?.subscription) {
-        currentSub = normalizeUserSubscription(allSnap.data().subscription);
-      }
+    const [userSnap, allSnap] = await Promise.all([
+      getDoc(userRef).catch(() => null),
+      getDoc(allUserRef).catch(() => null),
+    ]);
+
+    if (userSnap && userSnap.exists() && userSnap.data()?.subscription) {
+      currentSub = normalizeUserSubscription(userSnap.data().subscription);
+    } else if (allSnap && allSnap.exists() && allSnap.data()?.subscription) {
+      currentSub = normalizeUserSubscription(allSnap.data().subscription);
     }
   } catch (err) {
-    console.warn('Could not read existing subscription before Razorpay auto-approval:', err);
+    console.warn('Could not read existing subscription in activateUserPlanImmediately:', err);
   }
 
-  // Calculate new expiration date (extend if currently active)
-  const now = Date.now();
   let baseTimestamp = now;
   if (currentSub.validUntil && currentSub.paymentStatus === 'active') {
     const existingExpiry = new Date(currentSub.validUntil).getTime();
@@ -275,18 +308,17 @@ export async function executeRazorpayAutoApproval(
     }
   }
 
-  const validUntilTimestamp = baseTimestamp + plan.durationDays * 24 * 60 * 60 * 1000;
-  const newValidUntilIso = new Date(validUntilTimestamp).toISOString();
+  const finalExpiresAt = new Date(baseTimestamp + durationDays * 24 * 60 * 60 * 1000).toISOString();
 
   const historyItem = {
-    id: `rzp_${response.razorpay_payment_id}`,
-    date: new Date().toISOString(),
-    amount: plan.price,
-    utr: response.razorpay_payment_id,
+    id: `rzp_${paymentId}`,
+    date: activatedAt,
+    amount: matchedPlan.price,
+    utr: paymentId,
     slipUrl: 'RAZORPAY_LIVE_ONLINE_SUCCESS',
     approvedBy: 'razorpay_live_auto_approval',
     status: 'success',
-    notes: `Razorpay Live: ${plan.displayName} (${plan.durationDays} Days) • ID: ${response.razorpay_payment_id}`,
+    notes: `Razorpay Live: ${matchedPlan.displayName} (${durationDays} Days) • ID: ${paymentId}`,
   };
 
   const updatedSub: UserSubscription = {
@@ -294,90 +326,112 @@ export async function executeRazorpayAutoApproval(
     planType: 'paid',
     paymentStatus: 'active',
     isPro: true,
-    monthlyFee: plan.price,
-    validUntil: newValidUntilIso,
+    monthlyFee: matchedPlan.price,
+    validUntil: finalExpiresAt,
     paymentHistory: [historyItem, ...(currentSub.paymentHistory || [])],
   };
 
-  // Immediate local cache for instant unlock and transaction recording
-  try {
-    localStorage.setItem('cp_current_is_pro', 'true');
-    localStorage.setItem(`cp_sub_${userId}`, JSON.stringify(updatedSub));
-    localStorage.setItem(`cp_is_pro_${userId}`, 'true');
+  // 1. Immediately update localStorage with all standard keys so app state never gets locked out
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem('isPro', 'true');
+      localStorage.setItem('subscriptionStatus', 'active');
+      localStorage.setItem('cp_current_is_pro', 'true');
+      localStorage.setItem(`cp_is_pro_${effectiveUserId}`, 'true');
+      localStorage.setItem(`cp_sub_${effectiveUserId}`, JSON.stringify(updatedSub));
+      localStorage.setItem('cp_plan_expires_at', finalExpiresAt);
+      localStorage.setItem('cp_user_status', 'approved');
+      localStorage.setItem('cp_last_plan', matchedPlan.name);
+      localStorage.setItem('cp_last_payment_id', paymentId);
 
-    // Store transaction record in localStorage
-    const txRecord: RazorpayTransactionRecord = {
-      paymentId: response.razorpay_payment_id,
-      orderId: response.razorpay_order_id,
-      planId: plan.id,
-      planName: plan.name,
-      amount: plan.price,
-      durationDays: plan.durationDays,
-      date: new Date().toISOString(),
-    };
-    const rawHistory = localStorage.getItem('cp_razorpay_transactions');
-    const txHistory = rawHistory ? JSON.parse(rawHistory) : [];
-    localStorage.setItem('cp_razorpay_transactions', JSON.stringify([txRecord, ...txHistory]));
-    localStorage.setItem('cp_last_razorpay_tx', JSON.stringify(txRecord));
+      const txRecord: RazorpayTransactionRecord = {
+        paymentId: paymentId,
+        planId: matchedPlan.id,
+        planName: matchedPlan.name,
+        amount: matchedPlan.price,
+        durationDays: durationDays,
+        date: activatedAt,
+      };
+      const rawHistory = localStorage.getItem('cp_razorpay_transactions');
+      const txHistory = rawHistory ? JSON.parse(rawHistory) : [];
+      localStorage.setItem('cp_razorpay_transactions', JSON.stringify([txRecord, ...txHistory]));
+      localStorage.setItem('cp_last_razorpay_tx', JSON.stringify(txRecord));
+    } catch (e) {
+      console.warn('Failed to update localStorage in activateUserPlanImmediately:', e);
+    }
+  }
+
+  // 2. Exactly specified Firestore schema payload:
+  const firestorePayload: any = {
+    isPro: true,
+    isApproved: true,
+    status: 'approved',
+    subscriptionStatus: 'active',
+    plan: matchedPlan.name,
+    planId: matchedPlan.id,
+    planActivatedAt: activatedAt,
+    planExpiresAt: finalExpiresAt,
+    validUntil: finalExpiresAt,
+    lastPaymentId: paymentId,
+    lastPaymentAt: activatedAt,
+    updatedAt: activatedAt,
+    subscription: updatedSub,
+  };
+
+  if (effectiveEmail) {
+    firestorePayload.email = effectiveEmail;
+  }
+
+  // 3. Write with merge: true to prevent permission rejection on non-existent fields
+  try {
+    await Promise.all([
+      setDoc(userRef, firestorePayload, { merge: true }),
+      setDoc(allUserRef, firestorePayload, { merge: true }),
+    ]);
   } catch (err) {
-    console.warn('Failed to cache pro status and transaction to localStorage', err);
+    console.error('Error writing activation to Firestore:', err);
   }
 
-  // 1. Update personal user document in Firestore
-  try {
-    await updateDoc(userRef, {
-      subscription: updatedSub,
-      status: 'approved',
-      validUntil: newValidUntilIso,
-      isPro: true,
-      isApproved: true,
-      lastPaymentAt: serverTimestamp(),
-      subscriptionUpdatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    await setDoc(
-      userRef,
-      {
-        subscription: updatedSub,
-        status: 'approved',
-        validUntil: newValidUntilIso,
-        isPro: true,
-        isApproved: true,
-        email: userEmail,
-        lastPaymentAt: serverTimestamp(),
-        subscriptionUpdatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+  // 4. Dispatch global window event for instant React context / component update
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('courier-payout:plan-activated', {
+          detail: {
+            userId: effectiveUserId,
+            plan: matchedPlan,
+            paymentId,
+            subscription: updatedSub,
+            validUntil: finalExpiresAt,
+          },
+        })
+      );
+    } catch (e) {
+      console.warn('Could not dispatch plan-activated event:', e);
+    }
   }
 
-  // 2. Mirror update to all_users collection for Admin visibility
-  try {
-    await updateDoc(allUserRef, {
-      subscription: updatedSub,
-      status: 'approved',
-      validUntil: newValidUntilIso,
-      isPro: true,
-      isApproved: true,
-      lastPaymentAt: serverTimestamp(),
-      subscriptionUpdatedAt: serverTimestamp(),
-    });
-  } catch (e) {
-    await setDoc(
-      allUserRef,
-      {
-        subscription: updatedSub,
-        status: 'approved',
-        validUntil: newValidUntilIso,
-        isPro: true,
-        isApproved: true,
-        email: userEmail,
-        lastPaymentAt: serverTimestamp(),
-        subscriptionUpdatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
-  }
+  return {
+    subscription: updatedSub,
+    validUntil: finalExpiresAt,
+    plan: matchedPlan,
+  };
+}
 
-  return updatedSub;
+/**
+ * On successful payment auto-approval wrapper
+ */
+export async function executeRazorpayAutoApproval(
+  userId: string,
+  userEmail: string | null,
+  plan: RazorpayPlan,
+  response: RazorpaySuccessResponse
+): Promise<UserSubscription> {
+  const result = await activateUserPlanImmediately(
+    userId,
+    plan.id,
+    response.razorpay_payment_id,
+    userEmail
+  );
+  return result.subscription;
 }

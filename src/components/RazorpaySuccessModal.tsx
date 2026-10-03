@@ -30,6 +30,26 @@ export const RazorpaySuccessModal: React.FC<RazorpaySuccessModalProps> = ({
   validUntil,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [countdown, setCountdown] = useState(2);
+
+  // Auto-redirect to dashboard after 2 seconds
+  useEffect(() => {
+    if (!isOpen) return;
+    setCountdown(2);
+
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          onClose();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     if (isOpen) {
@@ -191,7 +211,7 @@ export const RazorpaySuccessModal: React.FC<RazorpaySuccessModalProps> = ({
             onClick={onClose}
             className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 hover:from-emerald-500 hover:to-blue-500 text-white font-extrabold text-sm shadow-xl shadow-emerald-950/50 flex items-center justify-center gap-2 transition active:scale-[0.98] cursor-pointer mt-2"
           >
-            <span>डैशबोर्ड शुरू करें (Go to Dashboard)</span>
+            <span>डैशबोर्ड शुरू करें ({countdown > 0 ? `${countdown}s में ऑटो-रीडायरेक्ट` : 'खुल रहा है...'})</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
