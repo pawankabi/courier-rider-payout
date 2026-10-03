@@ -24,6 +24,14 @@ import { submitUserPaymentSlip, getDefaultSubscriptionConfig, SUPER_ADMIN_EMAIL 
 import { validateImageFile, compressAndEncodeImage } from '../utils/imageUpload';
 import { PublicComplianceFooter } from './PublicComplianceFooter';
 import { LegalPoliciesModal, PolicyTab } from './LegalPoliciesModal';
+import { 
+  RAZORPAY_PLANS, 
+  RazorpayPlan, 
+  openRazorpayCheckout, 
+  executeRazorpayAutoApproval 
+} from '../services/razorpayCheckout';
+import { RazorpaySuccessModal } from './RazorpaySuccessModal';
+import { formatINR } from '../utils/formatters';
 
 interface PaywallLockScreenProps {
   currentUser: User;
@@ -63,6 +71,14 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
   const [enlargedSlipUrl, setEnlargedSlipUrl] = useState<string | null>(null);
   const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
   const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
+  const [selectedRzpPlanId, setSelectedRzpPlanId] = useState<'starter' | 'growth' | 'enterprise'>('growth');
+  const [isRazorpayLoading, setIsRazorpayLoading] = useState(false);
+  const [razorpayError, setRazorpayError] = useState<string | null>(null);
+  const [razorpaySuccessData, setRazorpaySuccessData] = useState<{
+    plan: RazorpayPlan;
+    paymentId: string;
+    validUntil?: string;
+  } | null>(null);
 
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
     setLegalPoliciesInitialTab(tab);
@@ -166,6 +182,52 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
       console.warn('Status check warning:', err);
     } finally {
       setIsCheckingStatus(false);
+    }
+  };
+
+  const handleRazorpayCheckout = async (planId?: 'starter' | 'growth' | 'enterprise') => {
+    const targetId = planId || selectedRzpPlanId;
+    const plan = RAZORPAY_PLANS.find((p) => p.id === targetId) || RAZORPAY_PLANS[1];
+
+    setIsRazorpayLoading(true);
+    setRazorpayError(null);
+
+    try {
+      await openRazorpayCheckout({
+        plan,
+        user: {
+          id: currentUser.uid,
+          email: currentUser.email || undefined,
+          name: userProfile?.displayName || userProfile?.name || currentUser.displayName || 'PAWAN KABI',
+          phone: (userProfile as any)?.phone || (userProfile as any)?.contact || '9110913070',
+        },
+        onSuccess: async (response, paidPlan) => {
+          try {
+            const updated = await executeRazorpayAutoApproval(currentUser.uid, currentUser.email || null, paidPlan, response);
+            if (onSubscriptionUpdated) {
+              onSubscriptionUpdated(updated);
+            }
+            setRazorpaySuccessData({
+              plan: paidPlan,
+              paymentId: response.razorpay_payment_id,
+              validUntil: updated.validUntil,
+            });
+            if (onRefreshStatus) {
+              await onRefreshStatus();
+            }
+          } catch (autoErr: any) {
+            console.error('Error in executeRazorpayAutoApproval:', autoErr);
+            alert('Razorpay भुगतान स्वीकृत हो गया है, कृपया ऐप पुनः रिफ्रेश करें।');
+          }
+        },
+        onError: (err) => {
+          setRazorpayError(err.message || 'Razorpay भुगतान प्रक्रिया में त्रुटि या रद्द किया गया।');
+        },
+      });
+    } catch (err: any) {
+      setRazorpayError(err?.message || 'Razorpay शुरू करने में त्रुटि।');
+    } finally {
+      setIsRazorpayLoading(false);
     }
   };
 
@@ -359,8 +421,99 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
             </div>
           </div>
         ) : (
-          /* Payment Grid: QR Code & Payment Instructions on Left, Upload Form on Right */
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
+          <div className="space-y-6">
+            {/* 1. RAZORPAY LIVE INSTANT ACTIVATION BANNER */}
+            <div className="bg-gradient-to-br from-blue-950/80 via-slate-900 to-indigo-950/80 border-2 border-blue-500/70 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-blue-500/30 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-blue-600/30 border border-blue-500/50 flex items-center justify-center text-blue-400">
+                    <Zap className="w-5 h-5 fill-blue-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                      <span>Razorpay ऑनलाइन भुगतान (Instant 0-Second Unlock)</span>
+                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                        LIVE
+                      </span>
+                    </h3>
+                    <p className="text-xs text-blue-200/80">
+                      प्लान चुनें और Razorpay से तुरंत भुगतान करें • 0 सेकंड में खाता स्वतः अनलॉक हो जाएगा
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {razorpayError && (
+                <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/60 text-xs text-rose-200 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span>{razorpayError}</span>
+                </div>
+              )}
+
+              {/* 3 Pricing Plans */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {RAZORPAY_PLANS.map((plan) => {
+                  const isSelected = selectedRzpPlanId === plan.id;
+                  return (
+                    <div
+                      key={plan.id}
+                      onClick={() => setSelectedRzpPlanId(plan.id)}
+                      className={`p-3.5 rounded-xl border transition cursor-pointer flex flex-col justify-between ${
+                        isSelected
+                          ? 'bg-blue-950/50 border-blue-500 ring-2 ring-blue-500/40 shadow-lg'
+                          : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-white">{plan.displayName}</span>
+                          {plan.badge && (
+                            <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              {plan.badge}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-lg font-black text-blue-300">{formatINR(plan.price)}</span>
+                          <span className="text-[11px] text-slate-400">/ {plan.durationLabel}</span>
+                        </div>
+                        <p className="text-[10px] text-slate-300 leading-tight">{plan.tagline}</p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedRzpPlanId(plan.id);
+                          handleRazorpayCheckout(plan.id);
+                        }}
+                        disabled={isRazorpayLoading}
+                        className={`w-full mt-3 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                          isSelected
+                            ? 'bg-blue-600 hover:bg-blue-500 text-white shadow'
+                            : 'bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white'
+                        }`}
+                      >
+                        <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+                        <span>Pay {formatINR(plan.price)}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* OR SEPARATOR */}
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-slate-800"></div>
+              <span className="flex-shrink mx-4 text-xs font-bold text-slate-500 uppercase tracking-widest">
+                या मैन्युअल UPI ट्रांसफर व रसीद अपलोड करें (Alternative)
+              </span>
+              <div className="flex-grow border-t border-slate-800"></div>
+            </div>
+
+            {/* Payment Grid: QR Code & Payment Instructions on Left, Upload Form on Right */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
             {/* LEFT COLUMN: 1-TAP UPI PAYMENT & INSTRUCTIONS */}
             <div className="md:col-span-6 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl flex flex-col justify-between">
               <div className="space-y-3.5">
@@ -576,8 +729,21 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
               </form>
             </div>
           </div>
+        </div>
         )}
       </main>
+
+      {/* Razorpay Success Celebration Modal */}
+      <RazorpaySuccessModal
+        isOpen={!!razorpaySuccessData}
+        onClose={() => {
+          setRazorpaySuccessData(null);
+          if (onRefreshStatus) onRefreshStatus();
+        }}
+        plan={razorpaySuccessData?.plan || null}
+        paymentId={razorpaySuccessData?.paymentId || ''}
+        validUntil={razorpaySuccessData?.validUntil}
+      />
 
       {/* Enlarged Slip Modal */}
       {enlargedSlipUrl && (

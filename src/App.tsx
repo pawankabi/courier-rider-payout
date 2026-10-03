@@ -2135,6 +2135,7 @@ function MainCourierApp() {
           userId={currentUser?.uid || 'local_user'}
           userEmail={currentUser?.email || null}
           userName={currentUser?.displayName || userProfile?.name || 'Hub Manager'}
+          userPhone={currentUser?.phoneNumber || ''}
           masterQrCodeUrl={masterQrCodeUrl}
           isSuperAdmin={isSuperAdminUser}
           reason={paymentModalReason}

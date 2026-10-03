@@ -33,7 +33,15 @@ import {
   PayuTransactionResult, 
   executePayuAutoApproval 
 } from '../services/payuCheckout';
+import { 
+  RAZORPAY_PLANS, 
+  RazorpayPlan, 
+  openRazorpayCheckout, 
+  executeRazorpayAutoApproval,
+  getRazorpayKeyId 
+} from '../services/razorpayCheckout';
 import { PayuCheckoutModal } from './PayuCheckoutModal';
+import { RazorpaySuccessModal } from './RazorpaySuccessModal';
 import { compressAndEncodeImage, validateImageFile } from '../utils/imageUpload';
 import { formatINR } from '../utils/formatters';
 
@@ -44,6 +52,7 @@ export interface UserPaymentModalProps {
   userId: string;
   userEmail?: string | null;
   userName?: string;
+  userPhone?: string;
   masterQrCodeUrl?: string;
   isSuperAdmin?: boolean;
   onSubscriptionUpdated?: (updated: UserSubscription) => void;
@@ -59,6 +68,7 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
   userId,
   userEmail,
   userName = 'Hub Manager',
+  userPhone,
   masterQrCodeUrl,
   isSuperAdmin = false,
   onSubscriptionUpdated,
@@ -69,6 +79,13 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
   const [activeTab, setActiveTab] = useState<'plans' | 'qr' | 'history'>(activeTabDefault);
   const [selectedPlanId, setSelectedPlanId] = useState<'1_month' | '3_months' | '1_year'>('3_months');
   const [isPayuCheckoutOpen, setIsPayuCheckoutOpen] = useState(false);
+  const [isRazorpayLoading, setIsRazorpayLoading] = useState(false);
+  const [razorpaySuccessData, setRazorpaySuccessData] = useState<{
+    plan: RazorpayPlan;
+    paymentId: string;
+    validUntil?: string;
+  } | null>(null);
+  const [razorpayError, setRazorpayError] = useState<string | null>(null);
 
   // Manual QR Slip State
   const [slipFile, setSlipFile] = useState<File | null>(null);
@@ -162,6 +179,55 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
     } catch (err: any) {
       console.error('Failed to process PayU auto-approval in Firestore:', err);
       alert('PayU payment successful, but error updating user profile in cloud. Please refresh.');
+    }
+  };
+
+  const handleRazorpayCheckout = async (targetPlanId?: string) => {
+    const effectiveId = targetPlanId || selectedPlanId;
+    let rzpPlan = RAZORPAY_PLANS[1]; // default Growth ₹1399
+    if (effectiveId === '1_month' || effectiveId === 'starter') {
+      rzpPlan = RAZORPAY_PLANS[0]; // ₹499 Starter
+    } else if (effectiveId === '3_months' || effectiveId === 'growth') {
+      rzpPlan = RAZORPAY_PLANS[1]; // ₹1399 Growth
+    } else if (effectiveId === '1_year' || effectiveId === 'enterprise') {
+      rzpPlan = RAZORPAY_PLANS[2]; // ₹4999 Enterprise
+    }
+
+    setIsRazorpayLoading(true);
+    setRazorpayError(null);
+
+    try {
+      await openRazorpayCheckout({
+        plan: rzpPlan,
+        user: {
+          id: userId,
+          email: userEmail || undefined,
+          name: userName && userName.trim().length > 0 ? userName : 'PAWAN KABI',
+          phone: userPhone && userPhone.trim().length >= 10 ? userPhone : '9110913070',
+        },
+        onSuccess: async (response, paidPlan) => {
+          try {
+            const updated = await executeRazorpayAutoApproval(userId, userEmail || null, paidPlan, response);
+            onSubscriptionUpdated?.(updated);
+            setRazorpaySuccessData({
+              plan: paidPlan,
+              paymentId: response.razorpay_payment_id,
+              validUntil: updated.validUntil,
+            });
+            onSuccessToast?.(`🎉 ${paidPlan.displayName} भुगतान सफल! प्रो सदस्यता सक्रिय हुई।`);
+          } catch (autoErr: any) {
+            console.error('Error auto-approving Razorpay in cloud:', autoErr);
+            alert('Razorpay भुगतान सफल रहा, लेकिन प्रोफाइल अपडेट में त्रुटि आई। कृपया रिफ्रेश करें।');
+          }
+        },
+        onError: (err) => {
+          setRazorpayError(err.message || 'Razorpay भुगतान में त्रुटि या रद्द किया गया।');
+        },
+      });
+    } catch (err: any) {
+      setRazorpayError(err?.message || 'Razorpay शुरू करने में त्रुटि।');
+    } finally {
+      setIsRazorpayLoading(false);
     }
   };
 
@@ -419,28 +485,36 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
                           </p>
                         </div>
 
-                        <div className="mt-4 pt-3 border-t border-slate-800/80">
+                        <div className="mt-4 pt-3 border-t border-slate-800/80 space-y-1.5">
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               setSelectedPlanId(plan.id);
-                              setIsPayuCheckoutOpen(true);
+                              handleRazorpayCheckout(plan.id);
                             }}
-                            className={`w-full py-2 px-3 rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                            disabled={isRazorpayLoading}
+                            className={`w-full py-2.5 px-3 rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md ${
                               isSelected
-                                ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md'
-                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/30'
+                                : 'bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white'
                             }`}
                           >
-                            <span>Select Plan</span>
-                            <ArrowRight className="w-3.5 h-3.5" />
+                            <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+                            <span>Pay with Razorpay</span>
                           </button>
                         </div>
                       </div>
                     );
                   })}
                 </div>
+
+                {razorpayError && (
+                  <div className="p-3.5 rounded-2xl bg-rose-950/80 border border-rose-500/60 text-xs text-rose-200 flex items-start gap-2 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <span>{razorpayError}</span>
+                  </div>
+                )}
 
                 {/* Feature Comparison Checklist */}
                 <div className="p-4 rounded-2xl bg-slate-850/90 border border-slate-800 space-y-3">
@@ -475,31 +549,53 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
                   </div>
                 </div>
 
-                {/* Primary CTA: Launch PayU Checkout */}
-                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-slate-850 to-teal-950/60 border border-emerald-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                {/* Primary CTA: Launch Razorpay or PayU Checkout */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-950/70 via-slate-850 to-indigo-950/70 border border-blue-500/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                        Selected Plan:
+                      <span className="text-xs font-bold uppercase tracking-wider text-blue-400">
+                        चयनित प्लान (Selected Plan):
                       </span>
                       <span className="text-sm font-black text-white">
                         {selectedPlan.name}
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
-                      Total Payable: <strong className="text-emerald-300 font-mono text-sm">{formatINR(selectedPlan.price)}</strong> • Instant Auto-Approval
+                      Total Payable: <strong className="text-emerald-300 font-mono text-sm">{formatINR(selectedPlan.price)}</strong> • Razorpay Instant Auto-Activation
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    id="payu-open-checkout-btn"
-                    onClick={() => setIsPayuCheckoutOpen(true)}
-                    className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/25 transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer shrink-0"
-                  >
-                    <Lock className="w-4 h-4 text-slate-950" />
-                    <span>Pay {formatINR(selectedPlan.price)} with PayU</span>
-                  </button>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
+                    <button
+                      type="button"
+                      id="razorpay-open-checkout-btn"
+                      onClick={() => handleRazorpayCheckout()}
+                      disabled={isRazorpayLoading}
+                      className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-sm shadow-xl shadow-blue-600/30 transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {isRazorpayLoading ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                          <span>Razorpay लोड हो रहा है...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-4 h-4 text-amber-300 fill-amber-300" />
+                          <span>Pay {formatINR(selectedPlan.price)} with Razorpay</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      id="payu-open-checkout-btn"
+                      onClick={() => setIsPayuCheckoutOpen(true)}
+                      className="px-4 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-slate-400" />
+                      <span>PayU</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -638,6 +734,18 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
         userId={userId}
         userName={userName}
         onSuccess={handlePayuSuccess}
+      />
+
+      {/* Razorpay Success Celebration Modal */}
+      <RazorpaySuccessModal
+        isOpen={!!razorpaySuccessData}
+        onClose={() => {
+          setRazorpaySuccessData(null);
+          onClose();
+        }}
+        plan={razorpaySuccessData?.plan || null}
+        paymentId={razorpaySuccessData?.paymentId || ''}
+        validUntil={razorpaySuccessData?.validUntil}
       />
     </>
   );
