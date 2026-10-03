@@ -77,7 +77,7 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
   reason,
 }) => {
   const [activeTab, setActiveTab] = useState<'plans' | 'qr' | 'history'>(activeTabDefault);
-  const [selectedPlanId, setSelectedPlanId] = useState<'1_month' | '3_months' | '1_year'>('3_months');
+  const [selectedPlanId, setSelectedPlanId] = useState<'plan_test_1day' | '1_month' | '3_months' | '1_year' | string>('3_months');
   const [isPayuCheckoutOpen, setIsPayuCheckoutOpen] = useState(false);
   const [isRazorpayLoading, setIsRazorpayLoading] = useState(false);
   const [razorpaySuccessData, setRazorpaySuccessData] = useState<{
@@ -184,13 +184,20 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
 
   const handleRazorpayCheckout = async (targetPlanId?: string) => {
     const effectiveId = targetPlanId || selectedPlanId;
-    let rzpPlan = RAZORPAY_PLANS[1]; // default Growth ₹1399
-    if (effectiveId === '1_month' || effectiveId === 'starter') {
-      rzpPlan = RAZORPAY_PLANS[0]; // ₹499 Starter
-    } else if (effectiveId === '3_months' || effectiveId === 'growth') {
-      rzpPlan = RAZORPAY_PLANS[1]; // ₹1399 Growth
-    } else if (effectiveId === '1_year' || effectiveId === 'enterprise') {
-      rzpPlan = RAZORPAY_PLANS[2]; // ₹4999 Enterprise
+    let rzpPlan = RAZORPAY_PLANS.find((p) => p.id === effectiveId);
+    if (!rzpPlan) {
+      if (effectiveId === 'plan_test_1day') {
+        rzpPlan = RAZORPAY_PLANS.find((p) => p.id === 'plan_test_1day');
+      } else if (effectiveId === '1_month' || effectiveId === 'starter') {
+        rzpPlan = RAZORPAY_PLANS.find((p) => p.id === 'starter');
+      } else if (effectiveId === '3_months' || effectiveId === 'growth') {
+        rzpPlan = RAZORPAY_PLANS.find((p) => p.id === 'growth');
+      } else if (effectiveId === '1_year' || effectiveId === 'enterprise') {
+        rzpPlan = RAZORPAY_PLANS.find((p) => p.id === 'enterprise');
+      }
+    }
+    if (!rzpPlan) {
+      rzpPlan = RAZORPAY_PLANS[0];
     }
 
     setIsRazorpayLoading(true);

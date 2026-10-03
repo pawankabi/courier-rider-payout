@@ -4,7 +4,7 @@ import { UserSubscription, createDefaultUserSubscription } from '../types';
 import { normalizeUserSubscription } from './firestoreSync';
 
 export interface RazorpayPlan {
-  id: 'starter' | 'growth' | 'enterprise';
+  id: 'plan_test_1day' | 'starter' | 'growth' | 'enterprise' | string;
   name: string;
   displayName: string;
   nameHindi: string;
@@ -14,12 +14,35 @@ export interface RazorpayPlan {
   durationDays: number;
   durationLabel: string;
   tagline: string;
+  description?: string;
+  features?: string[];
+  isTrial?: boolean;
   popular?: boolean;
   badge?: string;
   savings?: number;
 }
 
 export const RAZORPAY_PLANS: RazorpayPlan[] = [
+  {
+    id: 'plan_test_1day',
+    name: '1-Day Test Pass',
+    displayName: '₹1 Test Pass',
+    nameHindi: '₹1 टेस्ट पास (1 दिन ट्रायल)',
+    price: 1,
+    amountInPaise: 100, // 100 paise = ₹1.00
+    originalPrice: 19,
+    durationDays: 1,
+    durationLabel: '1 Day Pass (24 Hours)',
+    description: '₹1 for 1 Day Trial / Testing Pass',
+    tagline: 'Instant 24-Hour Pro Trial • Live Payment & Auto-Activation Test',
+    badge: 'Testing / 1-Day Trial',
+    features: [
+      'Full Pro Access for 24 Hours',
+      'Instant Auto-Activation',
+      'Test Live Payment Integration',
+    ],
+    isTrial: true,
+  },
   {
     id: 'starter',
     name: 'Starter Plan',
@@ -31,6 +54,11 @@ export const RAZORPAY_PLANS: RazorpayPlan[] = [
     durationDays: 30,
     durationLabel: '30 Days Validity',
     tagline: 'Unlimited Fleet + Daily Payout Ledger + SIM SMS',
+    features: [
+      '30 Days Fleet Access',
+      'Daily Payout Ledger',
+      'SIM SMS Payout Alerts',
+    ],
   },
   {
     id: 'growth',
@@ -46,6 +74,11 @@ export const RAZORPAY_PLANS: RazorpayPlan[] = [
     badge: 'POPULAR (Save ₹98)',
     savings: 98,
     tagline: 'Most Popular Hub Choice • Save ₹98 with 90-day peace of mind',
+    features: [
+      '90 Days Fleet Management',
+      'Multi-device Cloud Backup',
+      '15-Day PDF Statement Export',
+    ],
   },
   {
     id: 'enterprise',
@@ -60,6 +93,11 @@ export const RAZORPAY_PLANS: RazorpayPlan[] = [
     badge: 'BEST VALUE (Save ₹989)',
     savings: 989,
     tagline: '1 Year Full Fleet Automation • VIP Support & Multi-device Sync',
+    features: [
+      '365 Days Full Automation',
+      'Priority VIP Support',
+      'Unlimited Cloud Storage & Sync',
+    ],
   },
 ];
 
@@ -198,13 +236,18 @@ export async function openRazorpayCheckout({
     amount: plan.amountInPaise,
     currency: 'INR',
     name: 'Courier Rider Payout',
-    description: 'Subscription Plan Payout Service',
+    description: plan.id === 'plan_test_1day' ? '1-Day Test Pass' : (plan.description || 'Subscription Plan Payout Service'),
     image: 'https://cdn-icons-png.flaticon.com/512/2830/2830312.png',
     handler: async function (response: RazorpaySuccessResponse) {
       try {
         const userRef = doc(db, 'users', resolvedUserId);
         const allUserRef = doc(db, 'all_users', resolvedUserId);
         const paymentDocRef = doc(db, 'razorpay_payments', response.razorpay_payment_id);
+
+        const durationDays = plan.durationDays || (plan.id === 'plan_test_1day' ? 1 : 30);
+        const expiresIso = plan.id === 'plan_test_1day' || durationDays === 1
+          ? new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString()
+          : new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
 
         const updateData = {
           isPro: true,
@@ -215,6 +258,9 @@ export async function openRazorpayCheckout({
           planId: plan.id,
           lastPaymentId: response.razorpay_payment_id,
           lastPaymentAt: new Date().toISOString(),
+          planActivatedAt: new Date().toISOString(),
+          planExpiresAt: expiresIso,
+          validUntil: expiresIso,
           updatedAt: new Date().toISOString(),
         };
 
@@ -337,8 +383,9 @@ export async function activateUserPlanImmediately(
   ).trim();
 
   const effectiveEmail = userEmail || auth.currentUser?.email || null;
-  const matchedPlan = RAZORPAY_PLANS.find((p) => p.id === planId) || RAZORPAY_PLANS[0];
-  const durationDays = matchedPlan.durationDays || 30;
+  const matchedPlan = RAZORPAY_PLANS.find((p) => p.id === planId) || RAZORPAY_PLANS[1];
+  const durationDays = matchedPlan.durationDays || (matchedPlan.id === 'plan_test_1day' ? 1 : 30);
+  const durationMs = durationDays * 24 * 60 * 60 * 1000;
 
   const now = Date.now();
   const activatedAt = new Date(now).toISOString();
@@ -364,14 +411,17 @@ export async function activateUserPlanImmediately(
   }
 
   let baseTimestamp = now;
-  if (currentSub.validUntil && currentSub.paymentStatus === 'active') {
+  if (currentSub.validUntil && currentSub.paymentStatus === 'active' && matchedPlan.id !== 'plan_test_1day') {
     const existingExpiry = new Date(currentSub.validUntil).getTime();
     if (!isNaN(existingExpiry) && existingExpiry > now) {
       baseTimestamp = existingExpiry;
     }
   }
 
-  const finalExpiresAt = new Date(baseTimestamp + durationDays * 24 * 60 * 60 * 1000).toISOString();
+  // 1-Day Trial Pass expires in exactly 24 hours from activation
+  const finalExpiresAt = matchedPlan.id === 'plan_test_1day' || durationDays === 1
+    ? new Date(now + 1 * 24 * 60 * 60 * 1000).toISOString()
+    : new Date(baseTimestamp + durationMs).toISOString();
 
   const historyItem = {
     id: `rzp_${paymentId}`,
@@ -642,7 +692,10 @@ export async function manualInstantUnlock(
 
     const now = Date.now();
     const activatedAt = new Date(now).toISOString();
-    const expiresAt = new Date(now + matchedPlan.durationDays * 24 * 60 * 60 * 1000).toISOString();
+    const durationDays = matchedPlan.durationDays || (matchedPlan.id === 'plan_test_1day' ? 1 : 30);
+    const expiresAt = matchedPlan.id === 'plan_test_1day' || durationDays === 1
+      ? new Date(now + 1 * 24 * 60 * 60 * 1000).toISOString()
+      : new Date(now + durationDays * 24 * 60 * 60 * 1000).toISOString();
 
     const historyItem = {
       id: `rzp_${paymentRef}`,

@@ -76,7 +76,7 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
   const [enlargedSlipUrl, setEnlargedSlipUrl] = useState<string | null>(null);
   const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
   const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
-  const [selectedRzpPlanId, setSelectedRzpPlanId] = useState<'starter' | 'growth' | 'enterprise'>('growth');
+  const [selectedRzpPlanId, setSelectedRzpPlanId] = useState<string>('growth');
   const [isRazorpayLoading, setIsRazorpayLoading] = useState(false);
   const [razorpayError, setRazorpayError] = useState<string | null>(null);
   const [razorpaySuccessData, setRazorpaySuccessData] = useState<{
@@ -196,7 +196,7 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
     }
   };
 
-  const handleRazorpayCheckout = async (planId?: 'starter' | 'growth' | 'enterprise') => {
+  const handleRazorpayCheckout = async (planId?: string) => {
     const targetId = planId || selectedRzpPlanId;
     const plan = RAZORPAY_PLANS.find((p) => p.id === targetId) || RAZORPAY_PLANS[1];
 

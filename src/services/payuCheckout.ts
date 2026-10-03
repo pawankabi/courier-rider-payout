@@ -54,7 +54,7 @@ export function saveStoredPayuConfig(config: Partial<PayuConfig>): PayuConfig {
 }
 
 export interface SubscriptionPlan {
-  id: '1_month' | '3_months' | '1_year';
+  id: 'plan_test_1day' | '1_month' | '3_months' | '1_year' | string;
   name: string;
   nameHindi: string;
   price: number;
@@ -65,9 +65,22 @@ export interface SubscriptionPlan {
   badge?: string;
   popular?: boolean;
   tagline: string;
+  isTrial?: boolean;
 }
 
 export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
+  {
+    id: 'plan_test_1day',
+    name: '1-Day Test Pass',
+    nameHindi: '₹1 टेस्ट पास (1 दिन ट्रायल)',
+    price: 1,
+    originalPrice: 19,
+    durationDays: 1,
+    durationLabel: '1 Day Pass (24 Hours)',
+    badge: 'Testing / 1-Day Trial',
+    tagline: '₹1 for 1 Day Trial / Testing Pass',
+    isTrial: true,
+  },
   {
     id: '1_month',
     name: '1 Month Plan',
@@ -135,7 +148,7 @@ export interface PayuTransactionResult {
   status: 'success' | 'failure';
   txnid: string;
   amount: number;
-  planId: '1_month' | '3_months' | '1_year';
+  planId: 'plan_test_1day' | '1_month' | '3_months' | '1_year' | string;
   planName: string;
   durationDays: number;
   paymentId?: string;
