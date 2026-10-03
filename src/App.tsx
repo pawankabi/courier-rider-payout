@@ -104,6 +104,8 @@ import { LegalPoliciesModal, PolicyTab } from './components/LegalPoliciesModal';
 import { PublicComplianceFooter } from './components/PublicComplianceFooter';
 import { App as CapacitorApp } from '@capacitor/app';
 import { activateUserPlanImmediately, reconcilePendingCheckoutOnResume } from './services/razorpayCheckout';
+import { AppLockScreen } from './components/AppLockScreen';
+import { isAppLockEnabled } from './services/biometricService';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -159,6 +161,22 @@ function MainCourierApp() {
     } catch {}
     return 'entry';
   });
+
+  // Optional Device Security / Biometric App Lock state
+  const [isAppLocked, setIsAppLocked] = useState<boolean>(() => isAppLockEnabled());
+
+  useEffect(() => {
+    const handleLockChanged = (e: Event) => {
+      const customEvent = e as CustomEvent<{ enabled: boolean }>;
+      if (customEvent.detail && !customEvent.detail.enabled) {
+        setIsAppLocked(false);
+      }
+    };
+    window.addEventListener('courier-payout:app-lock-changed', handleLockChanged);
+    return () => {
+      window.removeEventListener('courier-payout:app-lock-changed', handleLockChanged);
+    };
+  }, []);
 
   // Persist activeTab across refreshes, app switching, and lock/unlock
   useEffect(() => {
@@ -940,6 +958,10 @@ function MainCourierApp() {
     try {
       CapacitorApp.addListener('appStateChange', (state) => {
         if (state.isActive) {
+          // Re-engage app lock if enabled
+          if (isAppLockEnabled()) {
+            setIsAppLocked(true);
+          }
           handleResume();
         }
       }).then((handle) => {
@@ -1523,6 +1545,20 @@ function MainCourierApp() {
           <span>Loading Courier Manager...</span>
         </div>
       </div>
+    );
+  }
+
+  // DEVICE SECURITY / BIOMETRIC APP LOCK GATE:
+  // When enabled, requires Fingerprint / Face ID / Screen Lock authentication to view app
+  if (isAppLocked) {
+    return (
+      <AppLockScreen
+        onUnlock={() => setIsAppLocked(false)}
+        onSignOut={() => {
+          setIsAppLocked(false);
+          auth.signOut();
+        }}
+      />
     );
   }
 

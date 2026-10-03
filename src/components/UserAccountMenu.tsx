@@ -17,9 +17,11 @@ import {
   Download,
   CloudDownload,
   CreditCard,
-  Scale
+  Scale,
+  Fingerprint
 } from 'lucide-react';
 import { auth } from '../firebase';
+import { AppLockSettingRow } from './AppLockSettingRow';
 
 interface Props {
   user: FirebaseUser | null;
@@ -212,6 +214,9 @@ export const UserAccountMenu: React.FC<Props> = ({
               </button>
             )}
           </div>
+
+          {/* App Lock (Fingerprint / Face ID / PIN) Setting Toggle */}
+          <AppLockSettingRow userId={user.uid} />
 
           {/* User Security info */}
           <div className="px-1 text-[10px] text-slate-400 flex items-center gap-1.5">

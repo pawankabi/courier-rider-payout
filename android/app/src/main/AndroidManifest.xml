@@ -38,6 +38,7 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- Support external UPI payment intents (Google Pay, PhonePe, Paytm, BHIM, upi://) -->
     <queries>
