@@ -102,6 +102,7 @@ import { UserPaymentModal } from './components/UserPaymentModal';
 import { PaywallLockScreen } from './components/PaywallLockScreen';
 import { LegalPoliciesModal, PolicyTab } from './components/LegalPoliciesModal';
 import { PublicComplianceFooter } from './components/PublicComplianceFooter';
+import { activateUserPlanImmediately } from './services/razorpayCheckout';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -892,6 +893,49 @@ function MainCourierApp() {
     return () => {
       window.removeEventListener('courier-payout:plan-activated', handlePlanActivated);
     };
+  }, [currentUser]);
+
+  // Check URL parameters for return from mobile UPI app upon WebView reload
+  useEffect(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const urlPaymentId = urlParams.get('razorpay_payment_id') || hashParams.get('razorpay_payment_id');
+
+      if (urlPaymentId && currentUser) {
+        console.log('App detected razorpay_payment_id from return URL:', urlPaymentId);
+        const pendingRaw = localStorage.getItem('cp_pending_checkout');
+        const pending = pendingRaw ? JSON.parse(pendingRaw) : null;
+        const targetPlanId = pending?.planId || 'growth';
+
+        activateUserPlanImmediately(
+          currentUser.uid,
+          targetPlanId,
+          urlPaymentId,
+          currentUser.email
+        ).then((res) => {
+          setUserSubscription(res.subscription);
+          setUserProfile((prev) => ({
+            ...(prev || {}),
+            status: 'approved',
+            validUntil: res.validUntil,
+            isPro: true,
+            displayName: currentUser?.displayName || prev?.displayName,
+            name: currentUser?.displayName || prev?.name,
+          }));
+          setIsPending(false);
+          setIsDeactivated(false);
+          setActiveTab('entry');
+
+          const cleanUrl = window.location.pathname;
+          window.history.replaceState({}, document.title, cleanUrl);
+        }).catch((err) => {
+          console.error('Error auto-activating from return URL parameter:', err);
+        });
+      }
+    } catch (e) {
+      console.warn('URL parameter check warning:', e);
+    }
   }, [currentUser]);
 
   // Target user id: regular user's UID or the inspected user's UID when Super Admin is in inspection mode

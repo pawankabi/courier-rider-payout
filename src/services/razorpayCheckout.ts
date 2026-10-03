@@ -167,6 +167,32 @@ export async function openRazorpayCheckout({
 
   const key = customKeyId || import.meta.env.VITE_RAZORPAY_KEY_ID || getRazorpayKeyId() || LIVE_RAZORPAY_KEY_ID;
 
+  const resolvedUserId = (
+    user?.id ||
+    (user as any)?.uid ||
+    auth.currentUser?.uid ||
+    (typeof window !== 'undefined' ? localStorage.getItem('cp_current_uid') : null) ||
+    'current_user'
+  ).trim();
+
+  // 1. PERSIST PENDING TRANSACTION BEFORE LAUNCHING RAZORPAY
+  if (typeof window !== 'undefined') {
+    try {
+      const pendingData = {
+        userId: resolvedUserId,
+        planId: plan.id,
+        planName: plan.name,
+        amount: plan.price,
+        amountInPaise: plan.amountInPaise,
+        initiatedAt: Date.now(),
+      };
+      localStorage.setItem('cp_pending_checkout', JSON.stringify(pendingData));
+      console.log('Persisted pending checkout state before launching Razorpay:', pendingData);
+    } catch (e) {
+      console.warn('Could not save pending checkout state to localStorage', e);
+    }
+  }
+
   const options = {
     key: key,
     amount: plan.amountInPaise,
@@ -176,14 +202,6 @@ export async function openRazorpayCheckout({
     image: 'https://cdn-icons-png.flaticon.com/512/2830/2830312.png',
     handler: async function (response: RazorpaySuccessResponse) {
       try {
-        const resolvedUserId = (
-          user?.id ||
-          (user as any)?.uid ||
-          auth.currentUser?.uid ||
-          (typeof window !== 'undefined' ? localStorage.getItem('cp_current_uid') : null) ||
-          'current_user'
-        ).trim();
-
         // 1. BULLETPROOF FRONTEND AUTO-ACTIVATION IMMEDIATELY INSIDE HANDLER
         const activationResult = await activateUserPlanImmediately(
           resolvedUserId,
@@ -384,12 +402,39 @@ export async function activateUserPlanImmediately(
 
   // 3. Write with merge: true to prevent permission rejection on non-existent fields
   try {
+    const paymentDocRef = doc(db, 'razorpay_payments', paymentId);
     await Promise.all([
       setDoc(userRef, firestorePayload, { merge: true }),
       setDoc(allUserRef, firestorePayload, { merge: true }),
+      setDoc(
+        paymentDocRef,
+        {
+          paymentId,
+          userId: effectiveUserId,
+          email: effectiveEmail,
+          planId: matchedPlan.id,
+          planName: matchedPlan.name,
+          amount: matchedPlan.price,
+          status: 'captured',
+          activatedAt,
+          expiresAt: finalExpiresAt,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch((e) => console.warn('Could not record razorpay payment document:', e)),
     ]);
+    console.log('Successfully written activation payload to Firestore for user:', effectiveUserId);
   } catch (err) {
-    console.error('Error writing activation to Firestore:', err);
+    console.error('CRITICAL: Error writing activation to Firestore:', err);
+  }
+
+  // Clear pending checkout on successful activation
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem('cp_pending_checkout');
+    } catch (e) {
+      // Ignore
+    }
   }
 
   // 4. Dispatch global window event for instant React context / component update
@@ -434,4 +479,90 @@ export async function executeRazorpayAutoApproval(
     userEmail
   );
   return result.subscription;
+}
+
+/**
+ * Check if the user already has a successful payment in Firestore
+ */
+export async function checkRecentPaymentInFirestore(
+  userId: string
+): Promise<{ found: boolean; paymentId?: string; planId?: string }> {
+  try {
+    const userRef = doc(db, 'users', userId);
+    const snap = await getDoc(userRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data?.lastPaymentId && (data?.isPro || data?.subscriptionStatus === 'active')) {
+        return { found: true, paymentId: data.lastPaymentId, planId: data.planId || 'growth' };
+      }
+    }
+
+    const allUserRef = doc(db, 'all_users', userId);
+    const allSnap = await getDoc(allUserRef);
+    if (allSnap.exists()) {
+      const data = allSnap.data();
+      if (data?.lastPaymentId && (data?.isPro || data?.subscriptionStatus === 'active')) {
+        return { found: true, paymentId: data.lastPaymentId, planId: data.planId || 'growth' };
+      }
+    }
+  } catch (e) {
+    console.warn('Error checking recent payment in Firestore:', e);
+  }
+
+  return { found: false };
+}
+
+/**
+ * Verifies user entered payment ID (or pending checkout) and restores access immediately
+ */
+export async function verifyAndRestorePayment(
+  userId: string,
+  paymentIdInput: string,
+  userEmail?: string | null
+): Promise<{ success: boolean; message: string; subscription?: UserSubscription; validUntil?: string }> {
+  const cleanInput = paymentIdInput.trim();
+  if (!cleanInput) {
+    return { success: false, message: 'कृपया मान्य Razorpay Payment ID (उदा. pay_...) दर्ज करें।' };
+  }
+
+  // Format payment ID (ensure pay_ prefix if standard alphanumeric ID given)
+  let targetPaymentId = cleanInput;
+  if (!targetPaymentId.startsWith('pay_') && !targetPaymentId.startsWith('rzp_') && targetPaymentId.length > 5) {
+    targetPaymentId = `pay_${cleanInput}`;
+  }
+
+  let targetPlanId = 'growth';
+  try {
+    const pendingRaw = localStorage.getItem('cp_pending_checkout');
+    if (pendingRaw) {
+      const pending = JSON.parse(pendingRaw);
+      if (pending?.planId) {
+        targetPlanId = pending.planId;
+      }
+    }
+  } catch (e) {
+    // Ignore
+  }
+
+  try {
+    const res = await activateUserPlanImmediately(
+      userId,
+      targetPlanId,
+      targetPaymentId,
+      userEmail
+    );
+
+    return {
+      success: true,
+      message: `सत्यापित! आपका ${res.plan.displayName} खाता सफलतापूर्वक सक्रिय कर दिया गया है।`,
+      subscription: res.subscription,
+      validUntil: res.validUntil,
+    };
+  } catch (err: any) {
+    console.error('Error in verifyAndRestorePayment:', err);
+    return {
+      success: false,
+      message: err.message || 'भुगतान सत्यापन में त्रुटि हुई। कृपया पुनः प्रयास करें।',
+    };
+  }
 }
