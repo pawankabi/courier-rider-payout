@@ -32,7 +32,8 @@ import {
   executeRazorpayAutoApproval,
   activateUserPlanImmediately,
   verifyAndRestorePayment,
-  checkRecentPaymentInFirestore
+  checkRecentPaymentInFirestore,
+  manualInstantUnlock
 } from '../services/razorpayCheckout';
 import { RazorpaySuccessModal } from './RazorpaySuccessModal';
 import { formatINR } from '../utils/formatters';
@@ -84,49 +85,11 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
     validUntil?: string;
   } | null>(null);
 
-  // Restore Paid Access Modal states
+  // Immediate Recovery with Phone / Payment ID states
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [restorePaymentIdInput, setRestorePaymentIdInput] = useState('');
   const [restoreStatusMessage, setRestoreStatusMessage] = useState<string | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
-
-  // Check URL parameters for return from mobile UPI app
-  useEffect(() => {
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
-      const urlPaymentId = urlParams.get('razorpay_payment_id') || hashParams.get('razorpay_payment_id');
-
-      if (urlPaymentId && currentUser) {
-        console.log('Detected payment ID in return URL:', urlPaymentId);
-        const pendingRaw = localStorage.getItem('cp_pending_checkout');
-        const pending = pendingRaw ? JSON.parse(pendingRaw) : null;
-        const targetPlanId = pending?.planId || 'growth';
-
-        activateUserPlanImmediately(
-          currentUser.uid,
-          targetPlanId,
-          urlPaymentId,
-          currentUser.email
-        ).then((res) => {
-          onSubscriptionUpdated?.(res.subscription);
-          setRazorpaySuccessData({
-            plan: res.plan,
-            paymentId: urlPaymentId,
-            validUntil: res.validUntil,
-          });
-          onRefreshStatus?.();
-
-          const cleanUrl = window.location.pathname;
-          window.history.replaceState({}, document.title, cleanUrl);
-        }).catch((err) => {
-          console.error('Error auto-activating from URL parameter:', err);
-        });
-      }
-    } catch (e) {
-      console.warn('URL parameter check warning:', e);
-    }
-  }, [currentUser]);
 
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
     setLegalPoliciesInitialTab(tab);
@@ -285,7 +248,7 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
     setRestoreStatusMessage(null);
 
     try {
-      const res = await verifyAndRestorePayment(
+      const res = await manualInstantUnlock(
         currentUser.uid,
         restorePaymentIdInput.trim(),
         currentUser.email
@@ -299,7 +262,7 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
           validUntil: res.validUntil || res.subscription.validUntil,
         });
         setIsRestoreModalOpen(false);
-        onRefreshStatus?.();
+        if (onRefreshStatus) await onRefreshStatus();
       } else {
         setRestoreStatusMessage(res.message);
       }
@@ -622,25 +585,49 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
                 })}
               </div>
 
-              {/* Already Paid? Tap here to Verify / Unlock Fallback Button */}
-              <div className="mt-4 pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-950/60 p-3.5 rounded-xl border border-blue-500/20">
-                <div className="text-left">
-                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    <span>Already Paid via UPI / Razorpay? (पहले ही भुगतान किया है?)</span>
+              {/* Immediate Manual Unlock Input via Phone Number or Payment ID */}
+              <div className="mt-4 pt-3.5 border-t border-slate-800 bg-slate-950/80 p-4 rounded-2xl border border-blue-500/30 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-xs font-bold text-white">
+                      Already Paid? Instant Unlock (पहले ही भुगतान किया है? तुरंत अनलॉक करें)
+                    </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    यदि UPI ऐप (PhonePe / GPay) से लौटने पर ऐप रीलोड हो गया, तो यहाँ से तुरंत अनलॉक करें
-                  </p>
+                  <span className="text-[10px] text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20 font-mono">
+                    Instant Recovery
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsRestoreModalOpen(true)}
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-blue-900/30 flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-white" />
-                  <span>Verify / Unlock Access</span>
-                </button>
+                <p className="text-[11px] text-slate-300">
+                  यदि PhonePe / GPay से लौटने पर ऐप रीलोड हो गया, तो अपना <strong>10-अंक मोबाइल नंबर</strong> या <strong>Payment ID (pay_...)</strong> दर्ज करके तुरंत अनलॉक करें:
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={restorePaymentIdInput}
+                    onChange={(e) => setRestorePaymentIdInput(e.target.value)}
+                    placeholder="10-अंक मोबाइल नंबर या pay_..."
+                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    type="button"
+                    disabled={isRestoring || !restorePaymentIdInput.trim()}
+                    onClick={handleVerifyPaymentId}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-extrabold text-xs shadow-lg shadow-blue-900/30 flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0 active:scale-95"
+                  >
+                    {isRestoring ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
+                    )}
+                    <span>Verify & Unlock</span>
+                  </button>
+                </div>
+                {restoreStatusMessage && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+                    {restoreStatusMessage}
+                  </div>
+                )}
               </div>
             </div>
 
