@@ -215,12 +215,16 @@ export const DailyEntryTab: React.FC<Props> = ({
       ? selectedRider.incentiveRate
       : (userRateConfig?.defaultIncentiveRate ?? INCENTIVE_RATE);
 
-  const incentivesAllowed = 
-    canAccessIncentives && 
-    (userRateConfig?.incentivesEnabled !== false) && 
-    (selectedRider?.incentiveEnabled !== false);
+  const hubIncentiveActive = canAccessIncentives && (userRateConfig?.incentivesEnabled !== false);
+  const riderHasCustomIncentive = 
+    typeof selectedRider?.incentiveRate === 'number' && 
+    selectedRider.incentiveRate > 0 && 
+    selectedRider.incentiveEnabled !== false;
 
-  const isApplyingIncentive = incentivesAllowed && hasIncentive;
+  // Smart Incentive Visibility: Active if Hub enabled OR rider has specific custom incentive (> 0)
+  const showIncentiveControl = hubIncentiveActive || riderHasCustomIncentive;
+  const isApplyingIncentive = showIncentiveControl && hasIncentive;
+
   const parcelCount = typeof parcels === 'number' && parcels >= 0 ? parcels : 0;
   const baseAmount = parcelCount * activeBaseRate;
   const incentiveAmount = parcelCount * (isApplyingIncentive ? activeIncentiveRate : 0);
@@ -370,14 +374,14 @@ export const DailyEntryTab: React.FC<Props> = ({
                 Daily Delivery Entry
               </h2>
               <p className="text-xs text-slate-300">
-                Log rider deliveries with automatic ₹13 base & ₹2 incentive payout computation
+                Log rider deliveries with automatic ₹{activeBaseRate} base {showIncentiveControl && hasIncentive ? `& ₹${activeIncentiveRate} incentive` : ''} payout computation
               </p>
             </div>
           </div>
 
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/80 border border-emerald-500/30 text-xs font-medium text-emerald-200">
             <Coins className="w-3.5 h-3.5 text-amber-400" />
-            <span>Base: ₹13 | Incentive: ₹2</span>
+            <span>Base: ₹{activeBaseRate}{showIncentiveControl ? ` | Incentive: ₹${activeIncentiveRate}` : ''}</span>
           </div>
         </div>
 
@@ -565,9 +569,9 @@ export const DailyEntryTab: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Incentive Toggle / Checkbox */}
-            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-slate-800 to-slate-800/90 border border-slate-700/90 transition">
-              {incentivesAllowed ? (
+            {/* Incentive Toggle / Checkbox - Smart Visibility */}
+            {showIncentiveControl && (
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-slate-800 to-slate-800/90 border border-slate-700/90 transition">
                 <label className="flex items-start sm:items-center justify-between cursor-pointer gap-3">
                   <div className="flex items-center gap-3">
                     <input
@@ -606,18 +610,8 @@ export const DailyEntryTab: React.FC<Props> = ({
                     </span>
                   </div>
                 </label>
-              ) : (
-                <div className="flex items-center justify-between text-xs text-slate-400 py-1">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-slate-500" />
-                    <span>Incentive bonus system is disabled for this account/rider.</span>
-                  </div>
-                  <span className="font-bold text-slate-300 bg-slate-700/60 px-2.5 py-1 rounded-xl border border-slate-600">
-                    Fixed ₹{activeBaseRate} / pkt
-                  </span>
-                </div>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Optional Notes */}
             <div>
@@ -639,30 +633,32 @@ export const DailyEntryTab: React.FC<Props> = ({
               <div className="flex items-center justify-between text-xs text-slate-400">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-blue-500" />
-                  Base Amount ({parcelCount} pkts × ₹{BASE_RATE})
+                  Base Amount ({parcelCount} pkts × ₹{activeBaseRate})
                 </span>
                 <span className="font-semibold text-slate-200 text-sm">
                   {formatINR(baseAmount)}
                 </span>
               </div>
 
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span className="flex items-center gap-1.5">
+              {showIncentiveControl && (
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        isApplyingIncentive ? 'bg-emerald-400' : 'bg-slate-600'
+                      }`}
+                    />
+                    Incentive Amount ({isApplyingIncentive ? `${parcelCount} pkts × ₹${activeIncentiveRate}` : 'Not applied'})
+                  </span>
                   <span
-                    className={`w-2 h-2 rounded-full ${
-                      hasIncentive ? 'bg-emerald-400' : 'bg-slate-600'
+                    className={`font-semibold text-sm ${
+                      isApplyingIncentive ? 'text-emerald-400' : 'text-slate-500'
                     }`}
-                  />
-                  Incentive Amount ({hasIncentive ? `${parcelCount} pkts × ₹${INCENTIVE_RATE}` : 'Not applied'})
-                </span>
-                <span
-                  className={`font-semibold text-sm ${
-                    hasIncentive ? 'text-emerald-400' : 'text-slate-500'
-                  }`}
-                >
-                  +{formatINR(incentiveAmount)}
-                </span>
-              </div>
+                  >
+                    +{formatINR(incentiveAmount)}
+                  </span>
+                </div>
+              )}
 
               <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
                 <div>
@@ -773,7 +769,7 @@ export const DailyEntryTab: React.FC<Props> = ({
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
                         {entry.hasIncentive ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                            +₹2 ({formatINR(entry.incentiveAmount)})
+                            +₹{entry.incentiveRate ?? (entry.parcels > 0 ? Math.round(entry.incentiveAmount / entry.parcels) : activeIncentiveRate)} ({formatINR(entry.incentiveAmount)})
                           </span>
                         ) : (
                           <span className="text-[10px] text-slate-500">None</span>
@@ -831,7 +827,7 @@ export const DailyEntryTab: React.FC<Props> = ({
           riders={riders}
           onSave={onUpdateEntry}
           onClose={() => setEditingEntry(null)}
-          canAccessIncentives={incentivesAllowed}
+          canAccessIncentives={canAccessIncentives}
         />
       )}
 

@@ -143,8 +143,8 @@ export const EditEntryModal: React.FC<Props> = ({ entry, riders, onSave, onClose
           </div>
 
           {/* Incentive Toggle */}
-          <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80">
-            {incentiveAllowed ? (
+          {incentiveAllowed && (
+            <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80">
               <label className="flex items-center justify-between cursor-pointer">
                 <div className="flex items-center gap-2">
                   <input
@@ -169,15 +169,8 @@ export const EditEntryModal: React.FC<Props> = ({ entry, riders, onSave, onClose
                     : `₹${currentBaseRate}/pkt`}
                 </span>
               </label>
-            ) : (
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span>Incentives disabled for this rider/account</span>
-                <span className="px-2 py-0.5 rounded bg-slate-700 font-semibold text-slate-300">
-                  ₹{currentBaseRate}/pkt
-                </span>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Payment Status */}
           <div>
@@ -227,13 +220,15 @@ export const EditEntryModal: React.FC<Props> = ({ entry, riders, onSave, onClose
           {/* Live Calculation Summary */}
           <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-800 to-slate-850 border border-slate-700 space-y-2">
             <div className="flex justify-between text-xs text-slate-400">
-              <span>Base Amount ({parcelNum} × ₹{BASE_RATE})</span>
+              <span>Base Amount ({parcelNum} × ₹{currentBaseRate})</span>
               <span className="font-semibold text-slate-200">{formatINR(baseAmount)}</span>
             </div>
-            <div className="flex justify-between text-xs text-slate-400">
-              <span>Incentive Amount ({hasIncentive ? `${parcelNum} × ₹${INCENTIVE_RATE}` : 'Disabled'})</span>
-              <span className="font-semibold text-emerald-400">+{formatINR(incentiveAmount)}</span>
-            </div>
+            {incentiveAllowed && (
+              <div className="flex justify-between text-xs text-slate-400">
+                <span>Incentive Amount ({hasIncentive ? `${parcelNum} × ₹${currentIncentiveRate}` : 'Disabled'})</span>
+                <span className="font-semibold text-emerald-400">+{formatINR(incentiveAmount)}</span>
+              </div>
+            )}
             <div className="pt-2 border-t border-slate-700/80 flex justify-between items-center">
               <span className="text-xs font-bold text-slate-200">Total Updated Payout:</span>
               <span className="text-base font-extrabold text-blue-400">{formatINR(totalEarnings)}</span>

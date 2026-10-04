@@ -9,6 +9,8 @@ export interface WhatsAppSlipData {
   baseAmount: number;
   incentiveAmount: number;
   totalAmount: number; // Gross Total
+  baseRate?: number;
+  incentiveRate?: number;
   advanceAmount?: number;
   advanceDate?: string;
   advanceReason?: string;
@@ -39,6 +41,9 @@ export function generateWhatsAppMessage(data: WhatsAppSlipData): string {
   const advanceDateText = advance > 0 && data.advanceDate ? ` (Date: ${formatDateDisplay(data.advanceDate)})` : '';
   const advanceReasonText = advance > 0 && data.advanceReason ? ` [कारण: ${data.advanceReason}]` : '';
 
+  const effBaseRate = data.baseRate ?? (data.totalParcels > 0 ? Math.round(data.baseAmount / data.totalParcels) : 13);
+  const effIncRate = data.incentiveRate ?? (data.totalParcels > 0 && data.incentiveAmount > 0 ? Math.round(data.incentiveAmount / data.totalParcels) : 2);
+
   return (
     `📦 *COURIER RIDER PAYOUT SLIP* 📦\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -49,8 +54,8 @@ export function generateWhatsAppMessage(data: WhatsAppSlipData): string {
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `📊 *DELIVERY & RATE BREAKDOWN:*\n` +
     `• Total Parcels: *${data.totalParcels} pkts*\n` +
-    `• Base Payout: *${formatINR(data.baseAmount)}* (@ ₹13)\n` +
-    `• Total Incentive: *${formatINR(data.incentiveAmount)}* (@ ₹2)\n` +
+    `• Base Payout: *${formatINR(data.baseAmount)}* (@ ₹${effBaseRate})\n` +
+    (data.incentiveAmount > 0 ? `• Total Incentive: *${formatINR(data.incentiveAmount)}* (@ +₹${effIncRate})\n` : '') +
     `• Gross Total: *${formatINR(grossTotal)}*\n` +
     `• Advance Deducted: *${advance > 0 ? `-${formatINR(advance)}` : '₹0'}*${advanceDateText}${advanceReasonText}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +

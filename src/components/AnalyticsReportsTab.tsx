@@ -14,7 +14,7 @@ import {
   Filter,
   Phone
 } from 'lucide-react';
-import { DeliveryEntry, Rider } from '../types';
+import { DeliveryEntry, Rider, UserRateConfig } from '../types';
 import { 
   formatINR, 
   formatDateDisplay, 
@@ -30,9 +30,13 @@ interface Props {
   riders: Rider[];
   entries: DeliveryEntry[];
   onDownloadBackup?: () => void;
+  userRateConfig?: UserRateConfig;
 }
 
-export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownloadBackup }) => {
+export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownloadBackup, userRateConfig }) => {
+  const effBaseRate = userRateConfig?.defaultBaseRate ?? BASE_RATE;
+  const effIncentiveRate = userRateConfig?.defaultIncentiveRate ?? INCENTIVE_RATE;
+
   // Filter States
   const [selectedRiderIds, setSelectedRiderIds] = useState<string[]>([]); // empty = all riders
   const [startDate, setStartDate] = useState<string>(getDaysAgoDateString(14)); // default 15 days
@@ -132,15 +136,16 @@ export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownlo
   }, [selectedRiderIds, riders]);
 
   // PDF Export trigger
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     setIsExporting(true);
     try {
-      generatePayoutPDF({
+      await generatePayoutPDF({
         riderFilterName: riderFilterLabel,
         startDate,
         endDate,
         entries: filteredEntries,
         riders,
+        userRateConfig,
       });
     } catch (err) {
       console.error('Error generating PDF', err);
@@ -428,11 +433,11 @@ export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownlo
           </div>
         </div>
 
-        {/* Total Base Payout (₹13) */}
+        {/* Total Base Payout */}
         <div className="bg-slate-850 border border-slate-750 rounded-2xl p-4 shadow-lg flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              Base Payout (₹13)
+              Base Payout (₹{effBaseRate})
             </span>
             <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
               <Coins className="w-4 h-4" />
@@ -443,16 +448,16 @@ export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownlo
               {formatINR(totalBasePayout)}
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              {totalParcels} pkts × ₹{BASE_RATE}
+              {totalParcels} pkts × ₹{effBaseRate}
             </p>
           </div>
         </div>
 
-        {/* Total Incentive (₹2) */}
+        {/* Total Incentive */}
         <div className="bg-slate-850 border border-slate-750 rounded-2xl p-4 shadow-lg flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              Total Incentive (₹2)
+              Total Incentive (+₹{effIncentiveRate})
             </span>
             <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
               <Sparkles className="w-4 h-4" />
@@ -521,8 +526,8 @@ export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownlo
                     <th className="py-2.5 px-3 text-left">Date</th>
                     <th className="py-2.5 px-3 text-left">Rider Name</th>
                     <th className="py-2.5 px-3 text-center">Delivered Parcels</th>
-                    <th className="py-2.5 px-3 text-right">Base Pay (₹13)</th>
-                    <th className="py-2.5 px-3 text-center">Incentive (+₹2)</th>
+                    <th className="py-2.5 px-3 text-right">Base Pay (₹{effBaseRate})</th>
+                    <th className="py-2.5 px-3 text-center">Incentive (+₹{effIncentiveRate})</th>
                     <th className="py-2.5 px-3 text-right">Total Earnings</th>
                     <th className="py-2.5 px-3 text-center">Status</th>
                   </tr>

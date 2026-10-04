@@ -1713,7 +1713,7 @@ function MainCourierApp() {
                 </h1>
               </div>
               <p className="text-[11px] text-slate-400 font-medium mt-0.5 hidden sm:block">
-                ₹13 Base + ₹2 Incentive Payout & Delivery Hub • <span className="text-slate-300 font-semibold">{activeHubName}</span>
+                ₹{userRateConfig?.defaultBaseRate ?? 13} Base {userRateConfig?.incentivesEnabled !== false ? `+ ₹${userRateConfig?.defaultIncentiveRate ?? 2} Incentive ` : ''}Payout & Delivery Hub • <span className="text-slate-300 font-semibold">{activeHubName}</span>
               </p>
             </div>
           </div>

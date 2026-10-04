@@ -24,7 +24,7 @@ import {
   IndianRupee
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { DeliveryEntry, Rider, SettlementRecord } from '../types';
+import { DeliveryEntry, Rider, SettlementRecord, UserRateConfig } from '../types';
 import { 
   formatINR, 
   formatDateDisplay, 
@@ -70,6 +70,7 @@ export interface SettlementTabProps {
   onToggleEntryStatus: (entryId: string) => void;
   onNavigateToRiders: () => void;
   onViewLedger?: (riderId: string) => void;
+  userRateConfig?: UserRateConfig;
 }
 
 export const SettlementTab: React.FC<SettlementTabProps> = ({
@@ -81,6 +82,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   onToggleEntryStatus,
   onNavigateToRiders,
   onViewLedger,
+  userRateConfig,
 }) => {
   // Filter States
   const [selectedRiderId, setSelectedRiderId] = useState<string>(
@@ -332,11 +334,11 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   };
 
   // Download PDF Payout Slip with Advance Deduction
-  const handleDownloadPDFReceipt = () => {
+  const handleDownloadPDFReceipt = async () => {
     if (filteredEntries.length === 0) return;
     setIsExportingPDF(true);
     try {
-      generatePayoutPDF({
+      await generatePayoutPDF({
         riderFilterName: selectedRider.name,
         startDate,
         endDate,
@@ -345,6 +347,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         advanceDate: advanceDate || undefined,
         isSettlementReceipt: true,
         riders,
+        userRateConfig,
       });
     } catch (err) {
       console.error('Error generating PDF receipt', err);
@@ -905,7 +908,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
           {/* 2. Gross Delivery Total */}
           <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800">
             <div className="text-[10px] uppercase font-bold text-slate-400">
-              Gross Total (₹13 + ₹2)
+              Gross Total (Base + Incentive)
             </div>
             <div className="text-lg sm:text-xl font-extrabold text-slate-100 mt-1">
               {formatINR(grossTotal)}
@@ -1011,7 +1014,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
                         {entry.hasIncentive ? (
                           <span className="text-emerald-400 font-semibold">
-                            +₹2 ({formatINR(entry.incentiveAmount)})
+                            +₹{entry.incentiveRate ?? (entry.parcels > 0 ? Math.round(entry.incentiveAmount / entry.parcels) : INCENTIVE_RATE)} ({formatINR(entry.incentiveAmount)})
                           </span>
                         ) : (
                           <span className="text-slate-500">₹0</span>
