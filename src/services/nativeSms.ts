@@ -7,6 +7,19 @@ export interface BackgroundSmsPlugin {
   }>;
   checkSmsPermissions(): Promise<{ hasPermission: boolean }>;
   requestSmsPermissions(): Promise<{ granted: boolean }>;
+  checkContactsPermission?(): Promise<{ hasPermission: boolean }>;
+  requestContactsPermission?(): Promise<{ granted: boolean }>;
+  checkAllPermissions?(): Promise<{
+    smsGranted: boolean;
+    phoneGranted: boolean;
+    contactsGranted: boolean;
+    allGranted: boolean;
+  }>;
+  requestAllPermissions?(): Promise<{
+    granted: boolean;
+    smsGranted: boolean;
+    contactsGranted: boolean;
+  }>;
 }
 
 export const BackgroundSms = registerPlugin<BackgroundSmsPlugin>('BackgroundSms');
@@ -48,6 +61,66 @@ export async function ensureSmsPermissions(): Promise<boolean> {
   } catch (err) {
     console.warn('Error checking/requesting SMS permissions:', err);
     return false;
+  }
+}
+
+/**
+ * Automatically requests SMS and Contacts permissions on startup.
+ * Checks whether permissions are already granted or previously approved to avoid repeated dialogs.
+ */
+export async function autoRequestStartupPermissions(): Promise<{
+  smsGranted: boolean;
+  contactsGranted: boolean;
+  allGranted: boolean;
+}> {
+  if (!isNativeAndroid()) {
+    return { smsGranted: true, contactsGranted: true, allGranted: true };
+  }
+
+  try {
+    // 1. Check if permissions are already granted on device
+    if (BackgroundSms.checkAllPermissions) {
+      const current = await BackgroundSms.checkAllPermissions();
+      if (current && current.allGranted) {
+        try {
+          localStorage.setItem('cp_startup_perms_status', 'granted');
+        } catch {}
+        return { smsGranted: true, contactsGranted: true, allGranted: true };
+      }
+    }
+
+    // 2. Prevent repeated popups if user already granted
+    try {
+      const savedStatus = localStorage.getItem('cp_startup_perms_status');
+      if (savedStatus === 'granted') {
+        return { smsGranted: true, contactsGranted: true, allGranted: true };
+      }
+    } catch {}
+
+    // 3. Trigger native runtime permission prompt
+    if (BackgroundSms.requestAllPermissions) {
+      const res = await BackgroundSms.requestAllPermissions();
+      if (res && res.granted) {
+        try {
+          localStorage.setItem('cp_startup_perms_status', 'granted');
+        } catch {}
+      }
+      return {
+        smsGranted: Boolean(res?.smsGranted),
+        contactsGranted: Boolean(res?.contactsGranted),
+        allGranted: Boolean(res?.granted),
+      };
+    } else {
+      const smsReq = await BackgroundSms.requestSmsPermissions();
+      return {
+        smsGranted: Boolean(smsReq?.granted),
+        contactsGranted: false,
+        allGranted: Boolean(smsReq?.granted),
+      };
+    }
+  } catch (err) {
+    console.warn('Startup permissions auto-request notice:', err);
+    return { smsGranted: false, contactsGranted: false, allGranted: false };
   }
 }
 

@@ -37,8 +37,17 @@
 
     <!-- Permissions -->
 
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- SMS Permissions -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!-- Contacts Permissions (for picking rider/recipient numbers) -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- Biometric & Network (preserve existing features) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Support external UPI payment intents (Google Pay, PhonePe, Paytm, BHIM, upi://) -->
     <queries>

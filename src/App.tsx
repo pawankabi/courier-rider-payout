@@ -112,6 +112,7 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { activateUserPlanImmediately, reconcilePendingCheckoutOnResume } from './services/razorpayCheckout';
 import { AppLockScreen } from './components/AppLockScreen';
 import { isAppLockEnabled } from './services/biometricService';
+import { isNativeAndroid, autoRequestStartupPermissions } from './services/nativeSms';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -182,6 +183,15 @@ function MainCourierApp() {
     return () => {
       window.removeEventListener('courier-payout:app-lock-changed', handleLockChanged);
     };
+  }, []);
+
+  // Seamless Onboarding: Auto-request SMS & Contacts permissions on startup (Native Android)
+  useEffect(() => {
+    if (isNativeAndroid()) {
+      autoRequestStartupPermissions().catch((err) => {
+        console.warn('Auto startup permissions notice:', err);
+      });
+    }
   }, []);
 
   // Persist activeTab across refreshes, app switching, and lock/unlock
