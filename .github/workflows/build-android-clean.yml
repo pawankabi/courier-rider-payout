@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK (Clean Pipeline)
 
 on:
   push:
@@ -41,6 +41,16 @@ jobs:
         run: |
           npx cap sync android || npx cap copy android
 
+      - name: Setup Keystore
+        run: |
+          mkdir -p android/app/keystore
+          if [ ! -f android/app/keystore/release.keystore ]; then
+            keytool -genkey -v -keystore android/app/keystore/release.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=CourierPayout,O=CourierPayout,C=IN"
+          fi
+
       - name: Make Gradlew Executable
         run: chmod +x android/gradlew
 
@@ -48,7 +58,7 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Build Android APKs (Persistent Signed)
+      - name: Build Android APKs
         run: |
           cd android
           ./gradlew assembleDebug assembleRelease --no-daemon

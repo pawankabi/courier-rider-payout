@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Explicitly track keystore
+!android/app/keystore/*.keystore
