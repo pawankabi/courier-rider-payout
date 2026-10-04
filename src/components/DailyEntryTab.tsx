@@ -717,8 +717,14 @@ export const DailyEntryTab: React.FC<Props> = ({
         </div>
 
         {recentEntries.length === 0 ? (
-          <div className="text-center py-10 text-slate-500 text-xs">
-            No delivery entries recorded yet. Use the form above to add your first entry.
+          <div className="text-center py-12 px-4 rounded-2xl border border-dashed border-slate-800 bg-slate-900/40">
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center mx-auto mb-3">
+              <Package className="w-6 h-6" />
+            </div>
+            <h4 className="text-sm font-bold text-white mb-1">No deliveries recorded yet</h4>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              Use the form above to record your first parcel delivery and start calculating rider payouts.
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto -mx-4 sm:mx-0">

@@ -26,7 +26,8 @@ import {
   DollarSign,
   Sparkles,
   IndianRupee,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Plus
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry } from '../types';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
@@ -797,7 +798,25 @@ export const RidersTab: React.FC<Props> = ({
 
       {/* Riders List / Cards */}
       <div className="space-y-3">
-        {sortedFilteredRiders.length === 0 ? (
+        {riders.length === 0 ? (
+          <div className="bg-slate-850/60 border border-dashed border-slate-750 rounded-2xl p-10 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center mx-auto">
+              <Bike className="w-6 h-6" />
+            </div>
+            <h4 className="text-sm font-bold text-white">No delivery riders registered yet</h4>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              Add your delivery riders to track daily parcel dispatches, calculate incentives, and manage salary settlements.
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsAddModalOpen(true)}
+              className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-600/20 active:scale-95 transition"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add First Rider</span>
+            </button>
+          </div>
+        ) : sortedFilteredRiders.length === 0 ? (
           <div className="bg-slate-850 border border-slate-755 rounded-2xl p-8 text-center text-slate-400 text-sm">
             No riders match the current filter or search query.
           </div>
@@ -1256,8 +1275,8 @@ export const RidersTab: React.FC<Props> = ({
         <RiderAdvanceModal
           rider={advanceModalRider}
           onClose={() => setAdvanceModalRider(null)}
-          onSaveAdvance={onSaveAdvance}
-          onDeleteAdvance={onDeleteAdvance}
+          onSaveAdvance={onSaveAdvance || (async () => {})}
+          onDeleteAdvance={onDeleteAdvance || (async () => {})}
           hubSignature={hubSignature}
         />
       )}

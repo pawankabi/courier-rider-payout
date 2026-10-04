@@ -78,8 +78,14 @@ import {
   saveSettlementsToStorage,
   saveSettingsToStorage,
   loadSettingsFromStorage,
-  INITIAL_RIDERS 
+  hasUserCachedData 
 } from './utils/storage';
+import {
+  DailyEntrySkeleton,
+  RidersTabSkeleton,
+  AnalyticsReportsSkeleton,
+  SettlementTabSkeleton,
+} from './components/SkeletonLoaders';
 import { downloadJsonBackup, parseBackupFile } from './utils/backup';
 import { initKeepAlive } from './utils/keepAlive';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
@@ -209,13 +215,11 @@ function MainCourierApp() {
     setViewingLedgerRiderId(riderId);
   };
   
-  // Instant Cache-First initialization: load directly from localStorage in < 50ms!
+  // Instant Cache-First initialization: load authentic user data directly from localStorage in 0.0s!
   const [riders, setRiders] = useState<Rider[]>(() => loadRidersFromStorage());
-  const [entries, setEntries] = useState<DeliveryEntry[]>(() => {
-    const cachedRiders = loadRidersFromStorage();
-    return loadDeliveriesFromStorage(cachedRiders);
-  });
+  const [entries, setEntries] = useState<DeliveryEntry[]>(() => loadDeliveriesFromStorage());
   const [settlements, setSettlements] = useState<SettlementRecord[]>(() => loadSettlementsFromStorage());
+  const [isDataLoading, setIsDataLoading] = useState<boolean>(() => !hasUserCachedData());
   const [isInitialized, setIsInitialized] = useState(true);
 
   // Authentication & Cloud Sync state
@@ -817,6 +821,19 @@ function MainCourierApp() {
             (typeof window !== 'undefined' && (localStorage.getItem('cp_current_is_pro') === 'true' || localStorage.getItem(`cp_is_pro_${user.uid}`) === 'true'))
           );
 
+          // Instant 0ms load from authentic user local cache
+          const cachedRiders = loadRidersFromStorage(user.uid);
+          const cachedDeliveries = loadDeliveriesFromStorage([], user.uid);
+          const cachedSettlements = loadSettlementsFromStorage(user.uid);
+          setRiders(cachedRiders);
+          setEntries(cachedDeliveries);
+          setSettlements(cachedSettlements);
+          if (cachedRiders.length > 0 || cachedDeliveries.length > 0) {
+            setIsDataLoading(false);
+          } else {
+            setIsDataLoading(true);
+          }
+
           if (isCurrentPro) {
             migrateLocalStorageToFirestore(user.uid).catch((migErr) => {
               console.error('Migration error:', migErr);
@@ -830,31 +847,37 @@ function MainCourierApp() {
                   setRiders(userRiders);
                   saveRidersToStorage(userRiders, user.uid);
                   setSyncStatus('synced');
+                  setIsDataLoading(false);
                 },
                 onDeliveries: (newDeliveries) => {
                   const userDeliveries = newDeliveries.filter((d) => isEntityOwnedByUser(d, user.uid, user.email));
                   setEntries(userDeliveries);
                   saveDeliveriesToStorage(userDeliveries, user.uid);
                   setSyncStatus('synced');
+                  setIsDataLoading(false);
                 },
                 onSettlements: (newSettlements) => {
                   const userSettlements = newSettlements.filter((s) => isEntityOwnedByUser(s, user.uid, user.email));
                   setSettlements(userSettlements);
                   saveSettlementsToStorage(userSettlements, user.uid);
                   setSyncStatus('synced');
+                  setIsDataLoading(false);
                 },
                 onError: (err) => {
                   console.error('Firestore sync error:', err);
                   setSyncStatus('offline');
+                  setIsDataLoading(false);
                 },
               },
               user.email
             );
           } else {
             setSyncStatus('local');
+            setIsDataLoading(false);
           }
         }).catch((err) => {
           console.error('Error in syncUserProfile background task:', err);
+          setIsDataLoading(false);
         });
       } else {
         // Logged out / Local mode
@@ -867,11 +890,12 @@ function MainCourierApp() {
         setActiveTab((prev) => (prev === 'admin' ? 'entry' : prev));
         setSyncStatus('local');
         const loadedRiders = loadRidersFromStorage();
-        const loadedDeliveries = loadDeliveriesFromStorage(loadedRiders);
+        const loadedDeliveries = loadDeliveriesFromStorage();
         const loadedSettlements = loadSettlementsFromStorage();
         setRiders(loadedRiders);
         setEntries(loadedDeliveries);
         setSettlements(loadedSettlements);
+        setIsDataLoading(false);
       }
       setIsInitialized(true);
     });
@@ -2046,113 +2070,129 @@ function MainCourierApp() {
           </div>
         </div>
 
-        {activeTab === 'entry' && canAccessDailyEntry && (
-          <DailyEntryTab
-            key={`daily-entry-tab-${restoreRefreshKey}`}
-            riders={dashboardRiders}
-            entries={dashboardEntries}
-            onAddEntry={handleAddEntry}
-            onUpdateEntry={handleUpdateEntry}
-            onDeleteEntry={handleDeleteEntry}
-            onNavigateToRiders={() => setActiveTab('riders')}
-            userRateConfig={userRateConfig}
-            canAccessIncentives={canAccessIncentives}
-            canAccessFestivalGreetings={canAccessFestivalGreetings}
-          />
-        )}
-
-        {activeTab === 'riders' && canAccessRiders && (
-          <RidersTab
-            key={`riders-tab-${restoreRefreshKey}`}
-            riders={dashboardRiders}
-            entries={dashboardEntries}
-            settlements={dashboardSettlements}
-            onAddRider={handleAddRider}
-            onUpdateRider={handleUpdateRider}
-            onDeleteRider={handleDeleteRider}
-            onReorderRiders={handleReorderRiders}
-            onMarkEntriesPaid={handleMarkEntriesPaid}
-            onToggleEntryStatus={handleToggleEntryStatus}
-            onSaveAdvance={handleSaveRiderAdvance}
-            onDeleteAdvance={handleDeleteRiderAdvance}
-            onViewLedger={handleViewLedger}
-            canAccessFestivalGreetings={canAccessFestivalGreetings}
-            hubSignature={userRateConfig?.hubSignature}
-            isProUser={isProUser}
-            onOpenSubscriptionModal={openSubscriptionModal}
-          />
-        )}
-
-        {activeTab === 'reports' && canAccessReports && (
-          <AnalyticsReportsTab
-            riders={dashboardRiders}
-            entries={dashboardEntries}
-            onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
-          />
-        )}
-
-        {activeTab === 'settlement' && canAccessReports && (
-          <SettlementTab
-            riders={dashboardRiders}
-            entries={dashboardEntries}
-            settlements={dashboardSettlements}
-            hubName={activeHubName}
-            onMarkEntriesPaid={handleMarkEntriesPaid}
-            onToggleEntryStatus={handleToggleEntryStatus}
-            onNavigateToRiders={() => setActiveTab('riders')}
-            onViewLedger={handleViewLedger}
-          />
-        )}
-
-        {activeTab === 'festivals' && canAccessFestivalGreetings && (
-          <div className="space-y-6">
-            <FestivalBannerCard riders={dashboardRiders} hubSignature={userRateConfig?.hubSignature} />
-            <div className="bg-slate-850 border border-slate-755 rounded-2xl p-6 shadow-xl text-center space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center justify-center mx-auto text-2xl">
-                🪔
-              </div>
-              <h2 className="text-lg sm:text-xl font-black text-white">सरायकेला व राष्ट्रीय पावन पर्व शुभकामना केंद्र</h2>
-              <p className="text-xs sm:text-sm text-slate-300 max-w-xl mx-auto">
-                सरायकेला और कोल्हान के सभी पारंपरिक लोक पर्वों तथा राष्ट्रीय उत्सवों पर अपने कर्मठ कूरियर राइडर्स को एक क्लिक में व्यक्तिगत WhatsApp एवं SMS संदेश भेजें।
-              </p>
-              <div className="pt-2">
-                <button
-                  type="button"
-                  id="open-full-festival-modal-btn"
-                  onClick={() => setIsFestivalModalOpen(true)}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-lg active:scale-95 transition"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>सभी त्योहार व राइडर सूची खोलें (Send WhatsApp Greetings)</span>
-                </button>
-              </div>
-            </div>
-            {isFestivalModalOpen && (
-              <FestivalGreetingsModal
-                isOpen={isFestivalModalOpen}
-                onClose={() => setIsFestivalModalOpen(false)}
+        {isDataLoading ? (
+          activeTab === 'entry' ? (
+            <DailyEntrySkeleton />
+          ) : activeTab === 'riders' ? (
+            <RidersTabSkeleton />
+          ) : activeTab === 'reports' ? (
+            <AnalyticsReportsSkeleton />
+          ) : activeTab === 'settlement' ? (
+            <SettlementTabSkeleton />
+          ) : (
+            <DailyEntrySkeleton />
+          )
+        ) : (
+          <>
+            {activeTab === 'entry' && canAccessDailyEntry && (
+              <DailyEntryTab
+                key={`daily-entry-tab-${restoreRefreshKey}`}
                 riders={dashboardRiders}
-                hubSignature={userRateConfig?.hubSignature}
+                entries={dashboardEntries}
+                onAddEntry={handleAddEntry}
+                onUpdateEntry={handleUpdateEntry}
+                onDeleteEntry={handleDeleteEntry}
+                onNavigateToRiders={() => setActiveTab('riders')}
+                userRateConfig={userRateConfig}
+                canAccessIncentives={canAccessIncentives}
+                canAccessFestivalGreetings={canAccessFestivalGreetings}
               />
             )}
-          </div>
-        )}
 
-        {activeTab === 'admin' && isSuperAdminUser && (
-          <AdminDashboardTab 
-            currentAdminEmail={currentUser?.email} 
-            onInspectUser={(userToInspect) => {
-              setInspectedUser(userToInspect);
-              setActiveTab('entry');
-              setToastMessage({
-                text: `Switched to workspace for ${userToInspect.displayName || userToInspect.name || userToInspect.email}.`,
-                type: 'info'
-              });
-            }}
-            inspectedUserId={inspectedUser?.uid}
-            onOpenSyncOldApp={() => setIsSyncOldAppModalOpen(true)}
-            hubName={activeHubName}
-          />
+            {activeTab === 'riders' && canAccessRiders && (
+              <RidersTab
+                key={`riders-tab-${restoreRefreshKey}`}
+                riders={dashboardRiders}
+                entries={dashboardEntries}
+                settlements={dashboardSettlements}
+                onAddRider={handleAddRider}
+                onUpdateRider={handleUpdateRider}
+                onDeleteRider={handleDeleteRider}
+                onReorderRiders={handleReorderRiders}
+                onMarkEntriesPaid={handleMarkEntriesPaid}
+                onToggleEntryStatus={handleToggleEntryStatus}
+                onSaveAdvance={handleSaveRiderAdvance}
+                onDeleteAdvance={handleDeleteRiderAdvance}
+                onViewLedger={handleViewLedger}
+                canAccessFestivalGreetings={canAccessFestivalGreetings}
+                hubSignature={userRateConfig?.hubSignature}
+                isProUser={isProUser}
+                onOpenSubscriptionModal={openSubscriptionModal}
+              />
+            )}
+
+            {activeTab === 'reports' && canAccessReports && (
+              <AnalyticsReportsTab
+                riders={dashboardRiders}
+                entries={dashboardEntries}
+                onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
+              />
+            )}
+
+            {activeTab === 'settlement' && canAccessReports && (
+              <SettlementTab
+                riders={dashboardRiders}
+                entries={dashboardEntries}
+                settlements={dashboardSettlements}
+                hubName={activeHubName}
+                onMarkEntriesPaid={handleMarkEntriesPaid}
+                onToggleEntryStatus={handleToggleEntryStatus}
+                onNavigateToRiders={() => setActiveTab('riders')}
+                onViewLedger={handleViewLedger}
+              />
+            )}
+
+            {activeTab === 'festivals' && canAccessFestivalGreetings && (
+              <div className="space-y-6">
+                <FestivalBannerCard riders={dashboardRiders} hubSignature={userRateConfig?.hubSignature} />
+                <div className="bg-slate-850 border border-slate-755 rounded-2xl p-6 shadow-xl text-center space-y-4">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center justify-center mx-auto text-2xl">
+                    🪔
+                  </div>
+                  <h2 className="text-lg sm:text-xl font-black text-white">सरायकेला व राष्ट्रीय पावन पर्व शुभकामना केंद्र</h2>
+                  <p className="text-xs sm:text-sm text-slate-300 max-w-xl mx-auto">
+                    सरायकेला और कोल्हान के सभी पारंपरिक लोक पर्वों तथा राष्ट्रीय उत्सवों पर अपने कर्मठ कूरियर राइडर्स को एक क्लिक में व्यक्तिगत WhatsApp एवं SMS संदेश भेजें।
+                  </p>
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      id="open-full-festival-modal-btn"
+                      onClick={() => setIsFestivalModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-lg active:scale-95 transition"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>सभी त्योहार व राइडर सूची खोलें (Send WhatsApp Greetings)</span>
+                    </button>
+                  </div>
+                </div>
+                {isFestivalModalOpen && (
+                  <FestivalGreetingsModal
+                    isOpen={isFestivalModalOpen}
+                    onClose={() => setIsFestivalModalOpen(false)}
+                    riders={dashboardRiders}
+                    hubSignature={userRateConfig?.hubSignature}
+                  />
+                )}
+              </div>
+            )}
+
+            {activeTab === 'admin' && isSuperAdminUser && (
+              <AdminDashboardTab 
+                currentAdminEmail={currentUser?.email} 
+                onInspectUser={(userToInspect) => {
+                  setInspectedUser(userToInspect);
+                  setActiveTab('entry');
+                  setToastMessage({
+                    text: `Switched to workspace for ${userToInspect.displayName || userToInspect.name || userToInspect.email}.`,
+                    type: 'info'
+                  });
+                }}
+                inspectedUserId={inspectedUser?.uid}
+                onOpenSyncOldApp={() => setIsSyncOldAppModalOpen(true)}
+                hubName={activeHubName}
+              />
+            )}
+          </>
         )}
       </main>
 

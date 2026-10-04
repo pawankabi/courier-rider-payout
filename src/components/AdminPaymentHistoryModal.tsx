@@ -183,7 +183,7 @@ export const AdminPaymentHistoryModal: React.FC<AdminPaymentHistoryModalProps> =
                             <span className="font-mono font-bold text-amber-300 select-all">{item.utr}</span>
                             <button
                               type="button"
-                              onClick={() => handleCopyUtr(item.utr)}
+                              onClick={() => item.utr && handleCopyUtr(item.utr)}
                               className="text-slate-400 hover:text-white ml-0.5 cursor-pointer"
                               title="Copy UTR"
                             >
@@ -215,7 +215,7 @@ export const AdminPaymentHistoryModal: React.FC<AdminPaymentHistoryModalProps> =
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
-                          onClick={() => setZoomedSlipUrl(item.slipUrl)}
+                          onClick={() => setZoomedSlipUrl(item.slipUrl || null)}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-blue-300 text-xs border border-slate-800 transition cursor-pointer"
                         >
                           <Eye className="w-3.5 h-3.5" />

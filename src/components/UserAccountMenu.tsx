@@ -33,6 +33,7 @@ interface Props {
   onOpenSubscription?: () => void;
   onEnableCloudBackup?: () => void;
   onOpenLegalPolicies?: () => void;
+  onOpenProfileSettings?: () => void;
 }
 
 export const UserAccountMenu: React.FC<Props> = ({ 
@@ -44,7 +45,8 @@ export const UserAccountMenu: React.FC<Props> = ({
   onOpenSyncOldApp,
   onOpenSubscription,
   onEnableCloudBackup,
-  onOpenLegalPolicies
+  onOpenLegalPolicies,
+  onOpenProfileSettings
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -223,6 +225,20 @@ export const UserAccountMenu: React.FC<Props> = ({
             <Shield className="w-3 h-3 text-emerald-400 shrink-0" />
             <span>Only you can access this database.</span>
           </div>
+
+          {/* Profile & Security Settings action */}
+          {onOpenProfileSettings && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onOpenProfileSettings();
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 text-blue-300 border border-blue-500/30 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+            >
+              <UserIcon className="w-3.5 h-3.5 text-blue-400" />
+              <span>Profile & Security Settings</span>
+            </button>
+          )}
 
           {/* Subscription & Billing action */}
           {onOpenSubscription && (

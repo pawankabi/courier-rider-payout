@@ -37,6 +37,12 @@ import {
   RiderAdvanceEntry,
   PublicRiderStatement
 } from '../types';
+import { 
+  saveRidersToStorage, 
+  saveDeliveriesToStorage, 
+  saveSettlementsToStorage, 
+  setCachedAuthUserId 
+} from '../utils/storage';
 
 export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
 
@@ -125,9 +131,9 @@ export function isEntityOwnedByUser(
   if (entity.workspaceId === targetUid) return true;
   if (entity.userId === targetUid) return true;
 
-  // If untagged legacy item, only allow if it has no foreign tags at all
+  // If untagged legacy item, only allow if running in local guest mode
   if (!entity.createdBy && !entity.createdByEmail && !entity.userId && !entity.workspaceId) {
-    return true;
+    return !targetUid || targetUid === 'guest';
   }
 
   return false;
@@ -1646,6 +1652,8 @@ export function subscribeToUserData(
       if (orderA !== orderB) return orderA - orderB;
       return (a.joinedDate < b.joinedDate ? 1 : -1);
     });
+    setCachedAuthUserId(userId);
+    saveRidersToStorage(list, userId);
     callbacks.onRiders(list);
   };
 
@@ -1656,6 +1664,8 @@ export function subscribeToUserData(
       return isEntityOwnedByUser(d, userId, effectiveEmail);
     });
     list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    setCachedAuthUserId(userId);
+    saveDeliveriesToStorage(list, userId);
     callbacks.onDeliveries(list);
   };
 
@@ -1666,6 +1676,8 @@ export function subscribeToUserData(
       return isEntityOwnedByUser(s, userId, effectiveEmail);
     });
     list.sort((a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime());
+    setCachedAuthUserId(userId);
+    saveSettlementsToStorage(list, userId);
     callbacks.onSettlements(list);
   };
 
