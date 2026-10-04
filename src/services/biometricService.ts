@@ -108,18 +108,38 @@ export async function checkBiometryStatus(): Promise<BiometryStatus> {
  * Automatically allows PIN, Pattern, or Password fallback via `allowDeviceCredential: true`.
  */
 export async function authenticateWithBiometrics(
-  reason = 'Authenticate to unlock Courier Rider Payout'
+  reason = 'Unlock Courier Rider Payout'
 ): Promise<{ success: boolean; error?: string }> {
   try {
     await BiometricAuth.authenticate({
       reason,
       cancelTitle: 'Cancel',
-      allowDeviceCredential: true, // Enables PIN / Pattern / Password fallback automatically
-      iosFallbackTitle: 'Enter Passcode',
+      allowDeviceCredential: true, // Required for Device PIN/Pattern fallback
+      iosFallbackTitle: 'Use Passcode',
     });
     return { success: true };
   } catch (err: any) {
-    console.warn('Biometric authentication failed or cancelled:', err);
+    console.error('Biometric authentication error (attempt 1):', err);
+    const errMsg = String(err?.message || err || '').toLowerCase();
+    
+    // In Android BiometricPrompt, some vendor devices reject if cancelTitle is passed alongside allowDeviceCredential
+    if (errMsg.includes('negative') || errMsg.includes('credential') || errMsg.includes('button')) {
+      try {
+        await BiometricAuth.authenticate({
+          reason,
+          allowDeviceCredential: true,
+          iosFallbackTitle: 'Use Passcode',
+        });
+        return { success: true };
+      } catch (retryErr: any) {
+        console.error('Biometric authentication retry error:', retryErr);
+        return {
+          success: false,
+          error: retryErr?.message || 'Authentication cancelled or failed',
+        };
+      }
+    }
+
     return {
       success: false,
       error: err?.message || 'Authentication cancelled or failed',

@@ -169,8 +169,18 @@ function MainCourierApp() {
     return 'entry';
   });
 
-  // Optional Device Security / Biometric App Lock state
-  const [isAppLocked, setIsAppLocked] = useState<boolean>(() => isAppLockEnabled());
+  // Optional Device Security / Biometric App Lock state (session cached to avoid stuck loops)
+  const [isAppLocked, setIsAppLocked] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      if (sessionStorage.getItem('cp_unlocked_this_session') === 'true') {
+        return false;
+      }
+      return isAppLockEnabled();
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     const handleLockChanged = (e: Event) => {
@@ -1587,8 +1597,17 @@ function MainCourierApp() {
   if (isAppLocked) {
     return (
       <AppLockScreen
-        onUnlock={() => setIsAppLocked(false)}
+        currentUserEmail={currentUser?.email || undefined}
+        onUnlock={() => {
+          try {
+            sessionStorage.setItem('cp_unlocked_this_session', 'true');
+          } catch {}
+          setIsAppLocked(false);
+        }}
         onSignOut={() => {
+          try {
+            sessionStorage.removeItem('cp_unlocked_this_session');
+          } catch {}
           setIsAppLocked(false);
           auth.signOut();
         }}
