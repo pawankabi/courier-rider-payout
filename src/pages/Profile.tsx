@@ -24,17 +24,22 @@ import {
   checkBiometryStatus,
   BiometryStatus 
 } from '../services/biometricService';
+import { VerifiedBadge } from '../components/VerifiedBadge';
 
 interface ProfileProps {
   user?: FirebaseUser | null;
   onClose?: () => void;
   onOpenSubscription?: () => void;
+  hubName?: string;
+  isVerifiedHub?: boolean;
 }
 
 export const Profile: React.FC<ProfileProps> = ({ 
   user = auth.currentUser, 
   onClose,
-  onOpenSubscription 
+  onOpenSubscription,
+  hubName,
+  isVerifiedHub = false,
 }) => {
   const [appLockOn, setAppLockOn] = useState<boolean>(() => isAppLockEnabled());
   const [isVerifying, setIsVerifying] = useState(false);
@@ -143,16 +148,24 @@ export const Profile: React.FC<ProfileProps> = ({
           </div>
         )}
         <div className="overflow-hidden">
-          <div className="font-bold text-white text-base truncate">
-            {user?.displayName || 'Courier Hub Manager'}
+          <div className="font-bold text-white text-base flex items-center flex-wrap gap-1.5">
+            <span className="truncate">{hubName || user?.displayName || 'Courier Hub Manager'}</span>
+            {isVerifiedHub && <VerifiedBadge size={16} className="inline-block" />}
           </div>
           <div className="text-xs text-slate-400 truncate mt-0.5">
             {user?.email || 'Logged in via Google'}
           </div>
-          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mt-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[11px] font-semibold">
-            <ShieldCheck className="w-3 h-3" />
-            <span>Active Operator</span>
-          </div>
+          {isVerifiedHub ? (
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 mt-2 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[11px] font-bold">
+              <VerifiedBadge size={13} showTooltip={false} className="inline-block" />
+              <span>Verified Official Logistics Hub</span>
+            </div>
+          ) : (
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mt-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[11px] font-semibold">
+              <ShieldCheck className="w-3 h-3" />
+              <span>Active Operator</span>
+            </div>
+          )}
         </div>
       </div>
 

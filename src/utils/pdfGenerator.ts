@@ -18,6 +18,8 @@ export interface PDFReportOptions {
   riders?: Rider[];
   userRateConfig?: UserRateConfig;
   hubIncentivesEnabled?: boolean;
+  hubName?: string;
+  isVerifiedHub?: boolean;
 }
 
 function getDayOfWeek(dateStr: string): string {
@@ -41,6 +43,8 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     advanceDate,
     riders = [],
     userRateConfig,
+    hubName,
+    isVerifiedHub = false,
   } = options;
 
   const doc = new jsPDF({
@@ -129,17 +133,31 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     doc.rect(0, 0, pageWidth, 75, 'F');
 
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(17);
+    doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
-    doc.text('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 36);
+    doc.text('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 30);
 
-    doc.setFontSize(9.5);
+    const effHubName = hubName || userRateConfig?.hubSignature || 'Courier Delivery Hub';
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text(effHubName, 36, 45);
+    const hubW = doc.getTextWidth(effHubName);
+
+    if (isVerifiedHub) {
+      doc.setTextColor(29, 155, 240); // Official Blue #1D9BF0
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('[✓ Verified Logistics Hub]', 36 + hubW + 6, 45);
+    }
+
+    doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(203, 213, 225);
     const headerSub = showIncentiveCol
       ? `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${effBaseRate} | Incentive: Rs. ${effIncentiveRate}`
       : `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${effBaseRate}`;
-    doc.text(headerSub, 36, 54);
+    doc.text(headerSub, 36, 58);
 
     // Meta block
     doc.setTextColor(51, 65, 85);
@@ -409,17 +427,31 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     doc.rect(0, 0, pageWidth, 75, 'F');
 
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(17);
+    doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
-    doc.text('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 36);
+    doc.text('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 30);
 
-    doc.setFontSize(9.5);
+    const effHubName = hubName || userRateConfig?.hubSignature || 'Courier Delivery Hub';
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text(effHubName, 36, 45);
+    const hubW = doc.getTextWidth(effHubName);
+
+    if (isVerifiedHub) {
+      doc.setTextColor(29, 155, 240); // Official Blue #1D9BF0
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('[✓ Verified Logistics Hub]', 36 + hubW + 6, 45);
+    }
+
+    doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(203, 213, 225);
     const multiHeaderSub = hasAnyIncentiveInReport
       ? `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${defaultBaseRate} | Incentive: Rs. ${defaultIncentiveRate}`
       : `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${defaultBaseRate}`;
-    doc.text(multiHeaderSub, 36, 54);
+    doc.text(multiHeaderSub, 36, 58);
 
     // Meta block
     doc.setTextColor(51, 65, 85);

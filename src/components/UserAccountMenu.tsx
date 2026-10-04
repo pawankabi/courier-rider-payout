@@ -22,11 +22,13 @@ import {
 } from 'lucide-react';
 import { auth } from '../firebase';
 import { AppLockSettingRow } from './AppLockSettingRow';
+import { VerifiedBadge } from './VerifiedBadge';
 
 interface Props {
   user: FirebaseUser | null;
   syncStatus: 'synced' | 'syncing' | 'offline' | 'local';
   isProUser?: boolean;
+  isVerifiedHub?: boolean;
   onOpenAuth: (mode?: 'signin' | 'signup') => void;
   onDownloadBackup?: () => void;
   onOpenSyncOldApp?: () => void;
@@ -40,6 +42,7 @@ export const UserAccountMenu: React.FC<Props> = ({
   user, 
   syncStatus, 
   isProUser = false,
+  isVerifiedHub = false,
   onOpenAuth, 
   onDownloadBackup, 
   onOpenSyncOldApp,
@@ -119,6 +122,7 @@ export const UserAccountMenu: React.FC<Props> = ({
           <span className="hidden sm:inline font-bold text-white max-w-[110px] truncate">
             {user.displayName || user.email?.split('@')[0]}
           </span>
+          {isVerifiedHub && <VerifiedBadge size={13} className="inline-block" />}
           {syncStatus === 'syncing' ? (
             <RefreshCw className="w-3 h-3 text-amber-400 animate-spin" />
           ) : syncStatus === 'offline' ? (
@@ -154,8 +158,9 @@ export const UserAccountMenu: React.FC<Props> = ({
               </div>
             )}
             <div className="overflow-hidden">
-              <div className="font-bold text-white text-xs truncate">
-                {user.displayName || 'Depot Manager'}
+              <div className="font-bold text-white text-xs truncate flex items-center gap-1">
+                <span>{user.displayName || 'Depot Manager'}</span>
+                {isVerifiedHub && <VerifiedBadge size={13} className="inline-block" />}
               </div>
               <div className="text-[11px] text-slate-400 truncate">
                 {user.email}

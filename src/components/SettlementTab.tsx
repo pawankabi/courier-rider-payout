@@ -44,12 +44,14 @@ import {
   getNativeSmsUrl 
 } from '../services/smsService';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
+import { VerifiedBadge } from './VerifiedBadge';
 
 export interface SettlementTabProps {
   riders: Rider[];
   entries: DeliveryEntry[];
   settlements?: SettlementRecord[];
   hubName?: string;
+  isVerifiedHub?: boolean;
   onMarkEntriesPaid: (
     entryIds: string[],
     advanceAmount: number,
@@ -78,6 +80,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   entries,
   settlements = [],
   hubName,
+  isVerifiedHub = false,
   onMarkEntriesPaid,
   onToggleEntryStatus,
   onNavigateToRiders,
@@ -348,6 +351,8 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         isSettlementReceipt: true,
         riders,
         userRateConfig,
+        hubName,
+        isVerifiedHub,
       });
     } catch (err) {
       console.error('Error generating PDF receipt', err);
@@ -391,11 +396,23 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
               <Receipt className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                15-Day / Custom Payout Settlement
-              </h2>
-              <p className="text-xs text-slate-300">
-                Advance deductions, instant balance clearance, PDF statements, and WhatsApp slips
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                  15-Day / Custom Payout Settlement
+                </h2>
+                {isVerifiedHub && (
+                  <VerifiedBadge size={17} className="inline-block" />
+                )}
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5 flex items-center gap-1 flex-wrap">
+                {hubName && (
+                  <span className="font-semibold text-amber-200 inline-flex items-center gap-1">
+                    <span>{hubName}</span>
+                    {isVerifiedHub && <VerifiedBadge size={13} showTooltip={false} className="inline-block" />}
+                    <span className="text-slate-500">•</span>
+                  </span>
+                )}
+                <span>Advance deductions, instant balance clearance, PDF statements, and WhatsApp slips</span>
               </p>
             </div>
           </div>

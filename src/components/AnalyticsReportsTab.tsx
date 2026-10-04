@@ -31,9 +31,18 @@ interface Props {
   entries: DeliveryEntry[];
   onDownloadBackup?: () => void;
   userRateConfig?: UserRateConfig;
+  hubName?: string;
+  isVerifiedHub?: boolean;
 }
 
-export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownloadBackup, userRateConfig }) => {
+export const AnalyticsReportsTab: React.FC<Props> = ({ 
+  riders, 
+  entries, 
+  onDownloadBackup, 
+  userRateConfig,
+  hubName,
+  isVerifiedHub = false 
+}) => {
   const effBaseRate = userRateConfig?.defaultBaseRate ?? BASE_RATE;
   const effIncentiveRate = userRateConfig?.defaultIncentiveRate ?? INCENTIVE_RATE;
 
@@ -146,6 +155,8 @@ export const AnalyticsReportsTab: React.FC<Props> = ({ riders, entries, onDownlo
         entries: filteredEntries,
         riders,
         userRateConfig,
+        hubName,
+        isVerifiedHub,
       });
     } catch (err) {
       console.error('Error generating PDF', err);

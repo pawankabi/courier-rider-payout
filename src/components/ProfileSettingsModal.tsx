@@ -8,6 +8,8 @@ interface ProfileSettingsModalProps {
   onClose: () => void;
   user: FirebaseUser | null;
   onOpenSubscription?: () => void;
+  hubName?: string;
+  isVerifiedHub?: boolean;
 }
 
 export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
@@ -15,6 +17,8 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
   onClose,
   user,
   onOpenSubscription,
+  hubName,
+  isVerifiedHub,
 }) => {
   if (!isOpen) return null;
 
@@ -25,6 +29,8 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
           user={user}
           onClose={onClose}
           onOpenSubscription={onOpenSubscription}
+          hubName={hubName}
+          isVerifiedHub={isVerifiedHub}
         />
       </div>
     </div>

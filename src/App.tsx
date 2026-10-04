@@ -113,6 +113,8 @@ import { activateUserPlanImmediately, reconcilePendingCheckoutOnResume } from '.
 import { AppLockScreen } from './components/AppLockScreen';
 import { isAppLockEnabled } from './services/biometricService';
 import { isNativeAndroid, autoRequestStartupPermissions } from './services/nativeSms';
+import { VerifiedBadge } from './components/VerifiedBadge';
+import { ProfileSettingsModal } from './components/ProfileSettingsModal';
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -269,6 +271,7 @@ function MainCourierApp() {
   const [paymentModalReason, setPaymentModalReason] = useState<string | undefined>(undefined);
   const [masterQrCodeUrl, setMasterQrCodeUrl] = useState<string>('');
   const [hasAutoOpenedPaymentModal, setHasAutoOpenedPaymentModal] = useState<string | null>(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   const openSubscriptionModal = (reason?: string) => {
     setPaymentModalReason(reason);
@@ -395,6 +398,7 @@ function MainCourierApp() {
 
   const isExpired = isProUser ? (expiryTime > 0 && now > expiryTime) : (!expiryTime || now > expiryTime);
   const isPendingApproval = isProUser ? false : (userProfile ? (userProfile.status !== 'approved' && userProfile.status !== 'active') : true);
+  const isVerifiedHub = Boolean(isProUser && !isExpired);
 
   // 3-Day Expiry Warning Banner Calculation (Requirement 2):
   // const daysLeft = Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24));
@@ -1732,7 +1736,7 @@ function MainCourierApp() {
                 </h1>
               </div>
               <p className="text-[11px] text-slate-400 font-medium mt-0.5 hidden sm:block">
-                ₹{userRateConfig?.defaultBaseRate ?? 13} Base {userRateConfig?.incentivesEnabled !== false ? `+ ₹${userRateConfig?.defaultIncentiveRate ?? 2} Incentive ` : ''}Payout & Delivery Hub • <span className="text-slate-300 font-semibold">{activeHubName}</span>
+                ₹{userRateConfig?.defaultBaseRate ?? 13} Base {userRateConfig?.incentivesEnabled !== false ? `+ ₹${userRateConfig?.defaultIncentiveRate ?? 2} Incentive ` : ''}Payout & Delivery Hub • <span className="text-slate-300 font-semibold inline-flex items-center">{activeHubName}{isVerifiedHub && <VerifiedBadge size={14} className="ml-1 align-middle" />}</span>
               </p>
             </div>
           </div>
@@ -1874,6 +1878,7 @@ function MainCourierApp() {
               user={currentUser}
               syncStatus={syncStatus}
               isProUser={isProUser}
+              isVerifiedHub={isVerifiedHub}
               onOpenAuth={(mode) => {
                 setAuthModalMode(mode || 'signin');
                 setIsAuthModalOpen(true);
@@ -1883,6 +1888,7 @@ function MainCourierApp() {
               onOpenSubscription={!isSuperAdminUser ? () => openSubscriptionModal('manual') : undefined}
               onEnableCloudBackup={() => openSubscriptionModal('cloud_backup')}
               onOpenLegalPolicies={() => handleOpenLegalPolicies('about')}
+              onOpenProfileSettings={() => setIsProfileModalOpen(true)}
             />
           </div>
         </div>
@@ -2089,12 +2095,22 @@ function MainCourierApp() {
         {/* Hub Name Headline (Prominent & Multi-Color Gradient) */}
         <div className="mb-6 pb-4 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 via-indigo-300 to-amber-300 bg-clip-text text-transparent drop-shadow">
-              {activeHubName}
+            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight flex items-center flex-wrap gap-2">
+              <span className="bg-gradient-to-r from-blue-400 via-indigo-300 to-amber-300 bg-clip-text text-transparent drop-shadow">
+                {activeHubName}
+              </span>
+              {isVerifiedHub && (
+                <VerifiedBadge size={22} className="inline-block align-middle" />
+              )}
             </h2>
-            <p className="text-xs sm:text-sm text-slate-400 font-medium mt-1 flex items-center gap-1.5">
+            <p className="text-xs sm:text-sm text-slate-400 font-medium mt-1 flex items-center gap-1.5 flex-wrap">
               <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block shadow-sm shadow-emerald-400 animate-pulse"></span>
               <span>Authorized Dispatch & Payout Center</span>
+              {isVerifiedHub && (
+                <span className="ml-1 px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-bold">
+                  Official Verified
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -2155,6 +2171,9 @@ function MainCourierApp() {
                 riders={dashboardRiders}
                 entries={dashboardEntries}
                 onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
+                userRateConfig={userRateConfig}
+                hubName={activeHubName}
+                isVerifiedHub={isVerifiedHub}
               />
             )}
 
@@ -2164,6 +2183,8 @@ function MainCourierApp() {
                 entries={dashboardEntries}
                 settlements={dashboardSettlements}
                 hubName={activeHubName}
+                isVerifiedHub={isVerifiedHub}
+                userRateConfig={userRateConfig}
                 onMarkEntriesPaid={handleMarkEntriesPaid}
                 onToggleEntryStatus={handleToggleEntryStatus}
                 onNavigateToRiders={() => setActiveTab('riders')}
@@ -2404,6 +2425,16 @@ function MainCourierApp() {
         supportPhone="+91 9110913070"
         supportAddress="Saraikela, Jharkhand, India"
         operatingHours="Mon - Sat, 10:00 AM - 07:00 PM IST"
+      />
+
+      {/* Profile & Security Settings Modal */}
+      <ProfileSettingsModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        user={currentUser}
+        onOpenSubscription={() => openSubscriptionModal('manual')}
+        hubName={activeHubName}
+        isVerifiedHub={isVerifiedHub}
       />
 
       {/* In-App Khatabook Statement / Ledger Screen Overlay with sticky top Close/Back button */}
