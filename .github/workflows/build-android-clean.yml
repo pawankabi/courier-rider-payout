@@ -58,6 +58,15 @@ jobs:
               -dname "CN=CourierPayout,O=CourierPayout,C=IN"
           fi
 
+      - name: Extract Version Info
+        id: get_version
+        run: |
+          VERSION_NAME=$(grep "versionName" android/app/build.gradle | head -1 | awk -F '"' '{print $2}')
+          VERSION_CODE=$(grep "versionCode" android/app/build.gradle | head -1 | awk '{print $2}')
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "Building Release APK for Version: v$VERSION_NAME (Code: $VERSION_CODE)"
+
       - name: Make Gradlew Executable
         run: chmod +x android/gradlew
 
@@ -65,21 +74,14 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Build Android APKs
+      - name: Build Android Release APK
         run: |
           cd android
-          ./gradlew assembleDebug assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
-      - name: Upload Debug APK File
+      - name: Upload Official Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: Courier-Rider-Payout-Debug-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 14
-
-      - name: Upload Release APK File (Direct Update Ready)
-        uses: actions/upload-artifact@v4
-        with:
-          name: Courier-Rider-Payout-Release-APK
-          path: android/app/build/outputs/apk/release/app-release.apk
-          retention-days: 14
+          name: Courier-Rider-Payout-v${{ steps.get_version.outputs.version_name }}-Release-APK
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
