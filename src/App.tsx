@@ -341,11 +341,14 @@ function MainCourierApp() {
 
   // User Profile from Firestore all_users collection
   const [userProfile, setUserProfile] = useState<{
-    status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected';
+    status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected' | string;
     validUntil?: string;
     displayName?: string;
     name?: string;
     isPro?: boolean;
+    isSubscribed?: boolean;
+    subscription?: any;
+    subscriptionStatus?: string;
   } | null>(null);
 
   // Automatic Expiry Cut-Off ticker: ticks every 5 seconds to ensure instant automatic cut-off
@@ -364,11 +367,6 @@ function MainCourierApp() {
   const isAdmin = isSuperAdminUser;
 
   // Strict Validity Calculation & Hard Paywall Gate (Requirement 1):
-  // const now = new Date().getTime();
-  // const expiryTime = userProfile?.validUntil ? new Date(userProfile.validUntil).getTime() : 0;
-  // const isExpired = !expiryTime || now > expiryTime;
-  // const isPendingApproval = userProfile?.status !== 'approved';
-  // const isSuperAdminUser = currentUser.email === 'pawankabiseraikella@gmail.com';
   const now = currentTime;
   const expiryTime = userProfile?.validUntil
     ? new Date(userProfile.validUntil).getTime()
@@ -380,25 +378,54 @@ function MainCourierApp() {
     ? new Date(localStorage.getItem('cp_plan_expires_at')!).getTime()
     : 0);
 
-  // Freemium / Pro Status Evaluator
-  const isProUser = Boolean(
+  // Comprehensive check for active subscription across all possible user/hub state objects:
+  const isSubscribedHub = Boolean(
     isSuperAdminUser ||
+    userProfile?.isSubscribed ||
+    userProfile?.subscription?.isActive ||
+    userProfile?.subscriptionStatus === 'active' ||
+    userProfile?.status === 'active' ||
+    userProfile?.status === 'approved' ||
     userProfile?.isPro === true ||
     userSubscription?.isPro === true ||
+    (userSubscription?.paymentStatus as string) === 'active' ||
+    (userSubscription?.paymentStatus as string) === 'trial' ||
     (userSubscription?.planType === 'paid' &&
-      userSubscription?.paymentStatus === 'active' &&
+      (userSubscription?.paymentStatus as string) === 'active' &&
       (!userSubscription.validUntil || new Date(userSubscription.validUntil).getTime() > now)) ||
     (typeof window !== 'undefined' && (
+      localStorage.getItem('cp_subscribed') === 'true' ||
       localStorage.getItem('isPro') === 'true' ||
       localStorage.getItem('subscriptionStatus') === 'active' ||
       localStorage.getItem('cp_current_is_pro') === 'true' ||
-      (currentUser && localStorage.getItem(`cp_is_pro_${currentUser.uid}`) === 'true')
+      (currentUser && localStorage.getItem(`cp_is_pro_${currentUser.uid}`) === 'true') ||
+      (currentUser && localStorage.getItem(`cp_subscribed_${currentUser.uid}`) === 'true')
     ))
   );
 
+  const isProUser = isSubscribedHub;
+  const isVerifiedHub = isSubscribedHub;
+
+  // Persist confirmed subscription in localStorage for instant 0.0s cold-start display on Native Android
+  useEffect(() => {
+    if (isSubscribedHub) {
+      try {
+        localStorage.setItem('cp_subscribed', 'true');
+        localStorage.setItem('isPro', 'true');
+        localStorage.setItem('subscriptionStatus', 'active');
+        localStorage.setItem('cp_current_is_pro', 'true');
+        if (currentUser?.uid) {
+          localStorage.setItem(`cp_subscribed_${currentUser.uid}`, 'true');
+          localStorage.setItem(`cp_is_pro_${currentUser.uid}`, 'true');
+        }
+      } catch (e) {
+        console.warn('Storage sync error', e);
+      }
+    }
+  }, [isSubscribedHub, currentUser?.uid]);
+
   const isExpired = isProUser ? (expiryTime > 0 && now > expiryTime) : (!expiryTime || now > expiryTime);
   const isPendingApproval = isProUser ? false : (userProfile ? (userProfile.status !== 'approved' && userProfile.status !== 'active') : true);
-  const isVerifiedHub = Boolean(isProUser && !isExpired);
 
   // 3-Day Expiry Warning Banner Calculation (Requirement 2):
   // const daysLeft = Math.ceil((expiryTime - now) / (1000 * 60 * 60 * 24));
@@ -782,12 +809,37 @@ function MainCourierApp() {
 
         // 2. Real-time subscription to user document in all_users (immediate status, rateConfig, and permissions)
         unsubscribeUserDoc = subscribeToCurrentUserDoc(user.uid, user.email, (docData) => {
+          const isDocPro = Boolean(
+            (docData as any).isPro === true ||
+            (docData as any).isSubscribed === true ||
+            docData.subscription?.isPro === true ||
+            (docData.subscription as any)?.isActive === true ||
+            docData.subscription?.paymentStatus === 'active' ||
+            docData.status === 'active' ||
+            docData.status === 'approved'
+          );
+
           setUserProfile({
             status: docData.status,
             validUntil: docData.validUntil,
             displayName: user.displayName || undefined,
             name: user.displayName || undefined,
+            isPro: isDocPro,
+            isSubscribed: isDocPro,
+            subscription: docData.subscription,
+            subscriptionStatus: docData.subscription?.paymentStatus || (isDocPro ? 'active' : undefined),
           });
+
+          if (isDocPro) {
+            try {
+              localStorage.setItem('cp_subscribed', 'true');
+              localStorage.setItem(`cp_subscribed_${user.uid}`, 'true');
+              localStorage.setItem('isPro', 'true');
+              localStorage.setItem(`cp_is_pro_${user.uid}`, 'true');
+            } catch (e) {
+              console.warn(e);
+            }
+          }
 
           if (docData.isPending) {
             setIsPending(true);
@@ -813,12 +865,36 @@ function MainCourierApp() {
 
         // 3. Sync user profile with Firestore in background & check status
         syncUserProfile(user).then((profileResult) => {
+          const isProfilePro = Boolean(
+            profileResult.isPro === true ||
+            profileResult.subscription?.isPro === true ||
+            (profileResult.subscription as any)?.isActive === true ||
+            profileResult.subscription?.paymentStatus === 'active' ||
+            profileResult.status === 'active' ||
+            profileResult.status === 'approved'
+          );
+
           setUserProfile({
             status: profileResult.status,
             validUntil: profileResult.validUntil,
             displayName: user.displayName || undefined,
             name: user.displayName || undefined,
+            isPro: isProfilePro,
+            isSubscribed: isProfilePro,
+            subscription: profileResult.subscription,
+            subscriptionStatus: profileResult.subscription?.paymentStatus || (isProfilePro ? 'active' : undefined),
           });
+
+          if (isProfilePro) {
+            try {
+              localStorage.setItem('cp_subscribed', 'true');
+              localStorage.setItem(`cp_subscribed_${user.uid}`, 'true');
+              localStorage.setItem('isPro', 'true');
+              localStorage.setItem(`cp_is_pro_${user.uid}`, 'true');
+            } catch (e) {
+              console.warn(e);
+            }
+          }
 
           if (profileResult.subscription) {
             setUserSubscription(normalizeUserSubscription(profileResult.subscription));
@@ -1730,13 +1806,26 @@ function MainCourierApp() {
               <img src="/icon.svg" alt="Courier App Logo" className="w-7 h-7 rounded-lg" />
             </div>
             <div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <h1 className="font-extrabold text-sm sm:text-base text-white tracking-tight leading-none">
                   Courier Payout Pro
                 </h1>
+                {/* Mobile Hub Name Badge with Verified Rosette */}
+                <div className="sm:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 border border-slate-700/80 text-[11px] font-semibold text-slate-200">
+                  <span className="truncate max-w-[130px]">{activeHubName}</span>
+                  {isSubscribedHub && (
+                    <VerifiedBadge className="inline-block flex-shrink-0" size={13} />
+                  )}
+                </div>
               </div>
-              <p className="text-[11px] text-slate-400 font-medium mt-0.5 hidden sm:block">
-                ₹{userRateConfig?.defaultBaseRate ?? 13} Base {userRateConfig?.incentivesEnabled !== false ? `+ ₹${userRateConfig?.defaultIncentiveRate ?? 2} Incentive ` : ''}Payout & Delivery Hub • <span className="text-slate-300 font-semibold inline-flex items-center">{activeHubName}{isVerifiedHub && <VerifiedBadge size={14} className="ml-1 align-middle" />}</span>
+              <p className="text-[11px] text-slate-400 font-medium mt-0.5 hidden sm:flex items-center gap-1 flex-wrap">
+                <span>₹{userRateConfig?.defaultBaseRate ?? 13} Base {userRateConfig?.incentivesEnabled !== false ? `+ ₹${userRateConfig?.defaultIncentiveRate ?? 2} Incentive ` : ''}Payout & Delivery Hub •</span>
+                <span className="text-slate-300 font-semibold inline-flex items-center gap-1">
+                  <span>{activeHubName}</span>
+                  {isSubscribedHub && (
+                    <VerifiedBadge className="inline-block flex-shrink-0" size={14} />
+                  )}
+                </span>
               </p>
             </div>
           </div>
@@ -2095,14 +2184,14 @@ function MainCourierApp() {
         {/* Hub Name Headline (Prominent & Multi-Color Gradient) */}
         <div className="mb-6 pb-4 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight flex items-center flex-wrap gap-2">
-              <span className="bg-gradient-to-r from-blue-400 via-indigo-300 to-amber-300 bg-clip-text text-transparent drop-shadow">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-xl sm:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 via-indigo-300 to-amber-300 bg-clip-text text-transparent drop-shadow">
                 {activeHubName}
-              </span>
-              {isVerifiedHub && (
-                <VerifiedBadge size={22} className="inline-block align-middle" />
+              </h2>
+              {isSubscribedHub && (
+                <VerifiedBadge className="inline-block flex-shrink-0" size={22} />
               )}
-            </h2>
+            </div>
             <p className="text-xs sm:text-sm text-slate-400 font-medium mt-1 flex items-center gap-1.5 flex-wrap">
               <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block shadow-sm shadow-emerald-400 animate-pulse"></span>
               <span>Authorized Dispatch & Payout Center</span>

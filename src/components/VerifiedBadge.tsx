@@ -7,13 +7,13 @@ interface VerifiedBadgeProps {
 }
 
 export const VerifiedBadge: React.FC<VerifiedBadgeProps> = ({ 
-  className = "inline-block ml-1.5 align-middle", 
+  className = "inline-block flex-shrink-0 align-middle", 
   size = 18,
   showTooltip = true
 }) => {
   return (
     <span 
-      className="inline-flex items-center group relative cursor-pointer align-middle"
+      className="inline-flex items-center group relative cursor-pointer align-middle flex-shrink-0"
       title="Verified Official Logistics Hub"
     >
       <svg 
@@ -23,6 +23,7 @@ export const VerifiedBadge: React.FC<VerifiedBadgeProps> = ({
         fill="none" 
         xmlns="http://www.w3.org/2000/svg" 
         className={className}
+        style={{ width: `${size}px`, height: `${size}px`, minWidth: `${size}px`, minHeight: `${size}px` }}
         aria-label="Verified Official Logistics Hub"
       >
         {/* Official Scalloped Rosette Path */}
