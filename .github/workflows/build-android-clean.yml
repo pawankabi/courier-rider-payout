@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+# Automated Release Pipeline with Public GitHub Releases (v1.0.5)
 permissions:
   contents: write
 
