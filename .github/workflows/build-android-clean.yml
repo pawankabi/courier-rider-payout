@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Android APK
@@ -79,9 +82,26 @@ jobs:
           cd android
           ./gradlew assembleRelease --no-daemon
 
-      - name: Upload Official Release APK
+      - name: Upload Official Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Courier-Rider-Payout-v${{ steps.get_version.outputs.version_name }}-Release-APK
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
+
+      - name: Prepare Release APK Asset
+        run: |
+          cp android/app/build/outputs/apk/release/*.apk app-release.apk
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.version_name }}
+          name: Courier Rider Payout v${{ steps.get_version.outputs.version_name }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
