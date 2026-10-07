@@ -37,10 +37,12 @@ import {
   isValidIndianPhone, 
   cleanPhoneNumber, 
   formatDateDisplay, 
-  getTodayDateString 
+  getTodayDateString,
+  getDaysAgoDateString
 } from '../utils/formatters';
 import { FestivalBannerCard } from './FestivalBannerCard';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
+import { BulkDateRangeSmsModal } from './BulkDateRangeSmsModal';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 interface Props {
@@ -152,6 +154,78 @@ export const RidersTab: React.FC<Props> = ({
 
   // Festival Greetings Modal State
   const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
+
+  // Date Range Filter State for Payouts / Summaries
+  const [rangeStartDate, setRangeStartDate] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('cp_riders_range_start');
+      if (saved) return saved;
+    } catch {}
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}-01`;
+  });
+
+  const [rangeEndDate, setRangeEndDate] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('cp_riders_range_end');
+      if (saved) return saved;
+    } catch {}
+    return getTodayDateString();
+  });
+
+  const [isBulkSmsModalOpen, setIsBulkSmsModalOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('cp_riders_range_start', rangeStartDate);
+      localStorage.setItem('cp_riders_range_end', rangeEndDate);
+    } catch {}
+  }, [rangeStartDate, rangeEndDate]);
+
+  const handleSetPreset = (preset: 'this_month' | 'last_7_days' | 'last_30_days' | 'today' | 'all_time') => {
+    const today = getTodayDateString();
+    if (preset === 'today') {
+      setRangeStartDate(today);
+      setRangeEndDate(today);
+    } else if (preset === 'last_7_days') {
+      setRangeStartDate(getDaysAgoDateString(6));
+      setRangeEndDate(today);
+    } else if (preset === 'last_30_days') {
+      setRangeStartDate(getDaysAgoDateString(29));
+      setRangeEndDate(today);
+    } else if (preset === 'this_month') {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      setRangeStartDate(`${y}-${m}-01`);
+      setRangeEndDate(today);
+    } else if (preset === 'all_time') {
+      setRangeStartDate('');
+      setRangeEndDate('');
+    }
+  };
+
+  const getRiderRangeStats = (riderId: string) => {
+    const riderEntries = entries.filter((e) => {
+      if (e.riderId !== riderId) return false;
+      if (rangeStartDate && e.date < rangeStartDate) return false;
+      if (rangeEndDate && e.date > rangeEndDate) return false;
+      return true;
+    });
+    const parcels = riderEntries.reduce((sum, e) => sum + e.parcels, 0);
+    const earnings = riderEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
+    return { parcels, earnings, count: riderEntries.length };
+  };
+
+  const filteredRangeEntries = entries.filter((e) => {
+    if (rangeStartDate && e.date < rangeStartDate) return false;
+    if (rangeEndDate && e.date > rangeEndDate) return false;
+    return true;
+  });
+  const totalRangeParcels = filteredRangeEntries.reduce((sum, e) => sum + e.parcels, 0);
+  const totalRangeEarnings = filteredRangeEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
 
   const handlePhoneChange = (val: string) => {
     setPhone(val);
@@ -739,6 +813,85 @@ export const RidersTab: React.FC<Props> = ({
               </button>
             </div>
           )}
+          {/* Date Range Payout Summary & Bulk SMS Control Bar */}
+          <div className="mt-3 p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-sky-950/50 via-slate-900/90 to-blue-950/50 border border-sky-500/35 shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-sky-300">
+                <Calendar className="w-4 h-4 text-sky-400 shrink-0" />
+                <span>Date Range:</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={rangeStartDate}
+                  onChange={(e) => setRangeStartDate(e.target.value)}
+                  className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500"
+                />
+                <span className="text-slate-400 text-xs font-semibold">to</span>
+                <input
+                  type="date"
+                  value={rangeEndDate}
+                  onChange={(e) => setRangeEndDate(e.target.value)}
+                  className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Quick Presets */}
+              <div className="flex items-center gap-1 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('this_month')}
+                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-[11px] font-medium text-slate-300 hover:text-white transition"
+                >
+                  This Month
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('last_7_days')}
+                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-[11px] font-medium text-slate-300 hover:text-white transition"
+                >
+                  7 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('last_30_days')}
+                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-[11px] font-medium text-slate-300 hover:text-white transition"
+                >
+                  30 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('all_time')}
+                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-[11px] font-medium text-slate-300 hover:text-white transition"
+                >
+                  All Time
+                </button>
+              </div>
+            </div>
+
+            {/* Range Metrics & 1-Click Bulk Background SMS Action */}
+            <div className="flex items-center gap-2.5 flex-wrap justify-between sm:justify-end border-t lg:border-t-0 pt-2 lg:pt-0 border-slate-800">
+              <div className="flex items-center gap-2.5 bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
+                <div>
+                  <span className="text-slate-400 text-[11px]">Range Total: </span>
+                  <span className="font-bold text-sky-300">{formatINR(totalRangeEarnings)}</span>
+                </div>
+                <span className="text-slate-600">•</span>
+                <span className="font-semibold text-white">{totalRangeParcels} pkts</span>
+              </div>
+
+              <button
+                id="bulk-date-range-sms-btn"
+                type="button"
+                onClick={() => setIsBulkSmsModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-bold shadow-md shadow-sky-950/40 active:scale-95 transition"
+                title="Send personalized earnings summary SMS to all riders for this date range"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>Send Date Range SMS to All Riders</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Toolbar: Unpaid Only Toggle, Status Tabs, Sorting & Search */}
@@ -823,6 +976,7 @@ export const RidersTab: React.FC<Props> = ({
         ) : (
           sortedFilteredRiders.map((rider, index) => {
             const stats = getRiderStats(rider.id);
+            const rangeStats = getRiderRangeStats(rider.id);
             const isExpanded = !!expandedRiderIds[rider.id];
             const hasAdvance = Number(rider.totalAdvance || 0) > 0;
 
@@ -882,7 +1036,18 @@ export const RidersTab: React.FC<Props> = ({
                   </div>
 
                   {/* Middle: Earnings / Unpaid Badges */}
-                  <div className="flex items-center gap-4 flex-wrap sm:justify-end">
+                  <div className="flex items-center gap-3 sm:gap-4 flex-wrap sm:justify-end">
+                    {/* Filtered Date Range Earnings */}
+                    <div className="text-right bg-slate-950/70 px-2.5 py-1 rounded-xl border border-sky-500/25">
+                      <div className="text-[10px] text-sky-400 font-bold uppercase tracking-wider">Range Earnings</div>
+                      <div className="text-sm sm:text-base font-extrabold text-sky-300">
+                        {formatINR(rangeStats.earnings)}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-medium">
+                        {rangeStats.parcels} pkts
+                      </div>
+                    </div>
+
                     <div className="text-right">
                       <div className="text-xs text-slate-400">Unpaid Payout</div>
                       <div className={`text-base font-bold ${stats.unpaidAmount > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
@@ -1288,6 +1453,23 @@ export const RidersTab: React.FC<Props> = ({
           riders={riders}
           onClose={() => setIsFestivalModalOpen(false)}
           hubSignature={hubSignature}
+        />
+      )}
+
+      {/* Bulk Date Range Background SMS Modal */}
+      {isBulkSmsModalOpen && (
+        <BulkDateRangeSmsModal
+          isOpen={isBulkSmsModalOpen}
+          onClose={() => setIsBulkSmsModalOpen(false)}
+          startDate={rangeStartDate}
+          endDate={rangeEndDate}
+          riders={riders}
+          entries={entries}
+          hubSignature={hubSignature}
+          onSuccess={(msg) => {
+            setPaidToast(msg);
+            setTimeout(() => setPaidToast(null), 4000);
+          }}
         />
       )}
     </div>
