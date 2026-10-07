@@ -153,6 +153,29 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
     }
   };
 
+  // Quick 1-Click Toggle Active / Inactive Status
+  const handleToggleActiveDirect = async () => {
+    const newActive = rider.active === false ? true : false;
+    const updated: Rider = {
+      ...rider,
+      active: newActive,
+    };
+    try {
+      await saveRiderToFirestore(user.uid, updated);
+      onRiderUpdated(updated);
+      setEditActive(newActive);
+      showToast(
+        newActive
+          ? `✅ Rider "${rider.name}" is now Active.`
+          : `⏸️ Rider "${rider.name}" marked as Inactive.`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Failed to toggle rider status:', err);
+      showToast('Failed to update rider status in Firestore.', 'error');
+    }
+  };
+
   // Delete Rider
   const handleDeleteRider = async () => {
     setIsDeleting(true);
@@ -257,11 +280,26 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
                 </h2>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                   rider.active !== false
-                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                    ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                    : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                 }`}>
                   {rider.active !== false ? 'Active' : 'Inactive'}
                 </span>
+                {/* 1-Click Active / Inactive Status Switcher */}
+                <button
+                  type="button"
+                  id="single-rider-toggle-active-btn"
+                  onClick={handleToggleActiveDirect}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border transition active:scale-95 cursor-pointer ${
+                    rider.active !== false
+                      ? 'bg-rose-500/15 text-rose-300 border-rose-500/35 hover:bg-rose-500/25'
+                      : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35 hover:bg-emerald-500/25'
+                  }`}
+                  title={`Click to switch rider to ${rider.active !== false ? 'Inactive' : 'Active'}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${rider.active !== false ? 'bg-rose-400' : 'bg-emerald-400 animate-pulse'}`} />
+                  <span>{rider.active !== false ? 'Mark Inactive' : 'Mark Active'}</span>
+                </button>
                 <span className="text-xs text-slate-400 font-mono">
                   ID: {rider.id}
                 </span>

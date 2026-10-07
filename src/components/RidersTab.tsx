@@ -97,11 +97,11 @@ export const RidersTab: React.FC<Props> = ({
   isProUser = true,
   onOpenSubscriptionModal,
 }) => {
-  // Status Filter State: 'unpaid' (Default) or 'all'
-  const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all'>(() => {
+  // Status Filter State: 'unpaid' (Default), 'all', 'active', 'inactive'
+  const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all' | 'active' | 'inactive'>(() => {
     try {
       const saved = localStorage.getItem('cp_riders_status_filter');
-      if (saved === 'all' || saved === 'unpaid') return saved;
+      if (saved === 'all' || saved === 'unpaid' || saved === 'active' || saved === 'inactive') return saved as any;
     } catch {}
     return 'unpaid';
   });
@@ -324,6 +324,21 @@ export const RidersTab: React.FC<Props> = ({
     });
 
     setEditingRider(null);
+  };
+
+  // Toggle Rider Active / Inactive Status
+  const handleToggleRiderActive = (rider: Rider) => {
+    const newActive = rider.active === false ? true : false;
+    onUpdateRider({
+      ...rider,
+      active: newActive,
+    });
+    setPaidToast(
+      newActive
+        ? `✅ Rider "${rider.name}" is now Active.`
+        : `⏸️ Rider "${rider.name}" marked as Inactive.`
+    );
+    setTimeout(() => setPaidToast(null), 3000);
   };
 
   // Move Rider Up / Down in list
@@ -590,7 +605,10 @@ export const RidersTab: React.FC<Props> = ({
     return stats.unpaidAmount > 0;
   });
 
-  // Filter riders by search query AND statusFilter ('unpaid' vs 'all')
+  const activeRidersCount = riders.filter((r) => r.active !== false).length;
+  const inactiveRidersCount = riders.filter((r) => r.active === false).length;
+
+  // Filter riders by search query AND statusFilter ('unpaid', 'all', 'active', 'inactive')
   const filteredRiders = riders.filter((r) => {
     const matchesSearch =
       r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -601,6 +619,14 @@ export const RidersTab: React.FC<Props> = ({
     if (statusFilter === 'unpaid') {
       const stats = getRiderStats(r.id);
       return stats.unpaidAmount > 0;
+    }
+
+    if (statusFilter === 'active') {
+      return r.active !== false;
+    }
+
+    if (statusFilter === 'inactive') {
+      return r.active === false;
     }
 
     return true; // 'all' shows all riders
@@ -917,8 +943,32 @@ export const RidersTab: React.FC<Props> = ({
                   : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
               }`}
             >
-              All Riders ({riders.length})
+              All ({riders.length})
             </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('active')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                statusFilter === 'active'
+                  ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
+              }`}
+            >
+              Active ({activeRidersCount})
+            </button>
+            {inactiveRidersCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter('inactive')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                  statusFilter === 'inactive'
+                    ? 'bg-rose-600/20 text-rose-300 border border-rose-500/40'
+                    : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
+                }`}
+              >
+                Inactive ({inactiveRidersCount})
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-1 max-w-md">
@@ -987,7 +1037,11 @@ export const RidersTab: React.FC<Props> = ({
                 onDragStart={(e) => handleDragStart(e, rider.id)}
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, rider.id)}
-                className="bg-slate-900/80 border border-slate-800/90 hover:border-blue-500/40 rounded-2xl p-4 sm:p-5 shadow-md hover:shadow-blue-950/20 backdrop-blur-sm transition"
+                className={`rounded-2xl p-4 sm:p-5 shadow-md backdrop-blur-sm transition border ${
+                  rider.active === false
+                    ? 'bg-slate-950/60 border-slate-800/80 opacity-70 ring-1 ring-slate-800'
+                    : 'bg-slate-900/80 border-slate-800/90 hover:border-blue-500/40 hover:shadow-blue-950/20'
+                }`}
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   {/* Left: Info & Contacts */}
@@ -995,21 +1049,44 @@ export const RidersTab: React.FC<Props> = ({
                     <div className="cursor-grab text-slate-500 hover:text-slate-300">
                       <GripVertical className="w-5 h-5" />
                     </div>
-                    <div className="w-10 h-10 rounded-xl bg-blue-600/15 border border-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-sm">
+                    <div className={`w-10 h-10 rounded-xl border flex items-center justify-center font-bold text-sm ${
+                      rider.active === false
+                        ? 'bg-slate-800/70 text-slate-500 border-slate-700/60'
+                        : 'bg-blue-600/15 border-blue-500/20 text-blue-400'
+                    }`}>
                       {rider.name.charAt(0).toUpperCase()}
                     </div>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-white text-sm">{rider.name}</span>
+                        <span className={`font-bold text-sm ${rider.active === false ? 'text-slate-300' : 'text-white'}`}>{rider.name}</span>
                         <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 flex items-center gap-1">
                           <Bike className="w-3 h-3 text-slate-400" />
                           {rider.vehicleType || 'Bike'}
                         </span>
-                        {!rider.active && (
-                          <span className="text-[10px] px-1.5 py-0.5 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded">
-                            Inactive
+                        {/* Subtle Inactive Badge indicator */}
+                        {rider.active === false && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800/90 text-slate-400 border border-slate-700 font-semibold flex items-center gap-1">
+                            <span>⏸️</span>
+                            <span>Inactive (काम पर नहीं)</span>
                           </span>
                         )}
+                        {/* Interactive 1-Click Active / Inactive Status Toggle */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleRiderActive(rider);
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border transition active:scale-95 cursor-pointer ${
+                            rider.active !== false
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/35 hover:bg-emerald-500/25'
+                              : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
+                          }`}
+                          title={`Click to switch to ${rider.active !== false ? 'Inactive' : 'Active'}`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${rider.active !== false ? 'bg-slate-500' : 'bg-emerald-400 animate-pulse'}`} />
+                          <span>{rider.active !== false ? 'Active' : 'Inactive'}</span>
+                        </button>
                       </div>
                       <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
                         <span>{rider.phone}</span>
@@ -1296,6 +1373,30 @@ export const RidersTab: React.FC<Props> = ({
                 />
               </div>
 
+              {/* Status Toggle Row */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-750">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${initialStatus ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                    <span>Status: {initialStatus ? 'Active (सक्रिय)' : 'Inactive (निष्क्रिय)'}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    {initialStatus ? 'Active in delivery fleet & festival greetings' : 'Excluded from festival greetings SMS'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInitialStatus(!initialStatus)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition active:scale-95 cursor-pointer ${
+                    initialStatus
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                      : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
+                  }`}
+                >
+                  {initialStatus ? 'Active' : 'Inactive'}
+                </button>
+              </div>
+
               <div className="flex items-center justify-end gap-3 pt-3">
                 <button
                   type="button"
@@ -1365,17 +1466,27 @@ export const RidersTab: React.FC<Props> = ({
                 />
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="rider-active-checkbox"
-                  checked={editingRider.active !== false}
-                  onChange={(e) => setEditingRider({ ...editingRider, active: e.target.checked })}
-                  className="w-4 h-4 rounded text-blue-600 focus:ring-0 bg-slate-900 border-slate-700"
-                />
-                <label htmlFor="rider-active-checkbox" className="text-xs text-slate-300 font-medium">
-                  Active (Working currently)
-                </label>
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-750">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${editingRider.active !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                    <span>Status: {editingRider.active !== false ? 'Active (सक्रिय)' : 'Inactive (निष्क्रिय)'}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    {editingRider.active !== false ? 'Receives festival SMS & active duty allocations' : 'Excluded from festival greetings SMS'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingRider({ ...editingRider, active: editingRider.active === false ? true : false })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition active:scale-95 cursor-pointer ${
+                    editingRider.active !== false
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                      : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                  }`}
+                >
+                  {editingRider.active !== false ? 'Switch to Inactive' : 'Switch to Active'}
+                </button>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3">

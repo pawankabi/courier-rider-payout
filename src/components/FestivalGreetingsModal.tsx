@@ -14,7 +14,9 @@ import {
   RotateCcw,
   Bell,
   MessageSquare,
-  Clock
+  Clock,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 import { Rider } from '../types';
 import { 
@@ -70,6 +72,9 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   const [copiedRiderId, setCopiedRiderId] = useState<string | null>(null);
   const [smsFeedbackToast, setSmsFeedbackToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [sendingRiderId, setSendingRiderId] = useState<string | null>(null);
+  const [isBulkSending, setIsBulkSending] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentName: '' });
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   // Smooth Escape key handler to return smoothly without freeze
   React.useEffect(() => {
@@ -118,6 +123,13 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   };
 
   const handleSendWhatsApp = (rider: Rider) => {
+    if (rider.active === false) {
+      setSmsFeedbackToast({
+        message: `⚠️ Rider "${rider.name}" is Inactive and excluded from festival greetings.`,
+        type: 'error',
+      });
+      return;
+    }
     const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
     const url = buildWhatsAppGreetingUrl(rider.phone, personalizedMessage);
     handleMarkSent(rider.id);
@@ -125,6 +137,13 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   };
 
   const handleSendSimSms = async (rider: Rider) => {
+    if (rider.active === false) {
+      setSmsFeedbackToast({
+        message: `⚠️ Rider "${rider.name}" is Inactive and excluded from festival greetings.`,
+        type: 'error',
+      });
+      return;
+    }
     const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
     const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
 
@@ -168,6 +187,13 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   };
 
   const handleSendSms = (rider: Rider) => {
+    if (rider.active === false) {
+      setSmsFeedbackToast({
+        message: `⚠️ Rider "${rider.name}" is Inactive and excluded from festival greetings.`,
+        type: 'error',
+      });
+      return;
+    }
     const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
     const url = buildSmsGreetingUrl(rider.phone, personalizedMessage);
     handleMarkSent(rider.id);
@@ -175,19 +201,85 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   };
 
   const handleCopyMessage = (rider: Rider) => {
+    if (rider.active === false) return;
     const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
     navigator.clipboard.writeText(personalizedMessage);
     setCopiedRiderId(rider.id);
     setTimeout(() => setCopiedRiderId(null), 2500);
   };
 
-  // Find next unsent rider (who hasn't received greeting for this festival in last 24h)
-  const nextUnsentRider = riders.find(
+  // Strictly filter out all Inactive riders - Inactive riders must NEVER receive festival greetings SMS
+  const activeRiders = useMemo(() => {
+    return riders.filter((r) => r.active !== false);
+  }, [riders]);
+
+  const inactiveRidersCount = riders.length - activeRiders.length;
+
+  // Find next unsent rider among active riders only
+  const nextUnsentRider = activeRiders.find(
     (r) => !isFestivalGreetingSentWithin24Hours(sentRecords, r.id, selectedFestival.id).isSent
   );
-  const sentCount = riders.filter(
+  const sentCount = activeRiders.filter(
     (r) => isFestivalGreetingSentWithin24Hours(sentRecords, r.id, selectedFestival.id).isSent
   ).length;
+
+  // 1-Click Send Festival SMS to All Active Riders
+  const handleBulkSendFestivalSms = async () => {
+    if (activeRiders.length === 0) return;
+
+    setShowConfirmModal(false);
+    setIsBulkSending(true);
+    setBulkProgress({ current: 0, total: activeRiders.length, currentName: '' });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < activeRiders.length; i++) {
+      const rider = activeRiders[i];
+      setBulkProgress({
+        current: i + 1,
+        total: activeRiders.length,
+        currentName: rider.name,
+      });
+
+      const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
+      const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
+
+      try {
+        if (isNativeAndroid()) {
+          const res = await sendNativeBackgroundSms(cleanPhone, personalizedMessage);
+          if (res.success) {
+            handleMarkSent(rider.id);
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } else {
+          // Web fallback
+          const url = buildSmsGreetingUrl(rider.phone, personalizedMessage);
+          handleMarkSent(rider.id);
+          try {
+            window.open(url, '_blank', 'noopener,noreferrer');
+          } catch {}
+          successCount++;
+        }
+      } catch (err) {
+        failCount++;
+      }
+
+      // 350ms modem throttle for carrier queuing
+      if (isNativeAndroid() && i < activeRiders.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+    }
+
+    setIsBulkSending(false);
+    setSmsFeedbackToast({
+      message: `✅ Dispatched festival greetings to ${successCount} active riders!${failCount > 0 ? ` (${failCount} failed)` : ''}`,
+      type: 'success',
+    });
+    setTimeout(() => setSmsFeedbackToast(null), 5000);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm overflow-y-auto animate-in fade-in duration-150">
@@ -484,17 +576,75 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
             )}
           </div>
 
-          {/* Broadcast / Send to All Riders Queue with Direct WhatsApp & SMS links */}
+          {/* 1-Click Send Festival SMS to All Active Riders Card */}
+          <div className="p-4 rounded-xl bg-gradient-to-r from-amber-600/25 via-orange-600/20 to-slate-900/90 border border-amber-500/40 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <h4 className="text-sm font-bold text-white">
+                  1-Click Send Festival SMS to All Active Riders
+                </h4>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-extrabold border border-emerald-500/30">
+                  {activeRiders.length} Active
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Automatically dispatch background SIM SMS greetings to all active riders in sequence without manual selection.
+                {inactiveRidersCount > 0 && (
+                  <span className="text-amber-400 font-semibold ml-1">
+                    ({inactiveRidersCount} inactive riders excluded)
+                  </span>
+                )}
+              </p>
+            </div>
+
+            <button
+              id="bulk-festival-sms-send-all-btn"
+              type="button"
+              onClick={() => setShowConfirmModal(true)}
+              disabled={activeRiders.length === 0 || isBulkSending}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs shadow-md shadow-amber-500/25 active:scale-95 transition cursor-pointer disabled:opacity-50 shrink-0"
+            >
+              <Send className="w-4 h-4 text-slate-950" />
+              <span>Send Festival SMS to All Active Riders ({activeRiders.length})</span>
+            </button>
+          </div>
+
+          {/* Live Bulk Dispatch Progress Bar */}
+          {isBulkSending && (
+            <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                  <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                  <span>Dispatching Festival SMS: {bulkProgress.currentName}...</span>
+                </span>
+                <span className="font-bold text-amber-200">
+                  {bulkProgress.current} / {bulkProgress.total}
+                </span>
+              </div>
+              <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-amber-500 to-orange-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Broadcast / Send to All Active Riders Queue */}
           <div className="space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <Users className="w-4 h-4 text-emerald-400" />
-                  <span>Send Greetings ({riders.length} Delivery Boys)</span>
+                  <span>Active Delivery Fleet ({activeRiders.length} Active Delivery Boys)</span>
                 </h3>
                 <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
                   <Clock className="w-3 h-3 text-slate-500" />
-                  <span>Progress: {sentCount} of {riders.length} sent (Persists for 24 hours)</span>
+                  <span>Progress: {sentCount} of {activeRiders.length} sent today</span>
+                  {inactiveRidersCount > 0 && (
+                    <span className="text-amber-400 font-medium">({inactiveRidersCount} inactive excluded)</span>
+                  )}
                 </p>
               </div>
 
@@ -504,7 +654,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                   <div
                     className="bg-emerald-500 h-full transition-all duration-300"
                     style={{
-                      width: riders.length > 0 ? `${(sentCount / riders.length) * 100}%` : '0%',
+                      width: activeRiders.length > 0 ? `${(sentCount / activeRiders.length) * 100}%` : '0%',
                     }}
                   />
                 </div>
@@ -513,8 +663,8 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleSendSimSms(nextUnsentRider)}
-                      disabled={sendingRiderId === nextUnsentRider.id}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white font-bold text-xs rounded-xl shadow border border-amber-400/40 transition active:scale-95"
+                      disabled={sendingRiderId === nextUnsentRider.id || isBulkSending}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white font-bold text-xs rounded-xl shadow border border-amber-400/40 transition active:scale-95 disabled:opacity-50"
                       title={`Send Native SIM SMS to ${nextUnsentRider.name}`}
                     >
                       <MessageSquare className="w-3 h-3 text-amber-200" />
@@ -523,7 +673,8 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleSendWhatsApp(nextUnsentRider)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition active:scale-95"
+                      disabled={isBulkSending}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition active:scale-95 disabled:opacity-50"
                       title={`Send WhatsApp to ${nextUnsentRider.name}`}
                     >
                       <Send className="w-3 h-3" />
@@ -534,14 +685,17 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
               </div>
             </div>
 
-            {/* Rider List with Direct Call, SIM SMS & WhatsApp Sending */}
+            {/* Active Rider List strictly excluding Inactive riders */}
             <div className="divide-y divide-slate-800/80 rounded-xl bg-slate-850 border border-slate-750 max-h-64 overflow-y-auto">
-              {riders.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-400">
-                  No riders found. Please add riders first.
+              {activeRiders.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400 space-y-1">
+                  <p>No active delivery riders available.</p>
+                  {inactiveRidersCount > 0 && (
+                    <p className="text-amber-400">All {inactiveRidersCount} riders are marked as Inactive. Activate riders to send festival greetings.</p>
+                  )}
                 </div>
               ) : (
-                riders.map((rider, idx) => {
+                activeRiders.map((rider, idx) => {
                   const sentStatus = isFestivalGreetingSentWithin24Hours(sentRecords, rider.id, selectedFestival.id);
                   const isCopied = copiedRiderId === rider.id;
 
@@ -613,8 +767,8 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                           type="button"
                           id={`send-festival-sim-sms-${rider.id}`}
                           onClick={() => handleSendSimSms(rider)}
-                          disabled={sendingRiderId === rider.id}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer ${
+                          disabled={sendingRiderId === rider.id || isBulkSending}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer disabled:opacity-50 ${
                             sendingRiderId === rider.id
                               ? 'bg-amber-600/40 text-amber-200 border border-amber-500/40 opacity-75'
                               : sentStatus.isSent
@@ -632,7 +786,8 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                           type="button"
                           id={`send-festival-wa-${rider.id}`}
                           onClick={() => handleSendWhatsApp(rider)}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xl transition active:scale-95 ${
+                          disabled={isBulkSending}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xl transition active:scale-95 disabled:opacity-50 ${
                             sentStatus.isSent
                               ? 'bg-slate-800 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20'
                               : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/25'
@@ -665,6 +820,75 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Quick Confirmation Modal for 1-Click Festival SMS */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-amber-500/40 w-full max-w-md rounded-2xl p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Send Festival SMS to All Active Riders?</h3>
+                  <p className="text-xs text-amber-300 font-semibold">Ready to send festival greetings to {activeRiders.length} active riders</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConfirmModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-300">
+                <span>Active Recipients:</span>
+                <span className="font-extrabold text-white">{activeRiders.length} Active Delivery Boys</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-300">
+                <span>Delivery Mode:</span>
+                <span className="font-semibold text-emerald-400">
+                  {isNativeAndroid() ? 'Direct Device SIM SMS (Background)' : 'Web SMS Service'}
+                </span>
+              </div>
+              {inactiveRidersCount > 0 && (
+                <div className="flex items-center justify-between text-amber-400 pt-1.5 border-t border-slate-850">
+                  <span>Inactive Exclusion:</span>
+                  <span className="font-bold">{inactiveRidersCount} Inactive (Excluded automatically)</span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <span className="text-[11px] font-semibold text-slate-400">Personalized Message Preview:</span>
+              <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-xs text-amber-200/90 italic font-sans max-h-24 overflow-y-auto whitespace-pre-line">
+                "{formatFestivalGreeting(activeTemplate, activeRiders[0]?.name || 'राजू प्रमाणिक', hubSignature)}"
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirmModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-750 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkSendFestivalSms}
+                className="px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-lg shadow-amber-500/25 active:scale-95 transition cursor-pointer"
+              >
+                Confirm & Send ({activeRiders.length} SMS)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
