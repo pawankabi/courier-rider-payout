@@ -115,6 +115,39 @@ import { isAppLockEnabled } from './services/biometricService';
 import { isNativeAndroid, autoRequestStartupPermissions } from './services/nativeSms';
 import { VerifiedBadge } from './components/VerifiedBadge';
 import { ProfileSettingsModal } from './components/ProfileSettingsModal';
+import { CodStandaloneApp } from './components/CodStandaloneApp';
+import { CodCompanionApp } from './components/CodCompanionApp';
+
+/**
+ * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
+ * Supports:
+ * - /cod-entry or /cod
+ * - #cod-entry or #/cod-entry or #cod or #/cod
+ * - ?app=cod-entry or ?app=cod or ?cod=entry or ?cod=true
+ */
+function parseCodCompanionRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  const hash = window.location.hash || '';
+  const pathname = window.location.pathname || '';
+  const isCodRoute = 
+    hash.includes('/cod-entry') || 
+    hash.includes('cod-entry') || 
+    hash.includes('/cod') || 
+    pathname.includes('/cod-entry') || 
+    pathname.includes('/cod');
+
+  if (isCodRoute) return true;
+
+  const params = new URLSearchParams(window.location.search);
+  const appParam = params.get('app');
+  const codParam = params.get('cod');
+  if (appParam === 'cod-entry' || appParam === 'cod' || codParam === 'entry' || codParam === 'true') {
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
@@ -256,6 +289,7 @@ function MainCourierApp() {
   const [connectionBanner, setConnectionBanner] = useState<{ text: string; type: 'connecting' | 'connected' | 'offline' } | null>(null);
   const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
   const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
+  const [isCodStandaloneOpen, setIsCodStandaloneOpen] = useState(false);
   const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
 
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
@@ -1747,6 +1781,19 @@ function MainCourierApp() {
     );
   }
 
+  // Dedicated Viewport Mode: COD हिसाब-किताब Standalone Full-Screen Sub-App Takeover
+  if (isCodStandaloneOpen) {
+    return (
+      <CodStandaloneApp
+        onExit={() => setIsCodStandaloneOpen(false)}
+        riders={dashboardRiders}
+        userId={targetUid || 'guest'}
+        isSuperAdmin={isSuperAdminUser}
+        hubName={activeHubName}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
       {/* Admin Inspection Banner */}
@@ -2252,6 +2299,10 @@ function MainCourierApp() {
                 hubSignature={userRateConfig?.hubSignature}
                 isProUser={isProUser}
                 onOpenSubscriptionModal={openSubscriptionModal}
+                isSuperAdmin={isSuperAdminUser}
+                userId={targetUid}
+                hubName={activeHubName}
+                onOpenCodPortal={() => setIsCodStandaloneOpen(true)}
               />
             )}
 
@@ -2554,10 +2605,12 @@ function MainCourierApp() {
  */
 export default function App() {
   const [statementRiderId, setStatementRiderId] = useState<string | null>(() => parseRiderStatementRoute());
+  const [isCodCompanionRoute, setIsCodCompanionRoute] = useState<boolean>(() => parseCodCompanionRoute());
 
   useEffect(() => {
     const handleUrlChange = () => {
       setStatementRiderId(parseRiderStatementRoute());
+      setIsCodCompanionRoute(parseCodCompanionRoute());
     };
     window.addEventListener('hashchange', handleUrlChange);
     window.addEventListener('popstate', handleUrlChange);
@@ -2567,6 +2620,25 @@ export default function App() {
     };
   }, []);
 
+  // 1. Standalone Companion App: "COD Entry (हिसाब किताब)" for Delivery Boys & Hub Staff
+  if (isCodCompanionRoute) {
+    return (
+      <CodCompanionApp
+        onBackToMainApp={() => {
+          try {
+            window.location.hash = '';
+            const url = new URL(window.location.href);
+            url.searchParams.delete('app');
+            url.searchParams.delete('cod');
+            window.history.pushState({}, '', url.pathname.includes('/cod') ? '/' : url.toString());
+          } catch {}
+          setIsCodCompanionRoute(false);
+        }}
+      />
+    );
+  }
+
+  // 2. Public Read-Only Statement / Ledger Route
   if (statementRiderId) {
     return (
       <StatementErrorBoundary>

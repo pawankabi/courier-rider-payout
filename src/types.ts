@@ -327,3 +327,128 @@ export interface DateRange {
   startDate: string;
   endDate: string;
 }
+
+// ==========================================
+// COD हिसाब-किताब Sub-Module Types & RBAC
+// ==========================================
+
+export type CodStaffRole = 'rider' | 'team_leader' | 'supervisor' | 'hub_incharge';
+
+export interface CodStaffUser {
+  id: string; // riderId or unique staffId
+  riderId?: string; // linked rider id if role === 'rider'
+  name: string;
+  phone?: string;
+  role: CodStaffRole;
+  pin: string; // 4-digit numeric PIN
+  isActive: boolean;
+  canVerifyCod?: boolean; // Permission: Can verify Company 1 & 2 COD
+  canVerifyCash?: boolean; // Permission: Can verify Cash Deposit
+  canVerifyOnline?: boolean; // Permission: Can verify Online UPI / QR Deposit
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface CodAuditLog {
+  id: string;
+  timestamp: string; // ISO string
+  changedBy: string; // Name or ID of user who edited
+  role: CodStaffRole | 'owner';
+  riderId: string;
+  riderName: string;
+  date: string; // YYYY-MM-DD
+  field: string;
+  previousValue: string | number;
+  newValue: string | number;
+  notes?: string;
+}
+
+export interface CodCompanyConfig {
+  id: string;
+  name: string; // e.g. "Valmo COD" or "Xpressbees COD"
+  code: string; // e.g. "company1", "company2"
+  isActive: boolean;
+}
+
+export interface CodDailyEntry {
+  id: string; // unique key, e.g. `cod_${date}_${riderId}`
+  date: string; // YYYY-MM-DD
+  riderId: string;
+  riderName: string;
+  riderPhone?: string;
+  company1Amount: number; // e.g., Valmo COD
+  company1Verified?: boolean;
+  company1VerifiedBy?: string;
+  company1VerifiedAt?: string;
+  company2Amount: number; // e.g., Xpressbees COD
+  company2Verified?: boolean;
+  company2VerifiedBy?: string;
+  company2VerifiedAt?: string;
+  totalCod: number; // Auto-calculated: company1Amount + company2Amount
+  cashDeposit: number; // Rider physical cash handed in
+  cashVerified?: boolean;
+  cashVerifiedBy?: string;
+  cashVerifiedAt?: string;
+  onlineDeposit: number; // UPI / QR payments
+  onlineVerified?: boolean;
+  onlineVerifiedBy?: string;
+  onlineVerifiedAt?: string;
+  totalDeposit: number; // Auto-calculated: cashDeposit + onlineDeposit
+  balance: number; // Total COD - Total Deposit (positive = shortage/due, 0 = settled, negative = surplus)
+  
+  // Per-Field Discrepancy & Shortage Tracking
+  company1Shortage?: number; // Short amount
+  company1ActualReceived?: number; // Actual amount collected/received
+  company1ShortageNotes?: string;
+  company1ShortageFlaggedBy?: string;
+  company1ShortageFlaggedAt?: string;
+
+  company2Shortage?: number;
+  company2ActualReceived?: number;
+  company2ShortageNotes?: string;
+  company2ShortageFlaggedBy?: string;
+  company2ShortageFlaggedAt?: string;
+
+  cashShortage?: number;
+  cashActualReceived?: number;
+  cashShortageNotes?: string;
+  cashShortageFlaggedBy?: string;
+  cashShortageFlaggedAt?: string;
+
+  onlineShortage?: number;
+  onlineActualReceived?: number;
+  onlineShortageNotes?: string;
+  onlineShortageFlaggedBy?: string;
+  onlineShortageFlaggedAt?: string;
+
+  status: 'draft' | 'submitted' | 'verified' | 'locked';
+  submittedAt?: string;
+  submittedBy?: string;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  lockedAt?: string;
+  notes?: string;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface CodSettings {
+  isEnabled: boolean; // Feature flag for standard users
+  company1Name: string; // Default: 'Valmo COD'
+  company2Name: string; // Default: 'Xpressbees COD'
+  defaultLockTime?: string; // e.g. "23:00"
+  updatedAt: string;
+}
+
+export interface DailyCodSheetData {
+  date: string;
+  entries: CodDailyEntry[];
+  isLocked: boolean;
+  lockedBy?: string;
+  lockedAt?: string;
+  company1Name?: string;
+  company2Name?: string;
+  hubName?: string;
+  updatedAt?: string;
+}
+

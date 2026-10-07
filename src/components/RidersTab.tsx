@@ -27,9 +27,10 @@ import {
   Sparkles,
   IndianRupee,
   FileSpreadsheet,
-  Plus
+  Plus,
+  Table
 } from 'lucide-react';
-import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry } from '../types';
+import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings } from '../types';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
 import { generateStatementUrl, formatSalarySmsText, dispatchAutomatedSms, getWhatsAppUrl, getNativeSmsUrl } from '../services/smsService';
 import { 
@@ -37,12 +38,14 @@ import {
   isValidIndianPhone, 
   cleanPhoneNumber, 
   formatDateDisplay, 
-  getTodayDateString,
-  getDaysAgoDateString
+  getTodayDateString, 
+  getDaysAgoDateString 
 } from '../utils/formatters';
 import { FestivalBannerCard } from './FestivalBannerCard';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
 import { BulkDateRangeSmsModal } from './BulkDateRangeSmsModal';
+import { CodManagementModal } from './CodManagementModal';
+import { loadCodSettings, DEFAULT_COD_SETTINGS } from '../services/codService';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 interface Props {
@@ -77,6 +80,10 @@ interface Props {
   hubSignature?: string;
   isProUser?: boolean;
   onOpenSubscriptionModal?: (reason?: string) => void;
+  isSuperAdmin?: boolean;
+  userId?: string;
+  hubName?: string;
+  onOpenCodPortal?: () => void;
 }
 
 export const RidersTab: React.FC<Props> = ({
@@ -96,7 +103,22 @@ export const RidersTab: React.FC<Props> = ({
   hubSignature,
   isProUser = true,
   onOpenSubscriptionModal,
+  isSuperAdmin = false,
+  userId = 'guest',
+  hubName = 'सरायकेला कूरियर हब',
+  onOpenCodPortal,
 }) => {
+  // COD हिसाब-किताब Sub-App Modal State & Feature Flag
+  const [isCodModalOpen, setIsCodModalOpen] = useState(false);
+  const [codSettings, setCodSettings] = useState<CodSettings>(DEFAULT_COD_SETTINGS);
+
+  useEffect(() => {
+    loadCodSettings(userId).then(setCodSettings);
+  }, [userId, isCodModalOpen]);
+
+  // Feature Flag: Super Admin always has access; regular users only when enabled by owner
+  const canViewCodModule = Boolean(isSuperAdmin || codSettings.isEnabled);
+
   // Status Filter State: 'unpaid' (Default), 'all', 'active', 'inactive'
   const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all' | 'active' | 'inactive'>(() => {
     try {
@@ -801,7 +823,83 @@ export const RidersTab: React.FC<Props> = ({
               <Phone className="w-4 h-4" />
               <span>फ़ोनबुक से जोड़ें</span>
             </button>
+
+            {/* Dedicated COD हिसाब-किताब Entry Launcher Button */}
+            {canViewCodModule && (
+              <button
+                type="button"
+                id="open-cod-portal-top-btn"
+                onClick={() => {
+                  if (onOpenCodPortal) onOpenCodPortal();
+                  else setIsCodModalOpen(true);
+                }}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-gradient-to-r from-emerald-600/25 to-teal-600/25 hover:from-emerald-600/35 hover:to-teal-600/35 text-emerald-300 border border-emerald-500/40 text-xs font-bold rounded-xl active:scale-95 transition shadow-sm cursor-pointer"
+                title="Open Multi-Company COD हिसाब-किताब & Staff PIN Portal"
+              >
+                <Table className="w-4 h-4 text-emerald-400" />
+                <span>💰 COD हिसाब-किताब</span>
+              </button>
+            )}
           </div>
+
+          {/* Dedicated COD हिसाब-किताब Sub-App Portal Card */}
+          {canViewCodModule && (
+            <div 
+              id="cod-portal-banner-card"
+              className="mt-3 p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-950/70 via-slate-900/95 to-teal-950/70 border border-emerald-500/40 shadow-lg shadow-emerald-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-200"
+            >
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center text-xl shadow-md shrink-0">
+                  📊
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-1.5">
+                      <span>COD हिसाब-किताब</span>
+                      <span className="text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                        Standalone Sub-App
+                      </span>
+                    </h3>
+                    {isSuperAdmin && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                        {codSettings.isEnabled ? '✓ Public to Staff' : '🔒 Admin Only Mode'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Multi-Company Excel Grid ({codSettings.company1Name} / {codSettings.company2Name}), Daily Cash/UPI Deposits, Balance Tally & 4-Digit Staff PIN Security.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+                <button
+                  type="button"
+                  id="open-cod-companion-banner-btn"
+                  onClick={() => {
+                    window.location.hash = '/cod-entry';
+                  }}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold text-xs shadow-sm active:scale-95 transition cursor-pointer"
+                  title="डिलीवरी बॉय साथी ऐप (COD Entry Companion)"
+                >
+                  <Bike className="w-4 h-4 text-emerald-400" />
+                  <span>📱 साथी ऐप (Rider Entry)</span>
+                </button>
+                <button
+                  type="button"
+                  id="open-cod-portal-main-btn"
+                  onClick={() => {
+                    if (onOpenCodPortal) onOpenCodPortal();
+                    else setIsCodModalOpen(true);
+                  }}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-md shadow-emerald-500/25 active:scale-95 transition cursor-pointer"
+                >
+                  <Table className="w-4 h-4 text-slate-950" />
+                  <span>Open Standalone Portal</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Freemium Limit Status Banner for Free Tier Users */}
           {!isProUser && (
@@ -1581,6 +1679,18 @@ export const RidersTab: React.FC<Props> = ({
             setPaidToast(msg);
             setTimeout(() => setPaidToast(null), 4000);
           }}
+        />
+      )}
+
+      {/* COD हिसाब-किताब Excel Grid & PIN Sub-Module Modal */}
+      {isCodModalOpen && (
+        <CodManagementModal
+          isOpen={isCodModalOpen}
+          onClose={() => setIsCodModalOpen(false)}
+          riders={riders}
+          userId={userId || 'guest'}
+          isSuperAdmin={Boolean(isSuperAdmin)}
+          hubName={hubName}
         />
       )}
     </div>

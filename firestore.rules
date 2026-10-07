@@ -76,6 +76,19 @@ service cloud.firestore {
       allow read, write: if true; // Public read & sync for rider statement ledgers
     }
 
+    // COD Staff PINs & Access Control for companion mobile web app login (Delivery boys & Hub Staff)
+    match /cod_staff_pins/{pinId} {
+      allow read, write: if true;
+    }
+
+    // Real-time Daily COD Sheets for 0-second companion app synchronization
+    match /daily_cod_sheets/{sheetId} {
+      allow read, write: if true;
+      match /{allSubpaths=**} {
+        allow read, write: if true;
+      }
+    }
+
     match /deliveries/{deliveryId} {
       allow read, write: if true; // Public read & sync for rider delivery logs
     }
