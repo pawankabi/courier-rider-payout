@@ -13,6 +13,7 @@ import {
   setDoc, 
   getDoc, 
   collection, 
+  collectionGroup,
   getDocs, 
   writeBatch,
   onSnapshot,
@@ -774,6 +775,33 @@ export async function authenticateCodStaffCompanion(
         }
       }
 
+      // If not in root /riders, query subcollections across workspaces using collectionGroup
+      if (!matchedRiderData) {
+        try {
+          const qGroupClean = query(collectionGroup(db, 'riders'), where('phone', '==', cleanPhone));
+          const snapGroupClean = await getDocs(qGroupClean);
+          if (!snapGroupClean.empty) {
+            matchedRiderData = snapGroupClean.docs[0].data();
+            matchedRiderId = snapGroupClean.docs[0].id;
+            const parentWs = snapGroupClean.docs[0].ref.parent?.parent?.id;
+            if (parentWs && !matchedRiderData.workspaceId && !matchedRiderData.hubId) {
+              matchedRiderData.workspaceId = parentWs;
+            }
+          } else {
+            const qGroupPrefix = query(collectionGroup(db, 'riders'), where('phone', '==', `+91${cleanPhone}`));
+            const snapGroupPrefix = await getDocs(qGroupPrefix);
+            if (!snapGroupPrefix.empty) {
+              matchedRiderData = snapGroupPrefix.docs[0].data();
+              matchedRiderId = snapGroupPrefix.docs[0].id;
+              const parentWs = snapGroupPrefix.docs[0].ref.parent?.parent?.id;
+              if (parentWs && !matchedRiderData.workspaceId && !matchedRiderData.hubId) {
+                matchedRiderData.workspaceId = parentWs;
+              }
+            }
+          }
+        } catch {}
+      }
+
       if (matchedRiderData) {
         // Verify that rider's PIN
         // Can be stored in rider doc (pin, riderPin, codPin), or in cod_staff_pins, or default 1234
@@ -801,17 +829,19 @@ export async function authenticateCodStaffCompanion(
           };
         }
 
-        // Retrieve that rider's specific parent hub identifier (hubId, workspaceId, or ownerUid / userId)
+        // Extract the hub owner identifier. Check ALL possible owner field names:
+        // riderDoc.workspaceId || riderDoc.hubId || riderDoc.userId || riderDoc.ownerUid || riderDoc.createdBy
         const parentHub = (
-          matchedRiderData.hubId ||
           matchedRiderData.workspaceId ||
-          matchedRiderData.ownerUid ||
+          matchedRiderData.hubId ||
           matchedRiderData.userId ||
+          matchedRiderData.ownerUid ||
           matchedRiderData.createdBy ||
           ''
         ).trim();
 
         if (!parentHub) {
+          console.warn('🔒 [Hub Isolation] Rider document found but owner field is empty for phone:', cleanPhone);
           return {
             success: false,
             reason: 'no_hub',
@@ -819,6 +849,7 @@ export async function authenticateCodStaffCompanion(
           };
         }
 
+        console.log('🔒 [Hub Isolation] Resolved targetHubId from rider record:', parentHub);
         resolvedHubId = parentHub;
         matchedUser = {
           id: matchedRiderData.id || matchedRiderId || `rider_${cleanPhone}`,
@@ -831,6 +862,8 @@ export async function authenticateCodStaffCompanion(
           hubId: parentHub,
           ownerUid: parentHub,
           workspaceId: parentHub,
+          userId: parentHub,
+          createdBy: parentHub,
           createdAt: matchedRiderData.joinedDate || new Date().toISOString(),
         };
       }
@@ -1090,66 +1123,71 @@ export function clearCodCompanionSession(): void {
 export async function getAllActiveRidersForCod(authenticatedHubId?: string | null): Promise<Rider[]> {
   const targetHubId = (authenticatedHubId || getActiveCompanionHubId() || '').trim();
 
-  // CRITICAL: If active_companion_hub_id is missing, null, or empty, return an EMPTY ARRAY []
+  // CRITICAL: If targetHubId is missing, null, or empty, return an EMPTY ARRAY []
   if (!targetHubId) {
+    console.warn('🔒 [Hub Isolation] No targetHubId provided, returning empty list []');
     return [];
   }
 
   const hubId = targetHubId;
   const ridersMap = new Map<string, Rider>();
 
-  // Strictly execute Firestore queries scoped to this hubId
+  // Strictly execute Firestore queries where the matching owner field strictly equals targetHubId
   if (db) {
     try {
-      // 1. Strictly query Firestore collection("riders") where hubId == active_companion_hub_id
-      const qHub = query(collection(db, 'riders'), where('hubId', '==', hubId));
-      const snapsHub = await getDocs(qHub);
-      snapsHub.docs.forEach((d) => {
-        const data = d.data() as Rider;
-        const id = data.id || d.id;
-        if (id && data.active !== false) {
-          ridersMap.set(id, { ...data, id, hubId, workspaceId: hubId });
-        }
-      });
+      const [snapWs, snapHub, snapUser, snapOwner, snapCreator, snapWorkspaceSub, snapUserSub] = await Promise.all([
+        getDocs(query(collection(db, 'riders'), where('workspaceId', '==', hubId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('hubId', '==', hubId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('userId', '==', hubId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('ownerUid', '==', hubId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('createdBy', '==', hubId))).catch(() => null),
+        getDocs(collection(db, 'workspaces', hubId, 'riders')).catch(() => null),
+        getDocs(collection(db, 'users', hubId, 'riders')).catch(() => null),
+      ]);
 
-      // 2. Strictly query Firestore collection("riders") where workspaceId == active_companion_hub_id
-      const qWs = query(collection(db, 'riders'), where('workspaceId', '==', hubId));
-      const snapsWs = await getDocs(qWs);
-      snapsWs.docs.forEach((d) => {
-        const data = d.data() as Rider;
-        const id = data.id || d.id;
-        if (id && data.active !== false && !ridersMap.has(id)) {
-          ridersMap.set(id, { ...data, id, hubId, workspaceId: hubId });
-        }
-      });
+      const processSnap = (snap: any) => {
+        if (!snap || !snap.docs) return;
+        snap.docs.forEach((d: any) => {
+          const data = d.data() as Rider;
+          const id = data.id || d.id;
+          const ownerField = (
+            data.workspaceId ||
+            data.hubId ||
+            data.userId ||
+            data.ownerUid ||
+            data.createdBy ||
+            d.ref?.parent?.parent?.id ||
+            ''
+          ).trim();
 
-      // 3. Strictly query Firestore collection("riders") where userId == active_companion_hub_id
-      const qUser = query(collection(db, 'riders'), where('userId', '==', hubId));
-      const snapsUser = await getDocs(qUser);
-      snapsUser.docs.forEach((d) => {
-        const data = d.data() as Rider;
-        const id = data.id || d.id;
-        if (id && data.active !== false && !ridersMap.has(id)) {
-          ridersMap.set(id, { ...data, id, hubId, workspaceId: hubId });
-        }
-      });
+          // Strictly verify owner field matches targetHubId
+          if (id && data.active !== false && (!ownerField || ownerField === hubId)) {
+            ridersMap.set(id, {
+              ...data,
+              id,
+              hubId,
+              workspaceId: hubId,
+              ownerUid: hubId,
+              userId: hubId,
+              createdBy: hubId,
+            });
+          }
+        });
+      };
 
-      // 4. Query target Hub's riders from their isolated workspace collection: workspaces/{hubId}/riders
-      const wsCol = collection(db, 'workspaces', hubId, 'riders');
-      const wsSnaps = await getDocs(wsCol);
-      wsSnaps.docs.forEach((d) => {
-        const data = d.data() as Rider;
-        const id = data.id || d.id;
-        if (id && data.active !== false && !ridersMap.has(id)) {
-          ridersMap.set(id, { ...data, id, hubId, workspaceId: hubId });
-        }
-      });
+      processSnap(snapWs);
+      processSnap(snapHub);
+      processSnap(snapUser);
+      processSnap(snapOwner);
+      processSnap(snapCreator);
+      processSnap(snapWorkspaceSub);
+      processSnap(snapUserSub);
     } catch (err) {
-      console.warn('Strict hub riders query notice:', err);
+      console.warn('🔒 [Hub Isolation] Query error for riders in hub:', err);
     }
   }
 
-  // 5. Scan localStorage rider caches strictly for target Hub (no global cross-hub scanning)
+  // Strictly check ONLY hub-scoped local storage: cp_cache_riders_${hubId}
   try {
     const raw = localStorage.getItem(`cp_cache_riders_${hubId}`);
     if (raw) {
@@ -1157,9 +1195,16 @@ export async function getAllActiveRidersForCod(authenticatedHubId?: string | nul
       if (Array.isArray(list)) {
         list.forEach((r) => {
           if (r && r.id && r.name && r.active !== false && !ridersMap.has(r.id)) {
-            // Strictly require hub matching (Zero cross-hub riders)
-            if (r.workspaceId === hubId || r.hubId === hubId || r.userId === hubId) {
-              ridersMap.set(r.id, { ...r, hubId, workspaceId: hubId });
+            const ownerField = (r.workspaceId || r.hubId || r.userId || r.ownerUid || r.createdBy || '').trim();
+            if (ownerField === hubId) {
+              ridersMap.set(r.id, {
+                ...r,
+                hubId,
+                workspaceId: hubId,
+                ownerUid: hubId,
+                userId: hubId,
+                createdBy: hubId,
+              });
             }
           }
         });
@@ -1167,10 +1212,15 @@ export async function getAllActiveRidersForCod(authenticatedHubId?: string | nul
     }
   } catch {}
 
-  // Return strictly active riders belonging strictly to this hubId
-  return Array.from(ridersMap.values()).filter(
-    (r) => r.active !== false && (r.workspaceId === hubId || r.hubId === hubId || r.userId === hubId)
-  );
+  // Strictly filter: ONLY display riders whose owner field strictly matches targetHubId
+  const result = Array.from(ridersMap.values()).filter((r) => {
+    if (r.active === false) return false;
+    const owner = (r.workspaceId || r.hubId || r.userId || r.ownerUid || r.createdBy || '').trim();
+    return owner === hubId;
+  });
+
+  console.log(`🔒 [Hub Isolation] Hub: ${hubId.substring(0, 8)} resolved ${result.length} active riders`);
+  return result;
 }
 
 /**
@@ -1297,15 +1347,25 @@ export function subscribeToDailyCodSheet(
           const company1Name = raw.company1Name || DEFAULT_COMPANY_1;
           const company2Name = raw.company2Name || DEFAULT_COMPANY_2;
 
-          let finalEntries = existingEntries;
+          const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
+          const activeRiderIds = new Set(activeRiders.map((r) => r.id));
+          const activeRiderPhones = new Set(
+            activeRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
+          );
+
+          // Strictly filter out any riders from other hubs that might have been in the doc
+          const scopedEntries = existingEntries.filter((e) => {
+            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+            return activeRiderIds.has(e.riderId) || (cleanPhone && activeRiderPhones.has(cleanPhone));
+          });
+
+          let finalEntries = scopedEntries;
 
           if (finalEntries.length === 0) {
-            const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
             if (activeRiders.length > 0) {
               finalEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
             }
           } else {
-            const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
             const existingRiderIds = new Set(finalEntries.map((e) => e.riderId));
             const existingPhones = new Set(
               finalEntries

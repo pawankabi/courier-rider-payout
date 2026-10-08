@@ -892,6 +892,11 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               </button>
             </div>
           )}
+
+          {/* Hub Resolution Debug Indicator */}
+          <div className="mt-4 pt-3 border-t border-slate-800/80 text-center text-[10px] text-slate-500 font-mono">
+            Hub: {currentHubId ? currentHubId.substring(0, 8) : 'Not Resolved'}
+          </div>
         </div>
       </div>
     );
@@ -951,9 +956,12 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   {authUser.role === 'hub_incharge' && '👑 हब इंचार्ज'}
                 </span>
               </div>
-              <div className="text-[11px] text-slate-400 truncate flex items-center gap-1.5">
+              <div className="text-[11px] text-slate-400 truncate flex items-center gap-1.5 flex-wrap">
                 <span className="font-medium text-slate-300">{authUser.name}</span>
                 {authUser.phone && <span>• {authUser.phone}</span>}
+                <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-mono border border-slate-700">
+                  Hub: {currentHubId ? currentHubId.substring(0, 8) : 'Not Resolved'}
+                </span>
               </div>
             </div>
           </div>

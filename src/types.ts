@@ -26,6 +26,7 @@ export interface Rider {
   workspaceId?: string; // Workspace UID isolation tag
   userId?: string; // Associated User UID
   hubId?: string; // Associated Hub isolation tag
+  ownerUid?: string; // Associated Owner UID tag
   totalAdvance?: number; // Running advance balance
   advances?: RiderAdvanceEntry[]; // Detailed advance payment records
 }
@@ -353,6 +354,8 @@ export interface CodStaffUser {
   hubId?: string; // Parent Hub / Owner account UID for multi-tenant isolation
   ownerUid?: string; // Owner UID
   workspaceId?: string; // Workspace UID
+  userId?: string; // Associated User UID
+  createdBy?: string; // Creator UID
 }
 
 export interface CodAuditLog {

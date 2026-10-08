@@ -1496,9 +1496,9 @@ export async function ensureWorkspaceMigration(
     // If super admin and legacy user subcollections are empty, check root collections
     // BUT strictly only copy items that belong to the super admin, NEVER foreign accounts!
     if (isSuperAdminUser && ridersToCopy.length === 0) {
-      const rootRidersSnap = await getDocs(collection(db, 'riders'));
-      const rootDeliveriesSnap = await getDocs(collection(db, 'deliveries'));
-      const rootSettlementsSnap = await getDocs(collection(db, 'settlements'));
+      const rootRidersSnap = await getDocs(query(collection(db, 'riders'), where('userId', '==', userId)));
+      const rootDeliveriesSnap = await getDocs(query(collection(db, 'deliveries'), where('userId', '==', userId)));
+      const rootSettlementsSnap = await getDocs(query(collection(db, 'settlements'), where('userId', '==', userId)));
 
       rootRidersSnap.forEach((d) => {
         const r = d.data() as Rider;
