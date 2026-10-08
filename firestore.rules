@@ -89,6 +89,14 @@ service cloud.firestore {
       }
     }
 
+    // Isolated Hub paths for multi-tenant COD sheets and companion sync
+    match /hubs/{hubId} {
+      allow read, write: if true;
+      match /{allSubpaths=**} {
+        allow read, write: if true;
+      }
+    }
+
     match /deliveries/{deliveryId} {
       allow read, write: if true; // Public read & sync for rider delivery logs
     }

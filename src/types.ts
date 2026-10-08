@@ -129,6 +129,7 @@ export interface UserPermissions {
   canAccessReports?: boolean;
   canAccessFestivalGreetings?: boolean;
   canExportData?: boolean;
+  codCompanionAccess?: boolean; // Super Admin access toggle for COD Entry Companion App
 }
 
 export const DEFAULT_USER_PERMISSIONS: UserPermissions = {
@@ -143,6 +144,7 @@ export const DEFAULT_USER_PERMISSIONS: UserPermissions = {
   canAccessReports: true,
   canAccessFestivalGreetings: false,
   canExportData: true,
+  codCompanionAccess: false, // Default State: OFF for all existing and newly created hub accounts (only Master Super Admin has it active by default)
 };
 
 export interface UserRateConfig {
@@ -347,6 +349,9 @@ export interface CodStaffUser {
   canVerifyOnline?: boolean; // Permission: Can verify Online UPI / QR Deposit
   createdAt: string;
   updatedAt?: string;
+  hubId?: string; // Parent Hub / Owner account UID for multi-tenant isolation
+  ownerUid?: string; // Owner UID
+  workspaceId?: string; // Workspace UID
 }
 
 export interface CodAuditLog {
@@ -449,6 +454,8 @@ export interface DailyCodSheetData {
   company1Name?: string;
   company2Name?: string;
   hubName?: string;
+  hubId?: string; // Hub / Owner account UID for multi-tenant isolation
+  ownerUid?: string; // Owner UID
   updatedAt?: string;
 }
 

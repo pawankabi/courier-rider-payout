@@ -379,7 +379,23 @@ export const UserManagementModal: React.FC<Props> = ({
     try {
       await updateUserPermissions(user.uid, updated);
       showToast(
-        `Feature permission "${key === 'festivalGreetings' ? 'Festival Greetings' : key}" is now ${updated[key] ? 'ENABLED' : 'RESTRICTED'}.`,
+        `Feature permission "${
+          key === 'codCompanionAccess'
+            ? 'COD Entry & Companion App Access'
+            : key === 'festivalGreetings'
+            ? 'Festival Greetings'
+            : key === 'canAccessDailyEntry'
+            ? 'Daily Entry'
+            : key === 'canAccessRiders'
+            ? 'Riders Directory'
+            : key === 'canAccessIncentives'
+            ? 'Incentives'
+            : key === 'canAccessReports'
+            ? 'Reports'
+            : key === 'canExportData'
+            ? 'Export Data'
+            : String(key)
+        }" is now ${updated[key] ? 'ENABLED' : 'RESTRICTED'}.`,
         updated[key] ? 'success' : 'info'
       );
     } catch (err) {
@@ -1209,6 +1225,45 @@ export const UserManagementModal: React.FC<Props> = ({
                     <span
                       className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
                         permissions.festivalGreetings ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* 7. COD Entry & Companion App Access (Super Admin Controlled Gate) */}
+                <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-teal-500/10 text-teal-400 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Receipt className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-semibold text-white">
+                          COD Entry & Companion App Access (हब राइडर ऐप अनुमति)
+                        </h4>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                          permissions.codCompanionAccess ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                        }`}>
+                          {permissions.codCompanionAccess ? 'Allowed' : 'Blocked'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Controls whether riders and staff of this hub account can log in and submit daily reconciliation in the COD Entry companion app. Off by default until activated by Master Admin.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    id={`toggle-perm-cod-companion-${user.uid}`}
+                    type="button"
+                    onClick={() => handleTogglePermission('codCompanionAccess')}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      permissions.codCompanionAccess ? 'bg-teal-500' : 'bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        permissions.codCompanionAccess ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
                   </button>

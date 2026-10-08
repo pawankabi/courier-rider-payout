@@ -130,6 +130,10 @@
     "/system_settings/{settingId}": {
       "schema": "system_settings",
       "description": "System-wide default configurations such as subscription defaults for new users"
+    },
+    "/hubs/{hubId}/daily_cod_sheets/{sheetId}": {
+      "schema": "deliveries",
+      "description": "Multi-tenant hub-isolated daily COD sheets avoiding cross-hub rider leakage"
     }
   }
 }

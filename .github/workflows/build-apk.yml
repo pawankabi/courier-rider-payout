@@ -117,16 +117,7 @@ jobs:
           path: COD-Entry-Rider-Release.apk
           retention-days: 30
 
-      - name: Upload Both Release APKs Bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: All-Release-APKs-v${{ steps.get_version.outputs.version_name }}
-          path: |
-            Admin-Payout-Release.apk
-            COD-Entry-Rider-Release.apk
-          retention-days: 30
-
-      - name: Publish Official GitHub Release with Both APKs
+      - name: Publish Official GitHub Release with Both Standalone APKs
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.get_version.outputs.version_name }}

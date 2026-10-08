@@ -142,15 +142,23 @@ export function isEntityOwnedByUser(
 /**
  * Normalizes user permissions ensuring both standard keys (dailyEntry, riders, incentives, reports)
  * and legacy keys (canAccessDailyEntry, etc.) remain in sync.
+ * Master Super Admin has codCompanionAccess active by default; normal hub accounts have it OFF by default.
  */
-export function normalizeUserPermissions(raw?: any): UserPermissions {
-  if (!raw) return { ...DEFAULT_USER_PERMISSIONS };
+export function normalizeUserPermissions(raw?: any, isSuperAdminUser: boolean = false): UserPermissions {
+  if (!raw) {
+    return isSuperAdminUser
+      ? { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: true }
+      : { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: false };
+  }
   const dailyEntry = raw.dailyEntry ?? raw.canAccessDailyEntry ?? true;
   const riders = raw.riders ?? raw.canAccessRiders ?? true;
   const incentives = raw.incentives ?? raw.canAccessIncentives ?? true;
   const reports = raw.reports ?? raw.canAccessReports ?? true;
   const festivalGreetings = raw.festivalGreetings ?? raw.canAccessFestivalGreetings ?? false;
   const canExportData = raw.canExportData ?? true;
+  const codCompanionAccess = raw.codCompanionAccess !== undefined
+    ? Boolean(raw.codCompanionAccess)
+    : isSuperAdminUser;
 
   return {
     dailyEntry,
@@ -164,6 +172,7 @@ export function normalizeUserPermissions(raw?: any): UserPermissions {
     canAccessReports: reports,
     canAccessFestivalGreetings: festivalGreetings,
     canExportData,
+    codCompanionAccess,
   };
 }
 
@@ -393,7 +402,9 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
 
     let status: 'pending' | 'active' | 'approved' | 'deactivated' | 'blocked' | 'rejected' = adminRole ? 'active' : 'pending';
     let role: 'admin' | 'user' = adminRole ? 'admin' : 'user';
-    let permissions: UserPermissions = { ...DEFAULT_USER_PERMISSIONS };
+    let permissions: UserPermissions = adminRole 
+      ? { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: true }
+      : { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: false };
     let rateConfig: UserRateConfig = { ...DEFAULT_USER_RATE_CONFIG };
     let subscription: UserSubscription;
     let validUntil: string = '';
@@ -439,7 +450,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       role = adminRole ? 'admin' : (data.role || 'user');
       validUntil = data.validUntil || subscription.validUntil || '';
       if (data.permissions) {
-        permissions = normalizeUserPermissions(data.permissions);
+        permissions = normalizeUserPermissions(data.permissions, adminRole);
       }
       if (data.rateConfig) {
         rateConfig = { ...DEFAULT_USER_RATE_CONFIG, ...data.rateConfig };
@@ -471,7 +482,9 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
         lastLoginAt: new Date().toISOString(),
         status, // 'active' for super admin, 'pending' for regular user
         role,
-        permissions: { ...DEFAULT_USER_PERMISSIONS },
+        permissions: adminRole
+          ? { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: true }
+          : { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: false },
         rateConfig,
         subscription,
         validUntil,
@@ -528,7 +541,9 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       isApproved: adminRole,
       isPro: adminRole,
       role: adminRole ? 'admin' : 'user',
-      permissions: { ...DEFAULT_USER_PERMISSIONS },
+      permissions: adminRole 
+        ? { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: true }
+        : { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: false },
       rateConfig: { ...DEFAULT_USER_RATE_CONFIG },
       hubSignature: '',
       subscription: createDefaultUserSubscription(),
@@ -579,7 +594,7 @@ export function subscribeToCurrentUserDoc(
     const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked' || status === 'rejected');
     const isApproved = adminRole || status === 'approved' || status === 'active' || isProSubscription;
 
-    const permissions = normalizeUserPermissions(mergedData.permissions);
+    const permissions = normalizeUserPermissions(mergedData.permissions, adminRole);
     const rateConfig = mergedData.rateConfig 
       ? { ...DEFAULT_USER_RATE_CONFIG, ...mergedData.rateConfig } 
       : { ...DEFAULT_USER_RATE_CONFIG };
@@ -596,7 +611,7 @@ export function subscribeToCurrentUserDoc(
       permissions, 
       rateConfig, 
       hubSignature, 
-      subscription,
+      subscription, 
       rawDoc: mergedData 
     });
   };
@@ -617,7 +632,7 @@ export function subscribeToCurrentUserDoc(
           isPending: !adminRole,
           isBlocked: false,
           isApproved: adminRole,
-          permissions: DEFAULT_USER_PERMISSIONS,
+          permissions: adminRole ? { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: true } : DEFAULT_USER_PERMISSIONS,
           rateConfig: DEFAULT_USER_RATE_CONFIG,
           hubSignature: '',
           subscription: createDefaultUserSubscription(),
@@ -955,7 +970,7 @@ export async function toggleUserStatus(
 export async function toggleUserPermission(
   userId: string,
   currentPermissions: UserPermissions,
-  key: 'dailyEntry' | 'riders' | 'incentives' | 'reports' | 'festivalGreetings'
+  key: 'dailyEntry' | 'riders' | 'incentives' | 'reports' | 'festivalGreetings' | 'codCompanionAccess'
 ): Promise<UserPermissions> {
   const nextVal = !currentPermissions[key];
   const updated: UserPermissions = {
@@ -967,6 +982,7 @@ export async function toggleUserPermission(
   if (key === 'incentives') updated.canAccessIncentives = nextVal;
   if (key === 'reports') updated.canAccessReports = nextVal;
   if (key === 'festivalGreetings') updated.canAccessFestivalGreetings = nextVal;
+  if (key === 'codCompanionAccess') updated.codCompanionAccess = nextVal;
 
   await updateUserPermissions(userId, updated);
   return updated;

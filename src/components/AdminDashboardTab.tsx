@@ -953,7 +953,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   // Real-time Permission Toggle for specific feature
   const handleToggleFeature = async (
     user: AppUser,
-    key: 'dailyEntry' | 'riders' | 'incentives' | 'reports',
+    key: 'dailyEntry' | 'riders' | 'incentives' | 'reports' | 'codCompanionAccess',
     e?: React.MouseEvent
   ) => {
     e?.stopPropagation();
@@ -966,7 +966,8 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       const featureLabel = 
         key === 'dailyEntry' ? 'Daily Entry' :
         key === 'riders' ? 'Riders' :
-        key === 'incentives' ? 'Incentives' : 'Reports';
+        key === 'incentives' ? 'Incentives' :
+        key === 'reports' ? 'Reports' : 'COD Entry & Companion App Access';
 
       showToast(
         `${featureLabel} is now ${isEnabled ? 'ENABLED' : 'DISABLED'} for ${user.displayName || user.email}.`,
@@ -1976,7 +1977,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                   <th className="py-3.5 px-4">Email ID</th>
                   <th className="py-3.5 px-4 text-center min-w-[170px]">Status & Validity Date</th>
                   <th className="py-3.5 px-4 min-w-[270px]">Validity Management Controls</th>
-                  <th className="py-3.5 px-4">Feature Permissions</th>
+                  <th className="py-3.5 px-4">Feature Access Flags</th>
                   <th className="py-3.5 px-4 sm:px-6 text-right">Action Controls</th>
                 </tr>
               </thead>
@@ -2305,6 +2306,25 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                             <span>Reports</span>
                             <span className="text-[10px] font-bold">
                               {perms.reports ? '✓' : '✕'}
+                            </span>
+                          </button>
+
+                          {/* COD Entry & Companion App Access */}
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleFeature(user, 'codCompanionAccess', e)}
+                            disabled={permLoadingKey === `${user.uid}-codCompanionAccess`}
+                            className={`px-2 py-1 rounded-lg text-xs font-medium border flex items-center gap-1 transition ${
+                              perms.codCompanionAccess
+                                ? 'bg-teal-950/70 text-teal-300 border-teal-700 hover:bg-teal-900/80 shadow-sm'
+                                : 'bg-slate-900 text-slate-500 border-slate-800 line-through hover:text-slate-400'
+                            }`}
+                            title="Click to toggle COD Entry & Companion App Access (Super Admin Gate)"
+                          >
+                            <Receipt className="w-3 h-3" />
+                            <span>COD App</span>
+                            <span className="text-[10px] font-bold">
+                              {perms.codCompanionAccess ? '✓' : '✕'}
                             </span>
                           </button>
                         </div>

@@ -16,9 +16,11 @@ import {
   getDocs, 
   writeBatch,
   onSnapshot,
+  query,
+  where,
   Unsubscribe 
 } from 'firebase/firestore';
-import { cleanForFirestore } from './firestoreSync';
+import { cleanForFirestore, isSuperAdmin, SUPER_ADMIN_EMAIL, normalizeUserPermissions } from './firestoreSync';
 import { getTodayDateString } from '../utils/formatters';
 
 const DEFAULT_COMPANY_1 = 'Valmo COD';
@@ -146,6 +148,9 @@ export async function loadCodStaffUsers(userId: string, riders: Rider[]): Promis
         canVerifyCod: false,
         canVerifyCash: false,
         canVerifyOnline: false,
+        hubId: userId,
+        ownerUid: userId,
+        workspaceId: userId,
         createdAt: new Date().toISOString(),
       };
       staffMap.set(rider.id, newStaff);
@@ -159,6 +164,9 @@ export async function loadCodStaffUsers(userId: string, riders: Rider[]): Promis
           name: rider.name,
           phone: rider.phone,
           isActive: rider.active !== false,
+          hubId: curr.hubId || userId,
+          ownerUid: curr.ownerUid || userId,
+          workspaceId: curr.workspaceId || userId,
         });
         modified = true;
       }
@@ -186,15 +194,22 @@ export async function saveCodStaffUsers(userId: string, staffList: CodStaffUser[
     try {
       const batch = writeBatch(db);
       staffList.forEach((staff) => {
+        const staffWithHub = {
+          ...staff,
+          hubId: staff.hubId || userId,
+          ownerUid: staff.ownerUid || userId,
+          workspaceId: staff.workspaceId || userId,
+        };
+
         if (userId && userId !== 'guest') {
           const docRef = doc(db, 'workspaces', userId, 'cod_staff', staff.id);
-          batch.set(docRef, cleanForFirestore(staff), { merge: true });
+          batch.set(docRef, cleanForFirestore(staffWithHub), { merge: true });
         }
         
-        // Sync to shared cod_staff_pins for companion login
+        // Sync to shared cod_staff_pins for companion login with hub isolation tags
         const cleanPhone = (staff.phone || '').replace(/\D/g, '').slice(-10);
         const payload = cleanForFirestore({
-          ...staff,
+          ...staffWithHub,
           cleanPhone,
           updatedAt: new Date().toISOString(),
         });
@@ -349,9 +364,10 @@ export async function loadCodDailyEntries(
   const localKey = getEntriesStorageKey(userId, targetDate);
   let savedEntries: CodDailyEntry[] = [];
 
-  // 1. Try unified daily_cod_sheets in local cache first
+  // 1. Try hub-scoped daily_cod_sheets in local cache first
   try {
-    const rawSheet = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+    const hubLocalKey = userId ? `cp_cod_sheet_${userId}_${targetDate}` : `cp_cod_sheet_${targetDate}`;
+    const rawSheet = localStorage.getItem(hubLocalKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
     if (rawSheet) {
       const parsedSheet = JSON.parse(rawSheet);
       savedEntries = extractEntriesFromSheetRaw(parsedSheet, targetDate);
@@ -366,19 +382,43 @@ export async function loadCodDailyEntries(
     } catch {}
   }
 
-  // 3. Attempt direct Firestore fetch from daily_cod_sheets/{targetDate}
+  // 3. Attempt direct Firestore fetch: first from hubs/{userId}/daily_cod_sheets/{targetDate}
   if (db && savedEntries.length === 0) {
     try {
-      const sheetRef = doc(db, 'daily_cod_sheets', targetDate);
-      const sheetSnap = await getDoc(sheetRef);
-      if (sheetSnap.exists()) {
-        const sheetData = sheetSnap.data();
-        savedEntries = extractEntriesFromSheetRaw(sheetData, targetDate);
-        if (savedEntries.length > 0) {
-          try {
-            localStorage.setItem(localKey, JSON.stringify(savedEntries));
-            localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(sheetData));
-          } catch {}
+      if (userId && userId !== 'guest' && userId !== 'super_admin_hub') {
+        const hubSheetRef = doc(db, 'hubs', userId, 'daily_cod_sheets', targetDate);
+        const hubSnap = await getDoc(hubSheetRef);
+        if (hubSnap.exists()) {
+          const hubData = hubSnap.data();
+          savedEntries = extractEntriesFromSheetRaw(hubData, targetDate);
+          if (savedEntries.length > 0) {
+            try {
+              localStorage.setItem(localKey, JSON.stringify(savedEntries));
+              localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify(hubData));
+            } catch {}
+          }
+        }
+        if (savedEntries.length === 0) {
+          // Check scoped root doc: daily_cod_sheets/{userId}_{targetDate}
+          const scopedSnap = await getDoc(doc(db, 'daily_cod_sheets', `${userId}_${targetDate}`));
+          if (scopedSnap.exists()) {
+            const scopedData = scopedSnap.data();
+            savedEntries = extractEntriesFromSheetRaw(scopedData, targetDate);
+          }
+        }
+      } else {
+        // Fallback for demo accounts, unauthenticated guests, or super admin hub
+        const sheetRef = doc(db, 'daily_cod_sheets', targetDate);
+        const sheetSnap = await getDoc(sheetRef);
+        if (sheetSnap.exists()) {
+          const sheetData = sheetSnap.data();
+          savedEntries = extractEntriesFromSheetRaw(sheetData, targetDate);
+          if (savedEntries.length > 0) {
+            try {
+              localStorage.setItem(localKey, JSON.stringify(savedEntries));
+              localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(sheetData));
+            } catch {}
+          }
         }
       }
     } catch (err) {
@@ -466,19 +506,36 @@ export async function saveCodDailyEntries(
   try {
     localStorage.setItem(localKey, JSON.stringify(entries));
     localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(entries));
+    if (userId) {
+      localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify(entries));
+    }
   } catch {}
 
   if (db) {
     try {
       const entriesMap = buildEntriesMap(entries);
-      // 1. Sync to daily_cod_sheets for zero-second real-time delivery boy & staff updates
-      const sheetRef = doc(db, 'daily_cod_sheets', targetDate);
-      await setDoc(sheetRef, cleanForFirestore({
+      const payload = cleanForFirestore({
         date: targetDate,
+        hubId: userId,
+        ownerUid: userId,
         entries,
         entriesMap,
         updatedAt: new Date().toISOString(),
-      }), { merge: true });
+      });
+
+      // 1. Hub-scoped path: hubs/{userId}/daily_cod_sheets/{date} (No cross-hub contamination)
+      if (userId && userId !== 'guest' && userId !== 'super_admin_hub') {
+        const hubSheetRef = doc(db, 'hubs', userId, 'daily_cod_sheets', targetDate);
+        await setDoc(hubSheetRef, payload, { merge: true });
+
+        // Dual-write to daily_cod_sheets/{userId}_{date} for query compatibility
+        const scopedRootRef = doc(db, 'daily_cod_sheets', `${userId}_${targetDate}`);
+        await setDoc(scopedRootRef, payload, { merge: true });
+      } else {
+        // Fallback write for un-isolated setups, local guest, or super admin demo
+        const sheetRef = doc(db, 'daily_cod_sheets', targetDate);
+        await setDoc(sheetRef, payload, { merge: true });
+      }
 
       // 2. Also persist in user workspace
       if (userId && userId !== 'guest') {
@@ -762,10 +819,10 @@ export async function authenticateCodStaffCompanion(
   // 4. Default Seed/Demo accounts for immediate out-of-the-box mobile testing
   if (!matchedUser) {
     const demoAccounts: CodStaffUser[] = [
-      { id: 'staff_demo_rider', riderId: 'rider_1', name: 'सुरेश कुमार (Rider)', phone: '9876543210', role: 'rider', pin: '1234', isActive: true, createdAt: new Date().toISOString() },
-      { id: 'staff_demo_tl', name: 'रोहित वर्मा (Team Leader)', phone: '9876543211', role: 'team_leader', pin: '4321', isActive: true, canVerifyCod: true, canVerifyCash: false, canVerifyOnline: true, createdAt: new Date().toISOString() },
-      { id: 'staff_demo_sup', name: 'अमित सिंह (Supervisor)', phone: '9876543212', role: 'supervisor', pin: '5678', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, createdAt: new Date().toISOString() },
-      { id: 'staff_demo_incharge', name: 'पवन कबी (Hub Incharge)', phone: '9876543213', role: 'hub_incharge', pin: '9999', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, createdAt: new Date().toISOString() },
+      { id: 'staff_demo_rider', riderId: 'rider_1', name: 'सुरेश कुमार (Rider)', phone: '9876543210', role: 'rider', pin: '1234', isActive: true, hubId: 'super_admin_hub', createdAt: new Date().toISOString() },
+      { id: 'staff_demo_tl', name: 'रोहित वर्मा (Team Leader)', phone: '9876543211', role: 'team_leader', pin: '4321', isActive: true, canVerifyCod: true, canVerifyCash: false, canVerifyOnline: true, hubId: 'super_admin_hub', createdAt: new Date().toISOString() },
+      { id: 'staff_demo_sup', name: 'अमित सिंह (Supervisor)', phone: '9876543212', role: 'supervisor', pin: '5678', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, hubId: 'super_admin_hub', createdAt: new Date().toISOString() },
+      { id: 'staff_demo_incharge', name: 'पवन कबी (Hub Incharge)', phone: '9876543213', role: 'hub_incharge', pin: '9999', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, hubId: 'super_admin_hub', createdAt: new Date().toISOString() },
     ];
     matchedUser = demoAccounts.find((d) => {
       const dPhone = d.phone!.replace(/\D/g, '').slice(-10);
@@ -790,6 +847,114 @@ export async function authenticateCodStaffCompanion(
     };
   }
 
+  // 5. HUB-BASED MULTI-TENANT RESOLUTION & SUPER ADMIN ACCESS GATE
+  let hubId = matchedUser.hubId || matchedUser.ownerUid || matchedUser.workspaceId;
+
+  // If hubId is not yet attached, find rider's workspace/owner from riders collection
+  if (!hubId && db) {
+    try {
+      const ridersQ = query(collection(db, 'riders'), where('phone', '==', cleanPhone));
+      const snaps = await getDocs(ridersQ);
+      if (!snaps.empty) {
+        const rData = snaps.docs[0].data();
+        hubId = rData.workspaceId || rData.userId || rData.createdBy;
+      } else {
+        const allRidersSnap = await getDocs(collection(db, 'riders'));
+        for (const docSnap of allRidersSnap.docs) {
+          const rData = docSnap.data();
+          const rCleanPhone = (rData.phone || '').replace(/\D/g, '').slice(-10);
+          if (rCleanPhone === cleanPhone) {
+            hubId = rData.workspaceId || rData.userId || rData.createdBy;
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Rider hub resolution notice:', err);
+    }
+  }
+
+  // Scan local rider cache for parent hub resolution if needed
+  if (!hubId) {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_'))) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const list = JSON.parse(raw);
+            if (Array.isArray(list)) {
+              const found = list.find((r: any) => (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone);
+              if (found) {
+                const parts = key.split('_');
+                hubId = found.workspaceId || found.userId || found.createdBy || parts[parts.length - 1];
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (!hubId && matchedUser.id?.startsWith('staff_demo_')) {
+    hubId = 'super_admin_hub';
+  }
+
+  // If no hubId could be resolved: Reject with required Hindi access message
+  if (!hubId) {
+    return {
+      success: false,
+      reason: 'inactive',
+      message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
+    };
+  }
+
+  // Check Feature Gate: codCompanionAccess
+  // Default State: OFF for all accounts (only Master Super Admin has it active by default)
+  // If toggle is OFF, display required exact Hindi message:
+  // "यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।"
+  if (hubId !== 'super_admin_hub' && db) {
+    try {
+      let hubDoc = await getDoc(doc(db, 'users', hubId));
+      if (!hubDoc.exists()) {
+        hubDoc = await getDoc(doc(db, 'all_users', hubId));
+      }
+
+      if (hubDoc.exists()) {
+        const hubData = hubDoc.data();
+        const isHubSuperAdmin = isSuperAdmin(hubData?.email);
+        if (!isHubSuperAdmin) {
+          const perms = normalizeUserPermissions(hubData?.permissions);
+          if (!perms.codCompanionAccess) {
+            return {
+              success: false,
+              reason: 'inactive',
+              message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
+            };
+          }
+        }
+      } else {
+        // Hub document missing and not super admin: default OFF
+        return {
+          success: false,
+          reason: 'inactive',
+          message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
+        };
+      }
+    } catch (gateErr) {
+      console.warn('Feature gate evaluation notice:', gateErr);
+      return {
+        success: false,
+        reason: 'inactive',
+        message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
+      };
+    }
+  }
+
+  matchedUser.hubId = hubId;
+  matchedUser.ownerUid = hubId;
+
   // Save session
   try {
     sessionStorage.setItem('cp_cod_companion_user', JSON.stringify(matchedUser));
@@ -801,6 +966,28 @@ export async function authenticateCodStaffCompanion(
     user: matchedUser,
     message: `स्वागत है, ${matchedUser.name}!`,
   };
+}
+
+/**
+ * Super Admin Feature Gate Checker for a specific hub
+ */
+export async function checkHubCodAccess(hubId?: string): Promise<boolean> {
+  if (!hubId) return false;
+  if (hubId === 'super_admin_hub') return true;
+  if (!db) return true;
+  try {
+    let hubDoc = await getDoc(doc(db, 'users', hubId));
+    if (!hubDoc.exists()) {
+      hubDoc = await getDoc(doc(db, 'all_users', hubId));
+    }
+    if (hubDoc.exists()) {
+      const hubData = hubDoc.data();
+      if (isSuperAdmin(hubData?.email)) return true;
+      const perms = normalizeUserPermissions(hubData?.permissions);
+      return Boolean(perms.codCompanionAccess);
+    }
+  } catch {}
+  return false;
 }
 
 export function getStoredCodCompanionUser(): CodStaffUser | null {
@@ -819,14 +1006,59 @@ export function clearCodCompanionSession(): void {
 }
 
 /**
- * Helper to retrieve all active riders across Firestore and local storage caches
- * for auto-populating empty daily COD sheets
+ * Helper to retrieve active riders strictly scoped to the target Hub (No cross-hub data leakage)
+ * Scoped by hubId / workspaceId
  */
-export async function getAllActiveRidersForCod(): Promise<Rider[]> {
+export async function getAllActiveRidersForCod(hubId?: string): Promise<Rider[]> {
   const ridersMap = new Map<string, Rider>();
 
-  // 1. Try Firestore root /riders collection
-  if (db) {
+  // If no hubId provided and not super admin, companion app must NOT fetch all riders globally!
+  if (!hubId) {
+    return [];
+  }
+
+  // 1. Strictly query target Hub's riders from their isolated workspace collection
+  if (db && hubId !== 'super_admin_hub') {
+    try {
+      const wsCol = collection(db, 'workspaces', hubId, 'riders');
+      const wsSnaps = await getDocs(wsCol);
+      wsSnaps.docs.forEach((d) => {
+        const data = d.data() as Rider;
+        const id = data.id || d.id;
+        if (id && data.active !== false) {
+          ridersMap.set(id, { ...data, id, workspaceId: hubId });
+        }
+      });
+
+      // If workspace subcollection empty, query root riders scoped by workspaceId/createdBy
+      if (ridersMap.size === 0) {
+        const q = query(collection(db, 'riders'), where('workspaceId', '==', hubId));
+        const snaps = await getDocs(q);
+        snaps.docs.forEach((d) => {
+          const data = d.data() as Rider;
+          const id = data.id || d.id;
+          if (id && data.active !== false) {
+            ridersMap.set(id, { ...data, id, workspaceId: hubId });
+          }
+        });
+      }
+
+      if (ridersMap.size === 0) {
+        const qUser = query(collection(db, 'riders'), where('userId', '==', hubId));
+        const snapsUser = await getDocs(qUser);
+        snapsUser.docs.forEach((d) => {
+          const data = d.data() as Rider;
+          const id = data.id || d.id;
+          if (id && data.active !== false) {
+            ridersMap.set(id, { ...data, id, workspaceId: hubId });
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('Hub riders isolated query notice:', err);
+    }
+  } else if (db && hubId === 'super_admin_hub') {
+    // Only super admin demo test hub
     try {
       const colRef = collection(db, 'riders');
       const snaps = await getDocs(colRef);
@@ -842,29 +1074,46 @@ export async function getAllActiveRidersForCod(): Promise<Rider[]> {
     }
   }
 
-  // 2. Scan all localStorage rider caches
+  // 2. Scan localStorage rider caches strictly for target Hub
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_'))) {
-        const raw = localStorage.getItem(key);
+    if (hubId && hubId !== 'super_admin_hub') {
+      const keys = [`cp_cache_riders_${hubId}`, `courier_riders_${hubId}`];
+      for (const k of keys) {
+        const raw = localStorage.getItem(k);
         if (raw) {
           const list: Rider[] = JSON.parse(raw);
           if (Array.isArray(list)) {
             list.forEach((r) => {
               if (r && r.id && r.name && r.active !== false && !ridersMap.has(r.id)) {
-                ridersMap.set(r.id, r);
+                ridersMap.set(r.id, { ...r, workspaceId: hubId });
               }
             });
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_'))) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const list: Rider[] = JSON.parse(raw);
+            if (Array.isArray(list)) {
+              list.forEach((r) => {
+                if (r && r.id && r.name && r.active !== false && !ridersMap.has(r.id)) {
+                  ridersMap.set(r.id, r);
+                }
+              });
+            }
           }
         }
       }
     }
   } catch {}
 
-  // 3. Scan staff pins cache if rider role exists
+  // 3. Scan staff pins for target hub if role === 'rider'
   try {
-    const rawStaff = localStorage.getItem('cp_cod_staff_pins_cache');
+    const rawStaff = localStorage.getItem(hubId ? `cp_cod_staff_${hubId}` : 'cp_cod_staff_pins_cache');
     if (rawStaff) {
       const staffList: CodStaffUser[] = JSON.parse(rawStaff);
       staffList.forEach((s) => {
@@ -877,6 +1126,7 @@ export async function getAllActiveRidersForCod(): Promise<Rider[]> {
               phone: s.phone || '',
               joinedDate: s.createdAt || new Date().toISOString(),
               active: true,
+              workspaceId: hubId,
             });
           }
         }
@@ -913,40 +1163,45 @@ export function buildDefaultCodEntriesForRiders(
 }
 
 /**
- * 7. Real-Time Zero-Second Listener for Today's Active COD Sheet (daily_cod_sheets)
+ * 7. Real-Time Zero-Second Listener for Today's Active COD Sheet (hubs/{hubId}/daily_cod_sheets)
  * Synchronizes immediately on every edit or verification
- * Automatically populates active riders if sheet is empty or does not exist
+ * Strictly isolated per Hub to avoid cross-hub sheet overwrites
  */
 export function subscribeToDailyCodSheet(
   date: string,
   onUpdate: (data: DailyCodSheetData) => void,
-  onError?: (err: Error) => void
+  onError?: (err: Error) => void,
+  hubId?: string
 ): Unsubscribe {
   const targetDate = date || getTodayDateString();
+  const effectiveHubId = hubId && hubId !== 'super_admin_hub' ? hubId : undefined;
+  const localCacheKey = effectiveHubId ? `cp_cod_sheet_${effectiveHubId}_${targetDate}` : `cp_cod_sheet_${targetDate}`;
 
   // Helper to ensure empty entries list is populated with active riders
   const enrichWithActiveRiders = async (baseData: DailyCodSheetData) => {
     if (!baseData.entries || baseData.entries.length === 0) {
-      const activeRiders = await getAllActiveRidersForCod();
+      const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
       if (activeRiders.length > 0) {
         const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
         const enriched: DailyCodSheetData = {
           ...baseData,
           entries: defaultEntries,
+          hubId: effectiveHubId,
         };
         try {
+          localStorage.setItem(localCacheKey, JSON.stringify(enriched));
           localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(enriched));
         } catch {}
         onUpdate(enriched);
         return;
       }
     }
-    onUpdate(baseData);
+    onUpdate({ ...baseData, hubId: effectiveHubId });
   };
 
   // Instant Cache-First load in 0.0s
   try {
-    const cachedRaw = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+    const cachedRaw = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
     if (cachedRaw) {
       const cached = JSON.parse(cachedRaw);
       const parsedEntries = extractEntriesFromSheetRaw(cached, targetDate);
@@ -956,10 +1211,10 @@ export function subscribeToDailyCodSheet(
         isLocked: Boolean(cached.isLocked),
         company1Name: cached.company1Name || DEFAULT_COMPANY_1,
         company2Name: cached.company2Name || DEFAULT_COMPANY_2,
+        hubId: effectiveHubId,
       });
     } else {
-      // No local cache, immediately populate from available active riders so UI isn't empty!
-      getAllActiveRidersForCod().then((riders) => {
+      getAllActiveRidersForCod(effectiveHubId).then((riders) => {
         if (riders.length > 0) {
           const defaultSheet: DailyCodSheetData = {
             date: targetDate,
@@ -967,6 +1222,7 @@ export function subscribeToDailyCodSheet(
             isLocked: false,
             company1Name: DEFAULT_COMPANY_1,
             company2Name: DEFAULT_COMPANY_2,
+            hubId: effectiveHubId,
           };
           onUpdate(defaultSheet);
         }
@@ -979,7 +1235,11 @@ export function subscribeToDailyCodSheet(
   }
 
   try {
-    const docRef = doc(db, 'daily_cod_sheets', targetDate);
+    // Prefer nested scoped path: hubs/{hubId}/daily_cod_sheets/{targetDate}
+    const docRef = effectiveHubId
+      ? doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate)
+      : doc(db, 'daily_cod_sheets', targetDate);
+
     const unsubscribe = onSnapshot(
       docRef,
       async (snapshot) => {
@@ -991,15 +1251,13 @@ export function subscribeToDailyCodSheet(
 
           let finalEntries = existingEntries;
 
-          // If doc exists but has 0 entries, auto-populate riders
           if (finalEntries.length === 0) {
-            const activeRiders = await getAllActiveRidersForCod();
+            const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
             if (activeRiders.length > 0) {
               finalEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
             }
           } else {
-            // Check if any active riders are missing from existing sheet, merge them cleanly
-            const activeRiders = await getAllActiveRidersForCod();
+            const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
             const existingRiderIds = new Set(finalEntries.map((e) => e.riderId));
             const existingPhones = new Set(
               finalEntries
@@ -1027,15 +1285,39 @@ export function subscribeToDailyCodSheet(
             company1Name,
             company2Name,
             hubName: raw.hubName,
+            hubId: effectiveHubId,
             updatedAt: raw.updatedAt,
           };
           try {
+            localStorage.setItem(localCacheKey, JSON.stringify(sheetData));
             localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(sheetData));
           } catch {}
           onUpdate(sheetData);
         } else {
-          // Document does not exist yet! Automatically pull all active riders
-          const activeRiders = await getAllActiveRidersForCod();
+          // Document not found in hubs/{hubId}; check fallback daily_cod_sheets/{effectiveHubId}_{targetDate} or root
+          if (effectiveHubId) {
+            try {
+              const rootFallbackSnap = await getDoc(doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`));
+              if (rootFallbackSnap.exists()) {
+                const raw = rootFallbackSnap.data();
+                const existingEntries = extractEntriesFromSheetRaw(raw, targetDate);
+                const sheetData: DailyCodSheetData = {
+                  date: targetDate,
+                  entries: existingEntries,
+                  isLocked: Boolean(raw.isLocked),
+                  company1Name: raw.company1Name || DEFAULT_COMPANY_1,
+                  company2Name: raw.company2Name || DEFAULT_COMPANY_2,
+                  hubId: effectiveHubId,
+                  updatedAt: raw.updatedAt,
+                };
+                onUpdate(sheetData);
+                return;
+              }
+            } catch {}
+          }
+
+          // Document does not exist yet! Automatically pull active riders for this hub
+          const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
           const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
           const defaultSheet: DailyCodSheetData = {
             date: targetDate,
@@ -1043,8 +1325,10 @@ export function subscribeToDailyCodSheet(
             isLocked: false,
             company1Name: DEFAULT_COMPANY_1,
             company2Name: DEFAULT_COMPANY_2,
+            hubId: effectiveHubId,
           };
           try {
+            localStorage.setItem(localCacheKey, JSON.stringify(defaultSheet));
             localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(defaultSheet));
           } catch {}
           onUpdate(defaultSheet);
@@ -1064,14 +1348,17 @@ export function subscribeToDailyCodSheet(
 }
 
 /**
- * 8. Zero-Second Real-Time Update for Single Rider Row in daily_cod_sheets
+ * 8. Zero-Second Real-Time Update for Single Rider Row in daily_cod_sheets (Hub-Scoped)
  */
 export async function updateSingleRiderEntryInSheet(
   date: string,
   updatedEntry: CodDailyEntry,
-  changedBy: { name: string; role: CodStaffRole | 'owner' }
+  changedBy: { name: string; role: CodStaffRole | 'owner' },
+  hubId?: string
 ): Promise<void> {
   const targetDate = date || getTodayDateString();
+  const effectiveHubId = hubId && hubId !== 'super_admin_hub' ? hubId : undefined;
+  const localCacheKey = effectiveHubId ? `cp_cod_sheet_${effectiveHubId}_${targetDate}` : `cp_cod_sheet_${targetDate}`;
 
   // Re-calculate totals
   const totalCod = (Number(updatedEntry.company1Amount) || 0) + (Number(updatedEntry.company2Amount) || 0);
@@ -1091,7 +1378,7 @@ export async function updateSingleRiderEntryInSheet(
 
   // 1. Instant local cache update
   try {
-    const raw = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+    const raw = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
     let currentEntries: CodDailyEntry[] = [];
     let isLocked = false;
     let c1 = DEFAULT_COMPANY_1;
@@ -1122,22 +1409,27 @@ export async function updateSingleRiderEntryInSheet(
       isLocked,
       company1Name: c1,
       company2Name: c2,
+      hubId: effectiveHubId,
       updatedAt: new Date().toISOString(),
     };
+    localStorage.setItem(localCacheKey, JSON.stringify(updatedSheet));
     localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(updatedSheet));
   } catch {}
 
-  // 2. Commit to Firestore daily_cod_sheets collection (triggers onSnapshot immediately across devices)
+  // 2. Commit to Firestore (triggers onSnapshot immediately across devices)
   if (db) {
     try {
-      const docRef = doc(db, 'daily_cod_sheets', targetDate);
+      const targetDocRef = effectiveHubId 
+        ? doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate)
+        : doc(db, 'daily_cod_sheets', targetDate);
+
       let entries: CodDailyEntry[] = [];
       let isLocked = false;
       let company1Name = DEFAULT_COMPANY_1;
       let company2Name = DEFAULT_COMPANY_2;
 
       try {
-        const snap = await getDoc(docRef);
+        const snap = await getDoc(targetDocRef);
         if (snap.exists()) {
           const data = snap.data();
           entries = extractEntriesFromSheetRaw(data, targetDate);
@@ -1149,10 +1441,9 @@ export async function updateSingleRiderEntryInSheet(
         console.warn('Notice fetching current sheet:', e);
       }
 
-      // If document was empty or not fetched, populate from active cache
       if (entries.length === 0) {
         try {
-          const cachedRaw = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+          const cachedRaw = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
           if (cachedRaw) {
             entries = extractEntriesFromSheetRaw(JSON.parse(cachedRaw), targetDate);
           }
@@ -1171,17 +1462,29 @@ export async function updateSingleRiderEntryInSheet(
       }
 
       const entriesMap = buildEntriesMap(entries);
-
-      // Perform setDoc with merge: true for instant persistence and zero-second onSnapshot propagation
-      await setDoc(docRef, cleanForFirestore({
+      const payload = cleanForFirestore({
         date: targetDate,
+        hubId: effectiveHubId,
+        ownerUid: effectiveHubId,
         entries,
         entriesMap,
         isLocked,
         company1Name,
         company2Name,
         updatedAt: new Date().toISOString(),
-      }), { merge: true });
+      });
+
+      // Write to hub-scoped document: hubs/{hubId}/daily_cod_sheets/{targetDate}
+      await setDoc(targetDocRef, payload, { merge: true });
+
+      // If hubId is set, also dual-write to daily_cod_sheets/{hubId}_{date} for query consistency
+      if (effectiveHubId) {
+        const rootScopedDocRef = doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`);
+        await setDoc(rootScopedDocRef, payload, { merge: true }).catch(() => {});
+      } else {
+        const rootDocRef = doc(db, 'daily_cod_sheets', targetDate);
+        await setDoc(rootDocRef, payload, { merge: true }).catch(() => {});
+      }
     } catch (err) {
       console.warn('Failed to update entry in daily_cod_sheets:', err);
     }
@@ -1194,9 +1497,13 @@ export async function updateSingleRiderEntryInSheet(
 export async function toggleDayEndLockForSheet(
   date: string,
   isLocked: boolean,
-  lockedBy: string
+  lockedBy: string,
+  hubId?: string
 ): Promise<void> {
   const targetDate = date || getTodayDateString();
+  const effectiveHubId = hubId && hubId !== 'super_admin_hub' ? hubId : undefined;
+  const localCacheKey = effectiveHubId ? `cp_cod_sheet_${effectiveHubId}_${targetDate}` : `cp_cod_sheet_${targetDate}`;
+
   const updateData = {
     isLocked,
     lockedBy: isLocked ? lockedBy : null,
@@ -1206,13 +1513,14 @@ export async function toggleDayEndLockForSheet(
 
   // Local cache
   try {
-    const raw = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+    const raw = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
         parsed.isLocked = isLocked;
         parsed.lockedBy = isLocked ? lockedBy : undefined;
         parsed.lockedAt = isLocked ? new Date().toISOString() : undefined;
+        localStorage.setItem(localCacheKey, JSON.stringify(parsed));
         localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(parsed));
       }
     }
@@ -1221,8 +1529,14 @@ export async function toggleDayEndLockForSheet(
   // Firestore
   if (db) {
     try {
-      const docRef = doc(db, 'daily_cod_sheets', targetDate);
-      await setDoc(docRef, cleanForFirestore(updateData), { merge: true });
+      const targetDocRef = effectiveHubId
+        ? doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate)
+        : doc(db, 'daily_cod_sheets', targetDate);
+      await setDoc(targetDocRef, cleanForFirestore(updateData), { merge: true });
+
+      if (effectiveHubId) {
+        await setDoc(doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`), cleanForFirestore(updateData), { merge: true }).catch(() => {});
+      }
     } catch (err) {
       console.warn('Failed to toggle Day-End lock in daily_cod_sheets:', err);
     }

@@ -185,7 +185,7 @@ export const CodManagementModal: React.FC<Props> = ({
       }
     });
 
-    // Zero-second Firestore onSnapshot listener
+    // Zero-second Firestore onSnapshot listener scoped to this hub
     const unsubscribe = subscribeToDailyCodSheet(
       selectedDate,
       (sheetData) => {
@@ -249,7 +249,8 @@ export const CodManagementModal: React.FC<Props> = ({
       },
       (err) => {
         console.warn('Real-time sheet subscription notice in modal:', err);
-      }
+      },
+      userId
     );
 
     return () => {

@@ -44,7 +44,8 @@ import {
   clearCodCompanionSession,
   subscribeToDailyCodSheet,
   updateSingleRiderEntryInSheet,
-  toggleDayEndLockForSheet
+  toggleDayEndLockForSheet,
+  checkHubCodAccess
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
 
@@ -61,6 +62,26 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showDemoLogins, setShowDemoLogins] = useState(false);
+  const [isHubAccessBlocked, setIsHubAccessBlocked] = useState<boolean>(false);
+
+  const currentHubId = authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId;
+
+  // Real-time Super Admin Feature Gate Check for logged in Hub
+  useEffect(() => {
+    if (!authUser) {
+      setIsHubAccessBlocked(false);
+      return;
+    }
+    const verifyHubAccess = async () => {
+      const allowed = await checkHubCodAccess(currentHubId);
+      if (!allowed) {
+        setIsHubAccessBlocked(true);
+      } else {
+        setIsHubAccessBlocked(false);
+      }
+    };
+    verifyHubAccess();
+  }, [authUser, currentHubId]);
 
   // Sheet & Active Date State
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
@@ -75,6 +96,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     isLocked: false,
     company1Name: 'Valmo COD',
     company2Name: 'Xpressbees COD',
+    hubId: currentHubId,
   });
   const [isRealtimeConnected, setIsRealtimeConnected] = useState<boolean>(true);
   const [lastSyncTime, setLastSyncTime] = useState<string>('0s पहले');
@@ -117,9 +139,9 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     }, 3800);
   };
 
-  // 1. Subscribe to Firebase Firestore real-time listener (0s zero-delay synchronization)
+  // 1. Subscribe to Firebase Firestore real-time listener (0s zero-delay synchronization scoped to this hub)
   useEffect(() => {
-    if (!authUser) return;
+    if (!authUser || isHubAccessBlocked) return;
 
     setIsRealtimeConnected(true);
     const unsubscribe = subscribeToDailyCodSheet(
@@ -132,7 +154,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       (err) => {
         console.warn('Realtime sync fallback notice:', err);
         setIsRealtimeConnected(false);
-      }
+      },
+      currentHubId
     );
 
     return () => {
@@ -140,7 +163,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         unsubscribe();
       }
     };
-  }, [selectedDate, authUser]);
+  }, [selectedDate, authUser, currentHubId, isHubAccessBlocked]);
 
   // Online / Offline window monitor
   useEffect(() => {
@@ -404,7 +427,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       await updateSingleRiderEntryInSheet(selectedDate, updated, {
         name: authUser.name,
         role: authUser.role,
-      });
+      }, currentHubId);
       showToast(`✅ ${editingEntry.riderName} की COD एंट्री सफलतापूर्वक सेव व सिंक हो गई!`, 'success');
     } catch {
       showToast('एंट्री सेव करने में समस्या आई।', 'error');
@@ -442,7 +465,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       await updateSingleRiderEntryInSheet(selectedDate, updated, {
         name: authUser.name,
         role: authUser.role,
-      });
+      }, currentHubId);
       showToast(
         nextVal
           ? `✓ ${field.toUpperCase()} सत्यापित किया गया (${row.riderName})`
@@ -465,7 +488,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     if (!window.confirm(confirmMsg)) return;
 
     try {
-      await toggleDayEndLockForSheet(selectedDate, nextLocked, authUser.name);
+      await toggleDayEndLockForSheet(selectedDate, nextLocked, authUser.name, currentHubId);
       showToast(
         nextLocked
           ? '🔒 आज का हिसाब लॉक कर दिया गया। सभी राइडर एडिट बंद हो गए।'
@@ -535,7 +558,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       await updateSingleRiderEntryInSheet(selectedDate, updated, {
         name: authUser.name,
         role: authUser.role,
-      });
+      }, currentHubId);
       showToast(
         shortAmount > 0
           ? `⚠️ शॉर्टेज मार्क: ₹${shortAmount} (${row.riderName} - ${field.toUpperCase()})`
@@ -557,6 +580,54 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     const d = String(cur.getDate()).padStart(2, '0');
     setSelectedDate(`${y}-${m}-${d}`);
   };
+
+  // =========================================================================
+  // VIEW 0: SUPER ADMIN GATE BLOCKED SCREEN
+  // =========================================================================
+  if (authUser && isHubAccessBlocked) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-amber-500 selection:text-white">
+        <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-3xl p-6 sm:p-8 text-center shadow-2xl relative overflow-hidden backdrop-blur-xl">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center mx-auto mb-5 shadow-lg shadow-amber-500/10">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">
+            सेवा सक्रिय नहीं है
+          </h2>
+          <p className="text-sm sm:text-base text-amber-300 font-medium mb-5 leading-relaxed">
+            यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।
+          </p>
+          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 mb-6 text-xs text-slate-400 space-y-2 text-left">
+            <div className="flex items-center justify-between text-slate-300">
+              <span className="font-semibold">लॉगिन उपयोगकर्ता:</span>
+              <span className="font-medium text-white">{authUser.name}</span>
+            </div>
+            <div className="flex items-center justify-between text-slate-300">
+              <span className="font-semibold">मोबाइल नंबर:</span>
+              <span className="font-mono">{authUser.phone || 'N/A'}</span>
+            </div>
+            {currentHubId && (
+              <div className="flex items-center justify-between text-slate-300">
+                <span className="font-semibold">हब आईडी:</span>
+                <span className="font-mono text-[11px] text-slate-400">{currentHubId.slice(0, 14)}...</span>
+              </div>
+            )}
+            <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-800/80">
+              मुख्य व्यवस्थापक द्वारा इस हब के लिए 'COD Entry & Companion App Access' अनुमति चालू करने के उपरांत यह स्क्रीन स्वतः सक्रिय हो जाएगी।
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow active:scale-95"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>लॉगआउट करें (Switch Account)</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // =========================================================================
   // VIEW 1: CLEAN SIMPLE LOGIN SCREEN (NO Hub Code)
