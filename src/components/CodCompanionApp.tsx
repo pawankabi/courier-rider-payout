@@ -29,7 +29,8 @@ import {
   Clock, 
   HelpCircle,
   Building2,
-  AlertCircle
+  AlertCircle,
+  Plus
 } from 'lucide-react';
 import { 
   CodDailyEntry, 
@@ -194,6 +195,24 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const canToggleLock = isHubIncharge;
   const isDayEndLocked = Boolean(sheetData.isLocked);
 
+  // Helper to match a rider row by riderId, clean phone number, or rider name
+  const isMatchingRiderRow = (row?: CodDailyEntry | null): boolean => {
+    if (!row || !authUser) return false;
+    const authRiderId = authUser.riderId || authUser.id;
+    if (authRiderId && (row.riderId === authRiderId || row.id?.includes(authRiderId))) {
+      return true;
+    }
+    const cleanUserPhone = (authUser.phone || '').replace(/\D/g, '').slice(-10);
+    const cleanRowPhone = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
+    if (cleanUserPhone && cleanRowPhone && cleanUserPhone === cleanRowPhone) {
+      return true;
+    }
+    if (authUser.name && row.riderName && authUser.name.trim().toLowerCase() === row.riderName.trim().toLowerCase()) {
+      return true;
+    }
+    return false;
+  };
+
   // Can the current user edit the given row?
   const canEditRow = (row: CodDailyEntry): boolean => {
     if (isPastDate) return false; // Fail-Safe Auto Midnight Lock: All past dates are strictly READ-ONLY
@@ -201,8 +220,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     
     // Riders can ONLY edit their own assigned row
     if (isRider) {
-      const currentRiderId = authUser.riderId || authUser.id;
-      return row.riderId === currentRiderId;
+      return isMatchingRiderRow(row);
     }
 
     // Hub Incharge can edit any row
@@ -234,8 +252,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const currentRiderId = authUser?.riderId || authUser?.id || '';
   const myRiderRow = useMemo(() => {
     if (!isRider) return null;
-    return sheetData.entries.find((e) => e.riderId === currentRiderId) || null;
-  }, [sheetData.entries, isRider, currentRiderId]);
+    return sheetData.entries.find((e) => isMatchingRiderRow(e)) || null;
+  }, [sheetData.entries, isRider, authUser]);
 
   // Active Rider Shortage Warning (Rider App Visibility)
   const myShortageAlert = useMemo(() => {
@@ -278,9 +296,42 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     return { totalCod, totalDeposit, totalBalance, totalShortage, count: entries.length };
   }, [sheetData.entries]);
 
-  // 5. Open Modal to Edit Row
-  const handleOpenEditRow = (row: CodDailyEntry) => {
-    if (!canEditRow(row)) {
+  // 5. Open Modal to Edit Row (Auto-creates row on demand if not yet present)
+  const handleOpenEditRow = (row?: CodDailyEntry | null) => {
+    let targetRow = row;
+
+    if (!targetRow && authUser) {
+      targetRow = myRiderRow;
+    }
+
+    if (!targetRow && authUser) {
+      // Find my row, or create a brand new template entry for the logged-in user
+      const cleanUserPhone = (authUser.phone || '').replace(/\D/g, '').slice(-10);
+      const targetId = authUser.riderId || authUser.id || (cleanUserPhone ? `rider_${cleanUserPhone}` : `rider_${Date.now()}`);
+      targetRow = {
+        id: `cod_${selectedDate}_${targetId}`,
+        date: selectedDate,
+        riderId: targetId,
+        riderName: authUser.name || 'राइडर',
+        riderPhone: authUser.phone || '',
+        company1Amount: 0,
+        company2Amount: 0,
+        totalCod: 0,
+        cashDeposit: 0,
+        onlineDeposit: 0,
+        totalDeposit: 0,
+        balance: 0,
+        status: 'draft',
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    if (!targetRow) {
+      showToast('⚠️ कोई मान्य राइडर एंट्री उपलब्ध नहीं है।', 'error');
+      return;
+    }
+
+    if (!canEditRow(targetRow)) {
       if (isPastDate) {
         showToast('🔒 पुरानी तारीख का हिसाब केवल पढ़ने के लिए है (Read-Only)', 'error');
       } else if (isDayEndLocked) {
@@ -291,15 +342,15 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       return;
     }
 
-    setEditingEntry(row);
-    setEditCompany1(row.company1Amount || '');
-    setEditCompany2(row.company2Amount || '');
-    setEditCash(row.cashDeposit || '');
-    setEditOnline(row.onlineDeposit || '');
-    setEditNotes(row.notes || '');
+    setEditingEntry(targetRow);
+    setEditCompany1(targetRow.company1Amount > 0 ? String(targetRow.company1Amount) : '');
+    setEditCompany2(targetRow.company2Amount > 0 ? String(targetRow.company2Amount) : '');
+    setEditCash(targetRow.cashDeposit > 0 ? String(targetRow.cashDeposit) : '');
+    setEditOnline(targetRow.onlineDeposit > 0 ? String(targetRow.onlineDeposit) : '');
+    setEditNotes(targetRow.notes || '');
   };
 
-  // Save Row
+  // Save Row with instant optimistic UI update + direct Firestore write
   const handleSaveEditRow = async () => {
     if (!editingEntry || !authUser) return;
     setIsSavingEntry(true);
@@ -308,26 +359,53 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     const c2 = Number(editCompany2) || 0;
     const cash = Number(editCash) || 0;
     const online = Number(editOnline) || 0;
+    const totalCod = c1 + c2;
+    const totalDeposit = cash + online;
+    const balance = totalCod - totalDeposit;
 
     const updated: CodDailyEntry = {
       ...editingEntry,
       company1Amount: c1,
       company2Amount: c2,
+      totalCod,
       cashDeposit: cash,
       onlineDeposit: online,
+      totalDeposit,
+      balance,
       notes: editNotes.trim(),
       status: 'submitted',
       submittedAt: new Date().toISOString(),
       submittedBy: authUser.name,
+      updatedAt: new Date().toISOString(),
+      updatedBy: authUser.name,
     };
 
+    // 1. Optimistic Local UI Update
+    setSheetData((prev) => {
+      const entries = prev.entries || [];
+      const idx = entries.findIndex((e) => isMatchingRiderRow(e) || e.riderId === updated.riderId);
+      let nextEntries: CodDailyEntry[];
+      if (idx >= 0) {
+        nextEntries = [...entries];
+        nextEntries[idx] = updated;
+      } else {
+        nextEntries = [...entries, updated];
+      }
+      return {
+        ...prev,
+        entries: nextEntries,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setEditingEntry(null);
+
+    // 2. Direct Firestore Write and Background Sync
     try {
       await updateSingleRiderEntryInSheet(selectedDate, updated, {
         name: authUser.name,
         role: authUser.role,
       });
       showToast(`✅ ${editingEntry.riderName} की COD एंट्री सफलतापूर्वक सेव व सिंक हो गई!`, 'success');
-      setEditingEntry(null);
     } catch {
       showToast('एंट्री सेव करने में समस्या आई।', 'error');
     } finally {
@@ -991,26 +1069,41 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
 
         {/* 5. RIDER HIGHLIGHT & DIRECT EDIT CTA (If logged in as Rider) */}
         {isRider && (
-          <div className="bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/40 rounded-2xl p-4 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div 
+            onClick={() => {
+              if (myRiderRow && canEditRow(myRiderRow)) {
+                handleOpenEditRow(myRiderRow);
+              } else if (!isPastDate && !isDayEndLocked) {
+                handleOpenEditRow(null);
+              }
+            }}
+            className="cursor-pointer bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/40 hover:border-emerald-400 rounded-2xl p-4 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-3 transition active:scale-[0.99]"
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
                 <Edit3 className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-white">
-                  आपकी दैनिक COD शीट ({selectedDate})
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>आपकी दैनिक COD शीट ({selectedDate})</span>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                    क्लिक कर भरें
+                  </span>
                 </h4>
                 <p className="text-xs text-slate-400">
-                  {myRiderRow
+                  {myRiderRow && (Number(myRiderRow.totalCod) > 0 || Number(myRiderRow.totalDeposit) > 0)
                     ? `दर्ज: Co 1: ₹${myRiderRow.company1Amount} | Co 2: ₹${myRiderRow.company2Amount} | कैश: ₹${myRiderRow.cashDeposit} | UPI: ₹${myRiderRow.onlineDeposit}`
-                    : 'आज की एंट्री अभी खाली है। तुरंत दर्ज करें।'}
+                    : 'आज की एंट्री अभी खाली है। तुरंत टैप कर दर्ज करें।'}
                 </p>
               </div>
             </div>
-            {myRiderRow && canEditRow(myRiderRow) && (
+            {!isPastDate && !isDayEndLocked && (
               <button
                 type="button"
-                onClick={() => handleOpenEditRow(myRiderRow)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenEditRow(myRiderRow);
+                }}
                 className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition flex items-center justify-center gap-2"
               >
                 <Edit3 className="w-4 h-4" />
@@ -1067,16 +1160,26 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         {viewMode === 'cards' && (
           <div className="space-y-3">
             {filteredEntries.length === 0 ? (
-              <div className="text-center py-12 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 text-slate-400">
+              <div className="text-center py-10 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 text-slate-400 space-y-3">
                 <Bike className="w-10 h-10 mx-auto text-slate-600 mb-2" />
                 <p className="text-sm font-semibold">कोई राइडर एंट्री नहीं मिली।</p>
-                <p className="text-xs text-slate-500 mt-1">
+                <p className="text-xs text-slate-500">
                   इस तारीख के लिए अभी तक कोई रिकॉर्ड उपलब्ध नहीं है।
                 </p>
+                {!isPastDate && !isDayEndLocked && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditRow(null)}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/30 transition transform active:scale-95"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>+ आज की COD एंट्री शुरू करें</span>
+                  </button>
+                )}
               </div>
             ) : (
               filteredEntries.map((row) => {
-                const isMyRow = isRider && row.riderId === currentRiderId;
+                const isMyRow = isRider && isMatchingRiderRow(row);
                 const canEditThis = canEditRow(row);
                 const hasShortage =
                   (row.company1Shortage || 0) +
@@ -1088,7 +1191,14 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                 return (
                   <div
                     key={row.id || row.riderId}
+                    onClick={() => {
+                      if (canEditThis) {
+                        handleOpenEditRow(row);
+                      }
+                    }}
                     className={`bg-slate-900 border rounded-2xl p-4 shadow-md transition ${
+                      canEditThis ? 'cursor-pointer hover:border-emerald-500/80 active:scale-[0.99]' : ''
+                    } ${
                       isMyRow
                         ? 'border-emerald-500/70 ring-1 ring-emerald-500/30'
                         : hasShortage
@@ -1132,7 +1242,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                         {canEditThis ? (
                           <button
                             type="button"
-                            onClick={() => handleOpenEditRow(row)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenEditRow(row);
+                            }}
                             className="px-3 py-1.5 bg-emerald-600/90 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shadow"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
@@ -1356,85 +1469,116 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 font-mono">
-                  {filteredEntries.map((row) => {
-                    const isMyRow = isRider && row.riderId === currentRiderId;
-                    const canEditThis = canEditRow(row);
-
-                    return (
-                      <tr
-                        key={row.id || row.riderId}
-                        className={`transition ${
-                          isMyRow
-                            ? 'bg-emerald-950/30 hover:bg-emerald-950/40'
-                            : 'hover:bg-slate-800/50'
-                        }`}
-                      >
-                        <td className="py-3 px-3 font-sans">
-                          <div className="font-bold text-white flex items-center gap-1.5">
-                            <span>{row.riderName}</span>
-                            {isMyRow && (
-                              <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-bold">
-                                You
-                              </span>
-                            )}
-                          </div>
-                          {row.riderPhone && (
-                            <span className="text-[10px] text-slate-500 font-mono">
-                              {row.riderPhone}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <span>{formatINR(row.company1Amount)}</span>
-                          {row.company1Verified && <span className="text-emerald-400 ml-1">✓</span>}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <span>{formatINR(row.company2Amount)}</span>
-                          {row.company2Verified && <span className="text-emerald-400 ml-1">✓</span>}
-                        </td>
-                        <td className="py-3 px-3 text-right font-bold text-white">
-                          {formatINR(row.totalCod)}
-                        </td>
-                        <td className="py-3 px-3 text-right text-emerald-300">
-                          <span>{formatINR(row.cashDeposit)}</span>
-                          {row.cashVerified && <span className="text-emerald-400 ml-1">✓</span>}
-                        </td>
-                        <td className="py-3 px-3 text-right text-teal-300">
-                          <span>{formatINR(row.onlineDeposit)}</span>
-                          {row.onlineVerified && <span className="text-emerald-400 ml-1">✓</span>}
-                        </td>
-                        <td className="py-3 px-3 text-right font-bold text-emerald-400">
-                          {formatINR(row.totalDeposit)}
-                        </td>
-                        <td className="py-3 px-3 text-right font-bold">
-                          <span
-                            className={
-                              row.balance === 0
-                                ? 'text-emerald-400'
-                                : row.balance > 0
-                                ? 'text-amber-400'
-                                : 'text-purple-400'
-                            }
-                          >
-                            {formatINR(row.balance)}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-center font-sans">
-                          {canEditThis ? (
+                  {filteredEntries.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-10 px-4 text-center text-slate-400 font-sans">
+                        <div className="space-y-2.5">
+                          <p className="text-sm font-semibold">कोई राइडर एंट्री नहीं मिली।</p>
+                          <p className="text-xs text-slate-500">इस तारीख के लिए अभी तक कोई रिकॉर्ड उपलब्ध नहीं है।</p>
+                          {!isPastDate && !isDayEndLocked && (
                             <button
                               type="button"
-                              onClick={() => handleOpenEditRow(row)}
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold"
+                              onClick={() => handleOpenEditRow(null)}
+                              className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow transition"
                             >
-                              एडिट
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>+ आज की COD एंट्री शुरू करें</span>
                             </button>
-                          ) : (
-                            <span className="text-slate-600 text-xs">—</span>
                           )}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredEntries.map((row) => {
+                      const isMyRow = isRider && isMatchingRiderRow(row);
+                      const canEditThis = canEditRow(row);
+
+                      return (
+                        <tr
+                          key={row.id || row.riderId}
+                          onClick={() => {
+                            if (canEditThis) {
+                              handleOpenEditRow(row);
+                            }
+                          }}
+                          className={`transition ${
+                            canEditThis ? 'cursor-pointer' : ''
+                          } ${
+                            isMyRow
+                              ? 'bg-emerald-950/30 hover:bg-emerald-950/50'
+                              : 'hover:bg-slate-800/50'
+                          }`}
+                        >
+                          <td className="py-3 px-3 font-sans">
+                            <div className="font-bold text-white flex items-center gap-1.5">
+                              <span>{row.riderName}</span>
+                              {isMyRow && (
+                                <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-bold">
+                                  You
+                                </span>
+                              )}
+                            </div>
+                            {row.riderPhone && (
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                {row.riderPhone}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <span>{formatINR(row.company1Amount)}</span>
+                            {row.company1Verified && <span className="text-emerald-400 ml-1">✓</span>}
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <span>{formatINR(row.company2Amount)}</span>
+                            {row.company2Verified && <span className="text-emerald-400 ml-1">✓</span>}
+                          </td>
+                          <td className="py-3 px-3 text-right font-bold text-white">
+                            {formatINR(row.totalCod)}
+                          </td>
+                          <td className="py-3 px-3 text-right text-emerald-300">
+                            <span>{formatINR(row.cashDeposit)}</span>
+                            {row.cashVerified && <span className="text-emerald-400 ml-1">✓</span>}
+                          </td>
+                          <td className="py-3 px-3 text-right text-teal-300">
+                            <span>{formatINR(row.onlineDeposit)}</span>
+                            {row.onlineVerified && <span className="text-emerald-400 ml-1">✓</span>}
+                          </td>
+                          <td className="py-3 px-3 text-right font-bold text-emerald-400">
+                            {formatINR(row.totalDeposit)}
+                          </td>
+                          <td className="py-3 px-3 text-right font-bold">
+                            <span
+                              className={
+                                row.balance === 0
+                                  ? 'text-emerald-400'
+                                  : row.balance > 0
+                                  ? 'text-amber-400'
+                                  : 'text-purple-400'
+                              }
+                            >
+                              {formatINR(row.balance)}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center font-sans">
+                            {canEditThis ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenEditRow(row);
+                                }}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold"
+                              >
+                                एडिट
+                              </button>
+                            ) : (
+                              <span className="text-slate-600 text-xs">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>

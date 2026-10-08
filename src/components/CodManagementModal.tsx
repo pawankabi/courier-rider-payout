@@ -48,7 +48,8 @@ import {
   saveCodDailyEntries, 
   loadCodAuditLogs, 
   recordCodAuditLog, 
-  exportCodGridToCSV 
+  exportCodGridToCSV,
+  subscribeToDailyCodSheet
 } from '../services/codService';
 import { formatINR, formatDateDisplay, getTodayDateString, getDaysAgoDateString } from '../utils/formatters';
 
@@ -171,25 +172,91 @@ export const CodManagementModal: React.FC<Props> = ({
     };
   }, [isOpen, userId, riders]);
 
-  // 2. Reload Grid Entries when Date changes
+  // 2. Real-Time bi-directional synchronization on daily_cod_sheets/{selectedDate}
   useEffect(() => {
     if (!isOpen) return;
 
     let mounted = true;
-    const loadDateData = async () => {
-      try {
-        const entries = await loadCodDailyEntries(userId, selectedDate, riders);
-        if (mounted) {
-          setGridEntries(entries);
-        }
-      } catch (err) {
-        console.error('Error loading COD entries for date:', err);
-      }
-    };
 
-    loadDateData();
+    // Cache-first fast initialization
+    loadCodDailyEntries(userId, selectedDate, riders).then((entries) => {
+      if (mounted) {
+        setGridEntries(entries);
+      }
+    });
+
+    // Zero-second Firestore onSnapshot listener
+    const unsubscribe = subscribeToDailyCodSheet(
+      selectedDate,
+      (sheetData) => {
+        if (!mounted) return;
+        if (sheetData && Array.isArray(sheetData.entries) && sheetData.entries.length > 0) {
+          const entryMap = new Map<string, CodDailyEntry>();
+          sheetData.entries.forEach((e) => {
+            if (e.riderId) entryMap.set(e.riderId, e);
+            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+            if (cleanPhone) entryMap.set(cleanPhone, e);
+          });
+
+          const merged: CodDailyEntry[] = riders.map((r) => {
+            const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
+            const ex = entryMap.get(r.id) || (cleanPhone ? entryMap.get(cleanPhone) : undefined);
+            if (ex) {
+              const totalCod = (Number(ex.company1Amount) || 0) + (Number(ex.company2Amount) || 0);
+              const totalDeposit = (Number(ex.cashDeposit) || 0) + (Number(ex.onlineDeposit) || 0);
+              const balance = totalCod - totalDeposit;
+              return {
+                ...ex,
+                riderName: r.name,
+                riderPhone: r.phone,
+                totalCod,
+                totalDeposit,
+                balance,
+              };
+            }
+            return {
+              id: `cod_${selectedDate}_${r.id}`,
+              date: selectedDate,
+              riderId: r.id,
+              riderName: r.name,
+              riderPhone: r.phone,
+              company1Amount: 0,
+              company2Amount: 0,
+              totalCod: 0,
+              cashDeposit: 0,
+              onlineDeposit: 0,
+              totalDeposit: 0,
+              balance: 0,
+              status: 'draft',
+              updatedAt: new Date().toISOString(),
+            };
+          });
+
+          // Also include any rider rows present in sheet that aren't in riders list
+          sheetData.entries.forEach((e) => {
+            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+            const alreadyInMerged = merged.some((m) => 
+              m.riderId === e.riderId ||
+              ((m.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanPhone && cleanPhone)
+            );
+            if (!alreadyInMerged) {
+              merged.push(e);
+            }
+          });
+
+          setGridEntries(merged);
+        }
+      },
+      (err) => {
+        console.warn('Real-time sheet subscription notice in modal:', err);
+      }
+    );
+
     return () => {
       mounted = false;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
     };
   }, [selectedDate, userId, riders, isOpen]);
 

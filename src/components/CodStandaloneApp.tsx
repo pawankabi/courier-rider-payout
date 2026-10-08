@@ -55,7 +55,8 @@ import {
   saveCodDailyEntries, 
   loadCodAuditLogs, 
   recordCodAuditLog, 
-  exportCodGridToCSV 
+  exportCodGridToCSV,
+  subscribeToDailyCodSheet
 } from '../services/codService';
 import { 
   formatINR, 
@@ -220,27 +221,94 @@ export const CodStandaloneApp: React.FC<Props> = ({
     };
   }, [userId, riders]);
 
-  // 2. Reload Grid Entries when Date changes & Reset temporary edit states
+  // 2. Real-Time bi-directional synchronization on daily_cod_sheets/{selectedDate}
+  // Immediately syncs whenever a rider saves in companion app without needing page reload
   useEffect(() => {
     let mounted = true;
     setEditingRiderId(null);
     setEditRowForm(null);
     setOwnerTemporaryUnlock(false);
 
-    const loadDateData = async () => {
-      try {
-        const entries = await loadCodDailyEntries(userId, selectedDate, riders);
-        if (mounted) {
-          setGridEntries(entries);
-        }
-      } catch (err) {
-        console.error('Error loading COD entries for date:', err);
+    // Initial cache-first load
+    loadCodDailyEntries(userId, selectedDate, riders).then((entries) => {
+      if (mounted) {
+        setGridEntries(entries);
       }
-    };
+    });
 
-    loadDateData();
+    // Active real-time Firestore onSnapshot listener on daily_cod_sheets/{selectedDate}
+    const unsubscribe = subscribeToDailyCodSheet(
+      selectedDate,
+      (sheetData) => {
+        if (!mounted) return;
+        if (sheetData && Array.isArray(sheetData.entries) && sheetData.entries.length > 0) {
+          // Reconcile entries with riders list
+          const entryMap = new Map<string, CodDailyEntry>();
+          sheetData.entries.forEach((e) => {
+            if (e.riderId) entryMap.set(e.riderId, e);
+            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+            if (cleanPhone) entryMap.set(cleanPhone, e);
+          });
+
+          const merged: CodDailyEntry[] = riders.map((r) => {
+            const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
+            const ex = entryMap.get(r.id) || (cleanPhone ? entryMap.get(cleanPhone) : undefined);
+            if (ex) {
+              const totalCod = (Number(ex.company1Amount) || 0) + (Number(ex.company2Amount) || 0);
+              const totalDeposit = (Number(ex.cashDeposit) || 0) + (Number(ex.onlineDeposit) || 0);
+              const balance = totalCod - totalDeposit;
+              return {
+                ...ex,
+                riderName: r.name,
+                riderPhone: r.phone,
+                totalCod,
+                totalDeposit,
+                balance,
+              };
+            }
+            return {
+              id: `cod_${selectedDate}_${r.id}`,
+              date: selectedDate,
+              riderId: r.id,
+              riderName: r.name,
+              riderPhone: r.phone,
+              company1Amount: 0,
+              company2Amount: 0,
+              totalCod: 0,
+              cashDeposit: 0,
+              onlineDeposit: 0,
+              totalDeposit: 0,
+              balance: 0,
+              status: 'draft',
+              updatedAt: new Date().toISOString(),
+            };
+          });
+
+          // Also include any rider rows present in sheet that might not be in riders array
+          sheetData.entries.forEach((e) => {
+            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+            const alreadyInMerged = merged.some((m) => 
+              m.riderId === e.riderId ||
+              ((m.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanPhone && cleanPhone)
+            );
+            if (!alreadyInMerged) {
+              merged.push(e);
+            }
+          });
+
+          setGridEntries(merged);
+        }
+      },
+      (err) => {
+        console.warn('Real-time sheet subscription notice in admin app:', err);
+      }
+    );
+
     return () => {
       mounted = false;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
     };
   }, [selectedDate, userId, riders]);
 

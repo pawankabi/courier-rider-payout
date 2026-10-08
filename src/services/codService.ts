@@ -238,6 +238,106 @@ export function createNewStaffUser(params: {
 }
 
 /**
+ * Helper to robustly extract and normalize entries from daily_cod_sheets document
+ * Supports entries stored as an Array OR an Object/Map ({ [riderPhoneOrId]: entry }),
+ * and merges with entriesMap if present.
+ */
+export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDailyEntry[] {
+  if (!raw) return [];
+  const rawList: any[] = [];
+
+  if (Array.isArray(raw.entries)) {
+    rawList.push(...raw.entries);
+  } else if (raw.entries && typeof raw.entries === 'object') {
+    rawList.push(...Object.values(raw.entries));
+  }
+
+  if (raw.entriesMap && typeof raw.entriesMap === 'object') {
+    const mapValues = Object.values(raw.entriesMap);
+    mapValues.forEach((mv: any) => {
+      if (mv && typeof mv === 'object') {
+        const mvId = mv.riderId || mv.id;
+        const mvPhone = (mv.riderPhone || mv.phone || '').replace(/\D/g, '').slice(-10);
+        const exists = rawList.some((e: any) => 
+          (mvId && (e.riderId === mvId || e.id === mvId)) ||
+          (mvPhone && (e.riderPhone || '').replace(/\D/g, '').slice(-10) === mvPhone)
+        );
+        if (!exists) {
+          rawList.push(mv);
+        }
+      }
+    });
+  }
+
+  // De-duplicate by riderId or clean phone
+  const seenKeys = new Set<string>();
+  const normalized: CodDailyEntry[] = [];
+
+  rawList.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return;
+    const riderId = String(item.riderId || item.id || `rider_${index}`);
+    const riderPhone = String(item.riderPhone || item.phone || '');
+    const cleanPhone = riderPhone.replace(/\D/g, '').slice(-10);
+    const dedupeKey = cleanPhone || riderId;
+
+    if (seenKeys.has(dedupeKey)) return;
+    seenKeys.add(dedupeKey);
+
+    const riderName = String(item.riderName || item.name || 'राइडर');
+    const company1Amount = Number(item.company1Amount ?? item.company1Cod ?? item.company1 ?? 0);
+    const company2Amount = Number(item.company2Amount ?? item.company2Cod ?? item.company2 ?? 0);
+    const cashDeposit = Number(item.cashDeposit ?? 0);
+    const onlineDeposit = Number(item.onlineDeposit ?? 0);
+    const totalCod = Number(item.totalCod ?? (company1Amount + company2Amount));
+    const totalDeposit = Number(item.totalDeposit ?? (cashDeposit + onlineDeposit));
+    const balance = Number(item.balance ?? (totalCod - totalDeposit));
+
+    normalized.push({
+      ...item,
+      id: item.id || `cod_${targetDate}_${riderId}`,
+      date: item.date || targetDate,
+      riderId,
+      riderName,
+      riderPhone,
+      company1Amount,
+      company2Amount,
+      totalCod,
+      cashDeposit,
+      onlineDeposit,
+      totalDeposit,
+      balance,
+      status: item.status || 'draft',
+      updatedAt: item.updatedAt || new Date().toISOString(),
+    });
+  });
+
+  return normalized;
+}
+
+/**
+ * Builds a unified map representation of entries keyed by rider ID and 10-digit phone number
+ */
+export function buildEntriesMap(entries: CodDailyEntry[]): Record<string, any> {
+  const map: Record<string, any> = {};
+  entries.forEach((e) => {
+    const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+    const payload = cleanForFirestore({
+      ...e,
+      company1Cod: Number(e.company1Amount || 0),
+      company2Cod: Number(e.company2Amount || 0),
+      totalCod: Number(e.totalCod || 0),
+      cashDeposit: Number(e.cashDeposit || 0),
+      onlineDeposit: Number(e.onlineDeposit || 0),
+      totalDeposit: Number(e.totalDeposit || 0),
+      balance: Number(e.balance || 0),
+    });
+    if (e.riderId) map[e.riderId] = payload;
+    if (cleanPhone) map[cleanPhone] = payload;
+  });
+  return map;
+}
+
+/**
  * 3. Load & Save Daily COD Grid Entries
  */
 export async function loadCodDailyEntries(
@@ -249,12 +349,44 @@ export async function loadCodDailyEntries(
   const localKey = getEntriesStorageKey(userId, targetDate);
   let savedEntries: CodDailyEntry[] = [];
 
+  // 1. Try unified daily_cod_sheets in local cache first
   try {
-    const raw = localStorage.getItem(localKey);
-    if (raw) savedEntries = JSON.parse(raw);
+    const rawSheet = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+    if (rawSheet) {
+      const parsedSheet = JSON.parse(rawSheet);
+      savedEntries = extractEntriesFromSheetRaw(parsedSheet, targetDate);
+    }
   } catch {}
 
-  // Attempt Firestore fetch
+  // 2. Try legacy workspace entries local cache
+  if (savedEntries.length === 0) {
+    try {
+      const raw = localStorage.getItem(localKey);
+      if (raw) savedEntries = extractEntriesFromSheetRaw({ entries: JSON.parse(raw) }, targetDate);
+    } catch {}
+  }
+
+  // 3. Attempt direct Firestore fetch from daily_cod_sheets/{targetDate}
+  if (db && savedEntries.length === 0) {
+    try {
+      const sheetRef = doc(db, 'daily_cod_sheets', targetDate);
+      const sheetSnap = await getDoc(sheetRef);
+      if (sheetSnap.exists()) {
+        const sheetData = sheetSnap.data();
+        savedEntries = extractEntriesFromSheetRaw(sheetData, targetDate);
+        if (savedEntries.length > 0) {
+          try {
+            localStorage.setItem(localKey, JSON.stringify(savedEntries));
+            localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(sheetData));
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.warn('daily_cod_sheets direct fetch notice:', err);
+    }
+  }
+
+  // 4. Attempt workspace legacy collection fallback
   if (db && userId && userId !== 'guest' && savedEntries.length === 0) {
     try {
       const colRef = collection(db, 'workspaces', userId, 'cod_entries');
@@ -265,7 +397,9 @@ export async function loadCodDailyEntries(
           .filter((e) => e.date === targetDate);
         if (allDateEntries.length > 0) {
           savedEntries = allDateEntries;
-          localStorage.setItem(localKey, JSON.stringify(savedEntries));
+          try {
+            localStorage.setItem(localKey, JSON.stringify(savedEntries));
+          } catch {}
         }
       }
     } catch (err) {
@@ -275,11 +409,17 @@ export async function loadCodDailyEntries(
 
   // Populate/reconcile with active riders
   const entryMap = new Map<string, CodDailyEntry>();
-  savedEntries.forEach((e) => entryMap.set(e.riderId, e));
+  savedEntries.forEach((e) => {
+    if (e.riderId) entryMap.set(e.riderId, e);
+    const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+    if (cleanPhone) entryMap.set(cleanPhone, e);
+  });
 
   const result: CodDailyEntry[] = riders.map((rider) => {
-    if (entryMap.has(rider.id)) {
-      const existing = entryMap.get(rider.id)!;
+    const cleanRiderPhone = (rider.phone || '').replace(/\D/g, '').slice(-10);
+    const existing = entryMap.get(rider.id) || (cleanRiderPhone ? entryMap.get(cleanRiderPhone) : undefined);
+
+    if (existing) {
       // Auto-recalculate totals in case of legacy fields
       const totalCod = (Number(existing.company1Amount) || 0) + (Number(existing.company2Amount) || 0);
       const totalDeposit = (Number(existing.cashDeposit) || 0) + (Number(existing.onlineDeposit) || 0);
@@ -330,11 +470,13 @@ export async function saveCodDailyEntries(
 
   if (db) {
     try {
+      const entriesMap = buildEntriesMap(entries);
       // 1. Sync to daily_cod_sheets for zero-second real-time delivery boy & staff updates
       const sheetRef = doc(db, 'daily_cod_sheets', targetDate);
       await setDoc(sheetRef, cleanForFirestore({
         date: targetDate,
         entries,
+        entriesMap,
         updatedAt: new Date().toISOString(),
       }), { merge: true });
 
@@ -677,8 +819,103 @@ export function clearCodCompanionSession(): void {
 }
 
 /**
+ * Helper to retrieve all active riders across Firestore and local storage caches
+ * for auto-populating empty daily COD sheets
+ */
+export async function getAllActiveRidersForCod(): Promise<Rider[]> {
+  const ridersMap = new Map<string, Rider>();
+
+  // 1. Try Firestore root /riders collection
+  if (db) {
+    try {
+      const colRef = collection(db, 'riders');
+      const snaps = await getDocs(colRef);
+      snaps.docs.forEach((d) => {
+        const data = d.data() as Rider;
+        const id = data.id || d.id;
+        if (id && data.active !== false) {
+          ridersMap.set(id, { ...data, id });
+        }
+      });
+    } catch (err) {
+      console.warn('Firestore active riders query notice:', err);
+    }
+  }
+
+  // 2. Scan all localStorage rider caches
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_'))) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list: Rider[] = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            list.forEach((r) => {
+              if (r && r.id && r.name && r.active !== false && !ridersMap.has(r.id)) {
+                ridersMap.set(r.id, r);
+              }
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 3. Scan staff pins cache if rider role exists
+  try {
+    const rawStaff = localStorage.getItem('cp_cod_staff_pins_cache');
+    if (rawStaff) {
+      const staffList: CodStaffUser[] = JSON.parse(rawStaff);
+      staffList.forEach((s) => {
+        if (s.role === 'rider' && s.isActive !== false) {
+          const riderId = s.riderId || s.id;
+          if (!ridersMap.has(riderId)) {
+            ridersMap.set(riderId, {
+              id: riderId,
+              name: s.name,
+              phone: s.phone || '',
+              joinedDate: s.createdAt || new Date().toISOString(),
+              active: true,
+            });
+          }
+        }
+      });
+    }
+  } catch {}
+
+  return Array.from(ridersMap.values());
+}
+
+/**
+ * Construct empty default COD entry rows for given riders
+ */
+export function buildDefaultCodEntriesForRiders(
+  date: string,
+  riders: Rider[]
+): CodDailyEntry[] {
+  return riders.map((rider) => ({
+    id: `cod_${date}_${rider.id}`,
+    date,
+    riderId: rider.id,
+    riderName: rider.name,
+    riderPhone: rider.phone,
+    company1Amount: 0,
+    company2Amount: 0,
+    totalCod: 0,
+    cashDeposit: 0,
+    onlineDeposit: 0,
+    totalDeposit: 0,
+    balance: 0,
+    status: 'draft',
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
+/**
  * 7. Real-Time Zero-Second Listener for Today's Active COD Sheet (daily_cod_sheets)
  * Synchronizes immediately on every edit or verification
+ * Automatically populates active riders if sheet is empty or does not exist
  */
 export function subscribeToDailyCodSheet(
   date: string,
@@ -687,22 +924,53 @@ export function subscribeToDailyCodSheet(
 ): Unsubscribe {
   const targetDate = date || getTodayDateString();
 
+  // Helper to ensure empty entries list is populated with active riders
+  const enrichWithActiveRiders = async (baseData: DailyCodSheetData) => {
+    if (!baseData.entries || baseData.entries.length === 0) {
+      const activeRiders = await getAllActiveRidersForCod();
+      if (activeRiders.length > 0) {
+        const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
+        const enriched: DailyCodSheetData = {
+          ...baseData,
+          entries: defaultEntries,
+        };
+        try {
+          localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(enriched));
+        } catch {}
+        onUpdate(enriched);
+        return;
+      }
+    }
+    onUpdate(baseData);
+  };
+
   // Instant Cache-First load in 0.0s
   try {
     const cachedRaw = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
     if (cachedRaw) {
       const cached = JSON.parse(cachedRaw);
-      if (Array.isArray(cached)) {
-        onUpdate({
-          date: targetDate,
-          entries: cached,
-          isLocked: false,
-          company1Name: DEFAULT_COMPANY_1,
-          company2Name: DEFAULT_COMPANY_2,
-        });
-      } else if (cached && cached.entries) {
-        onUpdate(cached);
-      }
+      const parsedEntries = extractEntriesFromSheetRaw(cached, targetDate);
+      enrichWithActiveRiders({
+        date: targetDate,
+        entries: parsedEntries,
+        isLocked: Boolean(cached.isLocked),
+        company1Name: cached.company1Name || DEFAULT_COMPANY_1,
+        company2Name: cached.company2Name || DEFAULT_COMPANY_2,
+      });
+    } else {
+      // No local cache, immediately populate from available active riders so UI isn't empty!
+      getAllActiveRidersForCod().then((riders) => {
+        if (riders.length > 0) {
+          const defaultSheet: DailyCodSheetData = {
+            date: targetDate,
+            entries: buildDefaultCodEntriesForRiders(targetDate, riders),
+            isLocked: false,
+            company1Name: DEFAULT_COMPANY_1,
+            company2Name: DEFAULT_COMPANY_2,
+          };
+          onUpdate(defaultSheet);
+        }
+      });
     }
   } catch {}
 
@@ -714,17 +982,50 @@ export function subscribeToDailyCodSheet(
     const docRef = doc(db, 'daily_cod_sheets', targetDate);
     const unsubscribe = onSnapshot(
       docRef,
-      (snapshot) => {
+      async (snapshot) => {
         if (snapshot.exists()) {
           const raw = snapshot.data();
+          const existingEntries: CodDailyEntry[] = extractEntriesFromSheetRaw(raw, targetDate);
+          const company1Name = raw.company1Name || DEFAULT_COMPANY_1;
+          const company2Name = raw.company2Name || DEFAULT_COMPANY_2;
+
+          let finalEntries = existingEntries;
+
+          // If doc exists but has 0 entries, auto-populate riders
+          if (finalEntries.length === 0) {
+            const activeRiders = await getAllActiveRidersForCod();
+            if (activeRiders.length > 0) {
+              finalEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
+            }
+          } else {
+            // Check if any active riders are missing from existing sheet, merge them cleanly
+            const activeRiders = await getAllActiveRidersForCod();
+            const existingRiderIds = new Set(finalEntries.map((e) => e.riderId));
+            const existingPhones = new Set(
+              finalEntries
+                .map((e) => (e.riderPhone || '').replace(/\D/g, '').slice(-10))
+                .filter(Boolean)
+            );
+
+            const missingRiders = activeRiders.filter((r) => {
+              const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
+              return !existingRiderIds.has(r.id) && (!cleanPhone || !existingPhones.has(cleanPhone));
+            });
+
+            if (missingRiders.length > 0) {
+              const missingEntries = buildDefaultCodEntriesForRiders(targetDate, missingRiders);
+              finalEntries = [...finalEntries, ...missingEntries];
+            }
+          }
+
           const sheetData: DailyCodSheetData = {
             date: targetDate,
-            entries: raw.entries || [],
+            entries: finalEntries,
             isLocked: Boolean(raw.isLocked),
             lockedBy: raw.lockedBy,
             lockedAt: raw.lockedAt,
-            company1Name: raw.company1Name || DEFAULT_COMPANY_1,
-            company2Name: raw.company2Name || DEFAULT_COMPANY_2,
+            company1Name,
+            company2Name,
             hubName: raw.hubName,
             updatedAt: raw.updatedAt,
           };
@@ -733,14 +1034,20 @@ export function subscribeToDailyCodSheet(
           } catch {}
           onUpdate(sheetData);
         } else {
-          // Fallback if not yet initialized
-          onUpdate({
+          // Document does not exist yet! Automatically pull all active riders
+          const activeRiders = await getAllActiveRidersForCod();
+          const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
+          const defaultSheet: DailyCodSheetData = {
             date: targetDate,
-            entries: [],
+            entries: defaultEntries,
             isLocked: false,
             company1Name: DEFAULT_COMPANY_1,
             company2Name: DEFAULT_COMPANY_2,
-          });
+          };
+          try {
+            localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(defaultSheet));
+          } catch {}
+          onUpdate(defaultSheet);
         }
       },
       (err) => {
@@ -780,6 +1087,8 @@ export async function updateSingleRiderEntryInSheet(
     updatedBy: changedBy.name,
   };
 
+  const cleanPhone = (finalizedEntry.riderPhone || '').replace(/\D/g, '').slice(-10);
+
   // 1. Instant local cache update
   try {
     const raw = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
@@ -789,20 +1098,24 @@ export async function updateSingleRiderEntryInSheet(
     let c2 = DEFAULT_COMPANY_2;
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) currentEntries = parsed;
-      else if (parsed && parsed.entries) {
-        currentEntries = parsed.entries;
-        isLocked = parsed.isLocked;
+      currentEntries = extractEntriesFromSheetRaw(parsed, targetDate);
+      if (parsed && typeof parsed === 'object') {
+        isLocked = Boolean(parsed.isLocked);
         c1 = parsed.company1Name || c1;
         c2 = parsed.company2Name || c2;
       }
     }
-    const idx = currentEntries.findIndex((e) => e.riderId === finalizedEntry.riderId);
+    const idx = currentEntries.findIndex((e) => {
+      const eCleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+      return e.riderId === finalizedEntry.riderId || (cleanPhone && eCleanPhone === cleanPhone);
+    });
+
     if (idx >= 0) {
       currentEntries[idx] = finalizedEntry;
     } else {
       currentEntries.push(finalizedEntry);
     }
+
     const updatedSheet: DailyCodSheetData = {
       date: targetDate,
       entries: currentEntries,
@@ -818,30 +1131,52 @@ export async function updateSingleRiderEntryInSheet(
   if (db) {
     try {
       const docRef = doc(db, 'daily_cod_sheets', targetDate);
-      const snap = await getDoc(docRef);
       let entries: CodDailyEntry[] = [];
       let isLocked = false;
       let company1Name = DEFAULT_COMPANY_1;
       let company2Name = DEFAULT_COMPANY_2;
 
-      if (snap.exists()) {
-        const data = snap.data();
-        entries = data.entries || [];
-        isLocked = Boolean(data.isLocked);
-        company1Name = data.company1Name || DEFAULT_COMPANY_1;
-        company2Name = data.company2Name || DEFAULT_COMPANY_2;
+      try {
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const data = snap.data();
+          entries = extractEntriesFromSheetRaw(data, targetDate);
+          isLocked = Boolean(data.isLocked);
+          company1Name = data.company1Name || DEFAULT_COMPANY_1;
+          company2Name = data.company2Name || DEFAULT_COMPANY_2;
+        }
+      } catch (e) {
+        console.warn('Notice fetching current sheet:', e);
       }
 
-      const existingIndex = entries.findIndex((e) => e.riderId === finalizedEntry.riderId);
+      // If document was empty or not fetched, populate from active cache
+      if (entries.length === 0) {
+        try {
+          const cachedRaw = localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+          if (cachedRaw) {
+            entries = extractEntriesFromSheetRaw(JSON.parse(cachedRaw), targetDate);
+          }
+        } catch {}
+      }
+
+      const existingIndex = entries.findIndex((e) => {
+        const eCleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+        return e.riderId === finalizedEntry.riderId || (cleanPhone && eCleanPhone === cleanPhone);
+      });
+
       if (existingIndex >= 0) {
         entries[existingIndex] = finalizedEntry;
       } else {
         entries.push(finalizedEntry);
       }
 
+      const entriesMap = buildEntriesMap(entries);
+
+      // Perform setDoc with merge: true for instant persistence and zero-second onSnapshot propagation
       await setDoc(docRef, cleanForFirestore({
         date: targetDate,
         entries,
+        entriesMap,
         isLocked,
         company1Name,
         company2Name,
