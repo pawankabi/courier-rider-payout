@@ -42,6 +42,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   authenticateCodStaffCompanion, 
+  getActiveCompanionHubId,
   getStoredCodCompanionUser, 
   clearCodCompanionSession,
   subscribeToDailyCodSheet,
@@ -59,16 +60,7 @@ interface CodCompanionAppProps {
 export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   // Authentication State
   const [authUser, setAuthUser] = useState<CodStaffUser | null>(() => getStoredCodCompanionUser());
-  const [authenticatedHubId, setAuthenticatedHubId] = useState<string | null>(() => {
-    const user = getStoredCodCompanionUser();
-    const stored = user?.workspaceId || user?.hubId || user?.ownerUid;
-    if (stored) return stored;
-    try {
-      return sessionStorage.getItem('cp_authenticated_hub_id') || localStorage.getItem('cp_authenticated_hub_id') || null;
-    } catch {
-      return null;
-    }
-  });
+  const [authenticatedHubId, setAuthenticatedHubId] = useState<string | null>(() => getActiveCompanionHubId());
   const [phoneInput, setPhoneInput] = useState('');
   const [pinInput, setPinInput] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -76,7 +68,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const [showDemoLogins, setShowDemoLogins] = useState(false);
   const [isHubAccessBlocked, setIsHubAccessBlocked] = useState<boolean>(false);
 
-  const currentHubId = authenticatedHubId || authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId || '';
+  const currentHubId = (authenticatedHubId || getActiveCompanionHubId() || authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId || '').trim();
 
   // Real-time Super Admin Feature Gate Check for logged in Hub
   useEffect(() => {
@@ -189,7 +181,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     };
   }, []);
 
-  // 2. Handle Login: Look up record in Firestore riders collection to get workspaceId (or hubId / ownerUid)
+  // 2. Handle Login: Exact Hub Lookup on Login directly via authenticateCodStaffCompanion
   const handleLogin = async (overridePhone?: string, overridePin?: string) => {
     const targetPhone = overridePhone || phoneInput;
     const targetPin = overridePin || pinInput;
@@ -197,68 +189,31 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     setIsLoggingIn(true);
 
     try {
-      const cleanPhone = targetPhone.replace(/\D/g, '').slice(-10);
-      let detectedHubId: string | null = null;
-
-      // When a rider or staff enters their Phone and PIN, look up their record in Firestore riders collection
-      // to get their workspaceId (or hubId / ownerUid)
-      if (db && cleanPhone) {
-        try {
-          const q = query(collection(db, 'riders'), where('phone', '==', cleanPhone));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            const rData = snap.docs[0].data();
-            detectedHubId = rData.workspaceId || rData.hubId || rData.ownerUid || rData.userId || rData.createdBy || null;
-          } else {
-            const qPrefixed = query(collection(db, 'riders'), where('phone', '==', `+91${cleanPhone}`));
-            const snapPrefixed = await getDocs(qPrefixed);
-            if (!snapPrefixed.empty) {
-              const rData = snapPrefixed.docs[0].data();
-              detectedHubId = rData.workspaceId || rData.hubId || rData.ownerUid || rData.userId || rData.createdBy || null;
-            }
-          }
-        } catch (lookupErr) {
-          console.warn('Firestore riders phone lookup notice:', lookupErr);
-        }
-      }
-
-      // Check local caches for rider workspaceId if offline/cached
-      if (!detectedHubId) {
-        try {
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_'))) {
-              const raw = localStorage.getItem(key);
-              if (raw) {
-                const list = JSON.parse(raw);
-                if (Array.isArray(list)) {
-                  const found = list.find((r: any) => (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone);
-                  if (found) {
-                    detectedHubId = found.workspaceId || found.hubId || found.ownerUid || found.userId || found.createdBy || null;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        } catch {}
-      }
-
-      const res = await authenticateCodStaffCompanion(targetPhone, targetPin, detectedHubId || undefined);
+      const res = await authenticateCodStaffCompanion(targetPhone, targetPin);
       if (res.success && res.user) {
-        const finalHubId = res.user.workspaceId || res.user.hubId || res.user.ownerUid || detectedHubId;
-        if (finalHubId) {
-          setAuthenticatedHubId(finalHubId);
-          try {
-            sessionStorage.setItem('cp_authenticated_hub_id', finalHubId);
-            localStorage.setItem('cp_authenticated_hub_id', finalHubId);
-          } catch {}
+        const finalHubId = (res.resolvedHubId || res.user.hubId || res.user.workspaceId || res.user.ownerUid || '').trim();
+        if (!finalHubId) {
+          const errMsg = 'हब की पहचान नहीं हो सकी। कृपया एडमिन से संपर्क करें।';
+          setLoginError(errMsg);
+          showToast(`❌ ${errMsg}`, 'error');
+          return;
         }
+
+        // Save resolved hubId in companion app session
+        try {
+          localStorage.setItem('active_companion_hub_id', finalHubId);
+          sessionStorage.setItem('active_companion_hub_id', finalHubId);
+          localStorage.setItem('cp_authenticated_hub_id', finalHubId);
+          sessionStorage.setItem('cp_authenticated_hub_id', finalHubId);
+        } catch {}
+
+        setAuthenticatedHubId(finalHubId);
         setAuthUser(res.user);
         showToast(`✅ ${res.message}`, 'success');
       } else {
-        setLoginError(res.message);
-        showToast(`❌ ${res.message}`, 'error');
+        const errMsg = res.message || 'हब की पहचान नहीं हो सकी। कृपया एडमिन से संपर्क करें।';
+        setLoginError(errMsg);
+        showToast(`❌ ${errMsg}`, 'error');
       }
     } catch {
       setLoginError('लॉगिन करने में त्रुटि हुई। कृपया पुनः प्रयास करें।');
@@ -271,6 +226,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const handleLogout = () => {
     clearCodCompanionSession();
     try {
+      localStorage.removeItem('active_companion_hub_id');
+      sessionStorage.removeItem('active_companion_hub_id');
       sessionStorage.removeItem('cp_authenticated_hub_id');
       localStorage.removeItem('cp_authenticated_hub_id');
     } catch {}
@@ -370,14 +327,15 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     return items.length > 0 ? { items, totalShort } : null;
   }, [isRider, myRiderRow, sheetData.company1Name, sheetData.company2Name]);
 
-  // Filtered rows for display
+  // Filtered rows for display (Strict Hub Isolation: If currentHubId is missing/invalid, return empty array [])
   const filteredEntries = useMemo(() => {
+    if (!currentHubId) return [];
     if (!searchQuery.trim()) return sheetData.entries;
     const q = searchQuery.toLowerCase();
     return sheetData.entries.filter(
       (e) => e.riderName.toLowerCase().includes(q) || (e.riderPhone && e.riderPhone.includes(q))
     );
-  }, [sheetData.entries, searchQuery]);
+  }, [sheetData.entries, searchQuery, currentHubId]);
 
   // Overall Statistics
   const stats = useMemo(() => {
@@ -688,6 +646,35 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               मुख्य व्यवस्थापक द्वारा इस हब के लिए 'COD Entry & Companion App Access' अनुमति चालू करने के उपरांत यह स्क्रीन स्वतः सक्रिय हो जाएगी।
             </p>
           </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow active:scale-95"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>लॉगआउट करें (Switch Account)</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // VIEW 0.5: UNRESOLVED / INVALID HUB ERROR (Strict Hub Isolation)
+  // =========================================================================
+  if (authUser && !currentHubId) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-rose-500 selection:text-white">
+        <div className="w-full max-w-md bg-slate-900 border border-rose-500/40 rounded-3xl p-6 sm:p-8 text-center shadow-2xl relative overflow-hidden backdrop-blur-xl">
+          <div className="w-16 h-16 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto mb-5 shadow-lg shadow-rose-500/10">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">
+            हब त्रुटि
+          </h2>
+          <p className="text-sm sm:text-base text-rose-300 font-medium mb-6 leading-relaxed">
+            हब की पहचान नहीं हो सकी। कृपया एडमिन से संपर्क करें।
+          </p>
           <button
             type="button"
             onClick={handleLogout}
