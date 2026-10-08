@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">COD Entry (हिसाब किताब)</string>
+    <string name="title_activity_main">COD Entry (हिसाब किताब)</string>
+    <string name="package_name">com.courierpayout.codentry</string>
+    <string name="custom_url_scheme">com.courierpayout.codentry</string>
+</resources>

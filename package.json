@@ -6,8 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:admin": "vite build",
+    "build:companion": "VITE_APP_TARGET=cod_companion vite build --outDir dist-companion",
+    "build:all": "npm run build:admin && npm run build:companion",
+    "sync:flavors": "node scripts/sync-android-flavors.js",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist dist-companion server.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

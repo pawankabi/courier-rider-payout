@@ -121,12 +121,18 @@ import { CodCompanionApp } from './components/CodCompanionApp';
 /**
  * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
  * Supports:
+ * - VITE_APP_TARGET=cod_companion (Standalone build)
  * - /cod-entry or /cod
  * - #cod-entry or #/cod-entry or #cod or #/cod
  * - ?app=cod-entry or ?app=cod or ?cod=entry or ?cod=true
  */
 function parseCodCompanionRoute(): boolean {
   if (typeof window === 'undefined') return false;
+
+  // 1. Direct Build-Time Target Check
+  if (import.meta.env.VITE_APP_TARGET === 'cod_companion') {
+    return true;
+  }
 
   const hash = window.location.hash || '';
   const pathname = window.location.pathname || '';
@@ -2606,6 +2612,18 @@ function MainCourierApp() {
 export default function App() {
   const [statementRiderId, setStatementRiderId] = useState<string | null>(() => parseRiderStatementRoute());
   const [isCodCompanionRoute, setIsCodCompanionRoute] = useState<boolean>(() => parseCodCompanionRoute());
+  const [isNativeCompanionPackage, setIsNativeCompanionPackage] = useState<boolean>(false);
+
+  useEffect(() => {
+    // Detect native companion package ID when running on Android
+    CapacitorApp.getInfo()
+      .then((info) => {
+        if (info && info.id === 'com.courierpayout.codentry') {
+          setIsNativeCompanionPackage(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const handleUrlChange = () => {
@@ -2620,11 +2638,15 @@ export default function App() {
     };
   }, []);
 
+  const isDedicatedCompanionApp = import.meta.env.VITE_APP_TARGET === 'cod_companion' || isNativeCompanionPackage;
+  const isCompanionMode = isDedicatedCompanionApp || isCodCompanionRoute;
+
   // 1. Standalone Companion App: "COD Entry (हिसाब किताब)" for Delivery Boys & Hub Staff
-  if (isCodCompanionRoute) {
+  if (isCompanionMode) {
     return (
       <CodCompanionApp
-        onBackToMainApp={() => {
+        // If running as dedicated companion app APK, NEVER provide onBackToMainApp (no exit to admin)
+        onBackToMainApp={isDedicatedCompanionApp ? undefined : () => {
           try {
             window.location.hash = '';
             const url = new URL(window.location.href);

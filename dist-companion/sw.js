@@ -87,7 +87,7 @@ define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
     "revision": "aa07c895c7e9965a366d532e2da256ca"
   }, {
     "url": "index.html",
-    "revision": "3318ea93537e1156ae72340a6d7353ab"
+    "revision": "7ee12d6f34d738909ce38668cb66126c"
   }, {
     "url": "icon.svg",
     "revision": "86fdebc55d4f142947971951437ca70d"
@@ -95,28 +95,28 @@ define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
     "url": "apple-touch-icon.png",
     "revision": "b3ea2e34925e1c8c3e73a10afc6acdaa"
   }, {
-    "url": "assets/web-cc7JpubU.js",
+    "url": "assets/web-DfOcpoGa.js",
     "revision": null
   }, {
-    "url": "assets/web-DTDQhGSj.js",
+    "url": "assets/web-DMzHknvb.js",
     "revision": null
   }, {
-    "url": "assets/web-CBtLtjHA.js",
+    "url": "assets/web-D-vyTtYV.js",
     "revision": null
   }, {
-    "url": "assets/web-3DXNTA0q.js",
+    "url": "assets/web-BWOeaXmR.js",
     "revision": null
   }, {
     "url": "assets/purify.es-DedTAGkB.js",
     "revision": null
   }, {
-    "url": "assets/native-7FL7oG7N.js",
+    "url": "assets/native-BVm660nG.js",
     "revision": null
   }, {
-    "url": "assets/index.es-ksJmIf2O.js",
+    "url": "assets/index.es-QZEhL4PP.js",
     "revision": null
   }, {
-    "url": "assets/index-DymJ8GDE.js",
+    "url": "assets/index-CjVI4mVp.js",
     "revision": null
   }, {
     "url": "assets/index-BUx65BE9.css",
@@ -125,7 +125,7 @@ define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
     "url": "assets/html2canvas.esm-QH1iLAAe.js",
     "revision": null
   }, {
-    "url": "assets/base-Dl-x5Srp.js",
+    "url": "assets/base-DeUFQzA1.js",
     "revision": null
   }, {
     "url": "apple-touch-icon.png",

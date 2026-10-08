@@ -16,6 +16,42 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    flavorDimensions = ["app"]
+    productFlavors {
+        admin {
+            dimension "app"
+            applicationId "com.courierpayout.app"
+            versionCode 5
+            versionName "1.0.5"
+            manifestPlaceholders = [
+                appName: "Courier Rider Payout",
+                customUrlScheme: "com.courierpayout.app"
+            ]
+        }
+        rider {
+            dimension "app"
+            applicationId "com.courierpayout.codentry"
+            versionCode 5
+            versionName "1.0.5"
+            manifestPlaceholders = [
+                appName: "COD Entry (हिसाब किताब)",
+                customUrlScheme: "com.courierpayout.codentry"
+            ]
+        }
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            if (variant.buildType.name == 'release') {
+                if (variant.flavorName == 'admin') {
+                    outputFileName = "Admin-Payout-Release.apk"
+                } else if (variant.flavorName == 'rider') {
+                    outputFileName = "COD-Entry-Rider-Release.apk"
+                }
+            }
+        }
+    }
+
     signingConfigs {
         release {
             def customKey = file('keystore/release.keystore')

@@ -1,17 +1,16 @@
-name: Build Android APK (Clean Pipeline)
+name: Build Standalone Android APKs (Admin & COD Rider)
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
 
-# Automated Release Pipeline with Public GitHub Releases (v1.0.5)
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build Both Release APKs
     runs-on: ubuntu-latest
 
     steps:
@@ -86,6 +85,7 @@ jobs:
 
       - name: Collect & Standardize Release APKs
         run: |
+          # Copy Admin Release APK
           ADMIN_APK=$(find android/app/build/outputs/apk/admin/release -name "*.apk" | head -n 1)
           if [ -f "$ADMIN_APK" ]; then
             cp "$ADMIN_APK" Admin-Payout-Release.apk
@@ -94,6 +94,7 @@ jobs:
             echo "Error: Admin Release APK not found!" && exit 1
           fi
 
+          # Copy Rider Companion Release APK
           RIDER_APK=$(find android/app/build/outputs/apk/rider/release -name "*.apk" | head -n 1)
           if [ -f "$RIDER_APK" ]; then
             cp "$RIDER_APK" COD-Entry-Rider-Release.apk
