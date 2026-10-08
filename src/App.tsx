@@ -130,6 +130,9 @@ function parseCodCompanionRoute(): boolean {
   if (typeof window === 'undefined') return false;
 
   // 1. Direct Build-Time Target Check
+  if (import.meta.env.VITE_APP_TARGET === 'admin') {
+    return false;
+  }
   if (import.meta.env.VITE_APP_TARGET === 'cod_companion') {
     return true;
   }
@@ -2638,15 +2641,33 @@ export default function App() {
     };
   }, []);
 
-  const isDedicatedCompanionApp = import.meta.env.VITE_APP_TARGET === 'cod_companion' || isNativeCompanionPackage;
-  const isCompanionMode = isDedicatedCompanionApp || isCodCompanionRoute;
+  const isExplicitCompanionTarget = import.meta.env.VITE_APP_TARGET === 'cod_companion' || isNativeCompanionPackage;
+  const isExplicitAdminTarget = import.meta.env.VITE_APP_TARGET === 'admin';
 
-  // 1. Standalone Companion App: "COD Entry (हिसाब किताब)" for Delivery Boys & Hub Staff
-  if (isCompanionMode) {
+  // 1. Standalone Companion App APK (assembleRiderRelease): "COD Entry (हिसाब किताब)" for Riders & Staff
+  // Root route '/' strictly loads CodCompanionApp login only
+  if (isExplicitCompanionTarget) {
+    return <CodCompanionApp />;
+  }
+
+  // 2. Admin App APK (assembleAdminRelease): Full Courier Rider Payout Admin App
+  // Root route '/' strictly loads main dashboard with Owner settings. Never defaults to rider screen.
+  if (isExplicitAdminTarget) {
+    if (statementRiderId) {
+      return (
+        <StatementErrorBoundary>
+          <PublicRiderLedger riderId={statementRiderId} />
+        </StatementErrorBoundary>
+      );
+    }
+    return <MainCourierApp />;
+  }
+
+  // 3. Web / Dev Mode Routing:
+  if (isCodCompanionRoute) {
     return (
       <CodCompanionApp
-        // If running as dedicated companion app APK, NEVER provide onBackToMainApp (no exit to admin)
-        onBackToMainApp={isDedicatedCompanionApp ? undefined : () => {
+        onBackToMainApp={() => {
           try {
             window.location.hash = '';
             const url = new URL(window.location.href);
@@ -2660,7 +2681,7 @@ export default function App() {
     );
   }
 
-  // 2. Public Read-Only Statement / Ledger Route
+  // Public Read-Only Statement / Ledger Route
   if (statementRiderId) {
     return (
       <StatementErrorBoundary>

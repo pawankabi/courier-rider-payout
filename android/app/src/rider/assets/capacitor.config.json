@@ -1,0 +1,9 @@
+{
+  "appId": "com.courierpayout.codentry",
+  "appName": "COD Entry (हिसाब किताब)",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "cod-entry-rider.firebaseapp.com"
+  }
+}

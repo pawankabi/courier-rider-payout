@@ -38,6 +38,8 @@ import {
   CodStaffRole,
   DailyCodSheetData 
 } from '../types';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   authenticateCodStaffCompanion, 
   getStoredCodCompanionUser, 
@@ -57,6 +59,16 @@ interface CodCompanionAppProps {
 export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   // Authentication State
   const [authUser, setAuthUser] = useState<CodStaffUser | null>(() => getStoredCodCompanionUser());
+  const [authenticatedHubId, setAuthenticatedHubId] = useState<string | null>(() => {
+    const user = getStoredCodCompanionUser();
+    const stored = user?.workspaceId || user?.hubId || user?.ownerUid;
+    if (stored) return stored;
+    try {
+      return sessionStorage.getItem('cp_authenticated_hub_id') || localStorage.getItem('cp_authenticated_hub_id') || null;
+    } catch {
+      return null;
+    }
+  });
   const [phoneInput, setPhoneInput] = useState('');
   const [pinInput, setPinInput] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -64,7 +76,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const [showDemoLogins, setShowDemoLogins] = useState(false);
   const [isHubAccessBlocked, setIsHubAccessBlocked] = useState<boolean>(false);
 
-  const currentHubId = authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId;
+  const currentHubId = authenticatedHubId || authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId || '';
 
   // Real-time Super Admin Feature Gate Check for logged in Hub
   useEffect(() => {
@@ -139,9 +151,9 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     }, 3800);
   };
 
-  // 1. Subscribe to Firebase Firestore real-time listener (0s zero-delay synchronization scoped to this hub)
+  // 1. Subscribe to Firebase Firestore real-time listener (0s zero-delay synchronization strictly scoped to authenticatedHubId)
   useEffect(() => {
-    if (!authUser || isHubAccessBlocked) return;
+    if (!authUser || isHubAccessBlocked || !authenticatedHubId) return;
 
     setIsRealtimeConnected(true);
     const unsubscribe = subscribeToDailyCodSheet(
@@ -155,7 +167,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         console.warn('Realtime sync fallback notice:', err);
         setIsRealtimeConnected(false);
       },
-      currentHubId
+      authenticatedHubId
     );
 
     return () => {
@@ -163,7 +175,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         unsubscribe();
       }
     };
-  }, [selectedDate, authUser, currentHubId, isHubAccessBlocked]);
+  }, [selectedDate, authUser, authenticatedHubId, isHubAccessBlocked]);
 
   // Online / Offline window monitor
   useEffect(() => {
@@ -177,7 +189,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     };
   }, []);
 
-  // 2. Handle Login
+  // 2. Handle Login: Look up record in Firestore riders collection to get workspaceId (or hubId / ownerUid)
   const handleLogin = async (overridePhone?: string, overridePin?: string) => {
     const targetPhone = overridePhone || phoneInput;
     const targetPin = overridePin || pinInput;
@@ -185,8 +197,63 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     setIsLoggingIn(true);
 
     try {
-      const res = await authenticateCodStaffCompanion(targetPhone, targetPin);
+      const cleanPhone = targetPhone.replace(/\D/g, '').slice(-10);
+      let detectedHubId: string | null = null;
+
+      // When a rider or staff enters their Phone and PIN, look up their record in Firestore riders collection
+      // to get their workspaceId (or hubId / ownerUid)
+      if (db && cleanPhone) {
+        try {
+          const q = query(collection(db, 'riders'), where('phone', '==', cleanPhone));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            const rData = snap.docs[0].data();
+            detectedHubId = rData.workspaceId || rData.hubId || rData.ownerUid || rData.userId || rData.createdBy || null;
+          } else {
+            const qPrefixed = query(collection(db, 'riders'), where('phone', '==', `+91${cleanPhone}`));
+            const snapPrefixed = await getDocs(qPrefixed);
+            if (!snapPrefixed.empty) {
+              const rData = snapPrefixed.docs[0].data();
+              detectedHubId = rData.workspaceId || rData.hubId || rData.ownerUid || rData.userId || rData.createdBy || null;
+            }
+          }
+        } catch (lookupErr) {
+          console.warn('Firestore riders phone lookup notice:', lookupErr);
+        }
+      }
+
+      // Check local caches for rider workspaceId if offline/cached
+      if (!detectedHubId) {
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_'))) {
+              const raw = localStorage.getItem(key);
+              if (raw) {
+                const list = JSON.parse(raw);
+                if (Array.isArray(list)) {
+                  const found = list.find((r: any) => (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone);
+                  if (found) {
+                    detectedHubId = found.workspaceId || found.hubId || found.ownerUid || found.userId || found.createdBy || null;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
+      const res = await authenticateCodStaffCompanion(targetPhone, targetPin, detectedHubId || undefined);
       if (res.success && res.user) {
+        const finalHubId = res.user.workspaceId || res.user.hubId || res.user.ownerUid || detectedHubId;
+        if (finalHubId) {
+          setAuthenticatedHubId(finalHubId);
+          try {
+            sessionStorage.setItem('cp_authenticated_hub_id', finalHubId);
+            localStorage.setItem('cp_authenticated_hub_id', finalHubId);
+          } catch {}
+        }
         setAuthUser(res.user);
         showToast(`✅ ${res.message}`, 'success');
       } else {
@@ -203,6 +270,11 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   // Handle Logout
   const handleLogout = () => {
     clearCodCompanionSession();
+    try {
+      sessionStorage.removeItem('cp_authenticated_hub_id');
+      localStorage.removeItem('cp_authenticated_hub_id');
+    } catch {}
+    setAuthenticatedHubId(null);
     setAuthUser(null);
     setPhoneInput('');
     setPinInput('');

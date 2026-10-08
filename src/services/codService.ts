@@ -720,7 +720,8 @@ export function exportCodGridToCSV(
  */
 export async function authenticateCodStaffCompanion(
   phoneInput: string,
-  pinInput: string
+  pinInput: string,
+  presetHubId?: string
 ): Promise<{
   success: boolean;
   user?: CodStaffUser;
@@ -848,25 +849,22 @@ export async function authenticateCodStaffCompanion(
   }
 
   // 5. HUB-BASED MULTI-TENANT RESOLUTION & SUPER ADMIN ACCESS GATE
-  let hubId = matchedUser.hubId || matchedUser.ownerUid || matchedUser.workspaceId;
+  let hubId = presetHubId || matchedUser.hubId || matchedUser.ownerUid || matchedUser.workspaceId;
 
-  // If hubId is not yet attached, find rider's workspace/owner from riders collection
+  // Look up rider's record in Firestore riders collection to get workspaceId / hubId / ownerUid
   if (!hubId && db) {
     try {
       const ridersQ = query(collection(db, 'riders'), where('phone', '==', cleanPhone));
       const snaps = await getDocs(ridersQ);
       if (!snaps.empty) {
         const rData = snaps.docs[0].data();
-        hubId = rData.workspaceId || rData.userId || rData.createdBy;
+        hubId = rData.workspaceId || rData.hubId || rData.ownerUid || rData.userId || rData.createdBy;
       } else {
-        const allRidersSnap = await getDocs(collection(db, 'riders'));
-        for (const docSnap of allRidersSnap.docs) {
-          const rData = docSnap.data();
-          const rCleanPhone = (rData.phone || '').replace(/\D/g, '').slice(-10);
-          if (rCleanPhone === cleanPhone) {
-            hubId = rData.workspaceId || rData.userId || rData.createdBy;
-            break;
-          }
+        const ridersPrefixedQ = query(collection(db, 'riders'), where('phone', '==', `+91${cleanPhone}`));
+        const snapPrefixed = await getDocs(ridersPrefixedQ);
+        if (!snapPrefixed.empty) {
+          const rData = snapPrefixed.docs[0].data();
+          hubId = rData.workspaceId || rData.hubId || rData.ownerUid || rData.userId || rData.createdBy;
         }
       }
     } catch (err) {
@@ -887,7 +885,7 @@ export async function authenticateCodStaffCompanion(
               const found = list.find((r: any) => (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone);
               if (found) {
                 const parts = key.split('_');
-                hubId = found.workspaceId || found.userId || found.createdBy || parts[parts.length - 1];
+                hubId = found.workspaceId || found.hubId || found.ownerUid || found.userId || found.createdBy || parts[parts.length - 1];
                 break;
               }
             }
@@ -906,7 +904,7 @@ export async function authenticateCodStaffCompanion(
     return {
       success: false,
       reason: 'inactive',
-      message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
+      message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है या हब रिकॉर्ड नहीं मिला। कृपया व्यवस्थापक से संपर्क करें।',
     };
   }
 
@@ -953,10 +951,13 @@ export async function authenticateCodStaffCompanion(
   }
 
   matchedUser.hubId = hubId;
+  matchedUser.workspaceId = hubId;
   matchedUser.ownerUid = hubId;
 
-  // Save session
+  // Save session & authenticatedHubId
   try {
+    sessionStorage.setItem('cp_authenticated_hub_id', hubId);
+    localStorage.setItem('cp_authenticated_hub_id', hubId);
     sessionStorage.setItem('cp_cod_companion_user', JSON.stringify(matchedUser));
     localStorage.setItem('cp_cod_companion_user', JSON.stringify(matchedUser));
   } catch {}
@@ -1008,17 +1009,20 @@ export function clearCodCompanionSession(): void {
 /**
  * Helper to retrieve active riders strictly scoped to the target Hub (No cross-hub data leakage)
  * Scoped by hubId / workspaceId
+ * CRITICAL: If authenticatedHubId is missing, null, or empty, return an EMPTY ARRAY [].
+ * Under NO circumstances fetch global riders or fall back to an unfiltered query.
  */
-export async function getAllActiveRidersForCod(hubId?: string): Promise<Rider[]> {
-  const ridersMap = new Map<string, Rider>();
-
-  // If no hubId provided and not super admin, companion app must NOT fetch all riders globally!
-  if (!hubId) {
+export async function getAllActiveRidersForCod(authenticatedHubId?: string | null): Promise<Rider[]> {
+  // CRITICAL: If authenticatedHubId is missing, null, or empty, return an EMPTY ARRAY []
+  if (!authenticatedHubId || typeof authenticatedHubId !== 'string' || !authenticatedHubId.trim()) {
     return [];
   }
 
-  // 1. Strictly query target Hub's riders from their isolated workspace collection
-  if (db && hubId !== 'super_admin_hub') {
+  const hubId = authenticatedHubId.trim();
+  const ridersMap = new Map<string, Rider>();
+
+  // 1. Strictly query target Hub's riders from their isolated workspace collection: workspaces/{hubId}/riders
+  if (db) {
     try {
       const wsCol = collection(db, 'workspaces', hubId, 'riders');
       const wsSnaps = await getDocs(wsCol);
@@ -1030,90 +1034,66 @@ export async function getAllActiveRidersForCod(hubId?: string): Promise<Rider[]>
         }
       });
 
-      // If workspace subcollection empty, query root riders scoped by workspaceId/createdBy
-      if (ridersMap.size === 0) {
-        const q = query(collection(db, 'riders'), where('workspaceId', '==', hubId));
-        const snaps = await getDocs(q);
-        snaps.docs.forEach((d) => {
-          const data = d.data() as Rider;
-          const id = data.id || d.id;
-          if (id && data.active !== false) {
-            ridersMap.set(id, { ...data, id, workspaceId: hubId });
-          }
-        });
-      }
-
-      if (ridersMap.size === 0) {
-        const qUser = query(collection(db, 'riders'), where('userId', '==', hubId));
-        const snapsUser = await getDocs(qUser);
-        snapsUser.docs.forEach((d) => {
-          const data = d.data() as Rider;
-          const id = data.id || d.id;
-          if (id && data.active !== false) {
-            ridersMap.set(id, { ...data, id, workspaceId: hubId });
-          }
-        });
-      }
-    } catch (err) {
-      console.warn('Hub riders isolated query notice:', err);
-    }
-  } else if (db && hubId === 'super_admin_hub') {
-    // Only super admin demo test hub
-    try {
-      const colRef = collection(db, 'riders');
-      const snaps = await getDocs(colRef);
-      snaps.docs.forEach((d) => {
+      // 2. Query root riders collection strictly where workspaceId == authenticatedHubId
+      const qWs = query(collection(db, 'riders'), where('workspaceId', '==', hubId));
+      const snapsWs = await getDocs(qWs);
+      snapsWs.docs.forEach((d) => {
         const data = d.data() as Rider;
         const id = data.id || d.id;
-        if (id && data.active !== false) {
-          ridersMap.set(id, { ...data, id });
+        if (id && data.active !== false && !ridersMap.has(id)) {
+          ridersMap.set(id, { ...data, id, workspaceId: hubId });
+        }
+      });
+
+      // 3. Query root riders collection strictly where hubId == authenticatedHubId
+      const qHub = query(collection(db, 'riders'), where('hubId', '==', hubId));
+      const snapsHub = await getDocs(qHub);
+      snapsHub.docs.forEach((d) => {
+        const data = d.data() as Rider;
+        const id = data.id || d.id;
+        if (id && data.active !== false && !ridersMap.has(id)) {
+          ridersMap.set(id, { ...data, id, workspaceId: hubId });
+        }
+      });
+
+      // 4. Query root riders collection strictly where userId == authenticatedHubId
+      const qUser = query(collection(db, 'riders'), where('userId', '==', hubId));
+      const snapsUser = await getDocs(qUser);
+      snapsUser.docs.forEach((d) => {
+        const data = d.data() as Rider;
+        const id = data.id || d.id;
+        if (id && data.active !== false && !ridersMap.has(id)) {
+          ridersMap.set(id, { ...data, id, workspaceId: hubId });
         }
       });
     } catch (err) {
-      console.warn('Firestore active riders query notice:', err);
+      console.warn('Strict hub riders query notice:', err);
     }
   }
 
-  // 2. Scan localStorage rider caches strictly for target Hub
+  // 5. Scan localStorage rider caches strictly for target Hub (no cross-hub scanning)
   try {
-    if (hubId && hubId !== 'super_admin_hub') {
-      const keys = [`cp_cache_riders_${hubId}`, `courier_riders_${hubId}`];
-      for (const k of keys) {
-        const raw = localStorage.getItem(k);
-        if (raw) {
-          const list: Rider[] = JSON.parse(raw);
-          if (Array.isArray(list)) {
-            list.forEach((r) => {
-              if (r && r.id && r.name && r.active !== false && !ridersMap.has(r.id)) {
+    const keys = [`cp_cache_riders_${hubId}`, `courier_riders_${hubId}`];
+    for (const k of keys) {
+      const raw = localStorage.getItem(k);
+      if (raw) {
+        const list: Rider[] = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          list.forEach((r) => {
+            if (r && r.id && r.name && r.active !== false && !ridersMap.has(r.id)) {
+              if (!r.workspaceId || r.workspaceId === hubId || r.hubId === hubId || r.userId === hubId) {
                 ridersMap.set(r.id, { ...r, workspaceId: hubId });
               }
-            });
-          }
-        }
-      }
-    } else {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_'))) {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const list: Rider[] = JSON.parse(raw);
-            if (Array.isArray(list)) {
-              list.forEach((r) => {
-                if (r && r.id && r.name && r.active !== false && !ridersMap.has(r.id)) {
-                  ridersMap.set(r.id, r);
-                }
-              });
             }
-          }
+          });
         }
       }
     }
   } catch {}
 
-  // 3. Scan staff pins for target hub if role === 'rider'
+  // 6. Scan staff pins strictly for target hub if role === 'rider'
   try {
-    const rawStaff = localStorage.getItem(hubId ? `cp_cod_staff_${hubId}` : 'cp_cod_staff_pins_cache');
+    const rawStaff = localStorage.getItem(`cp_cod_staff_${hubId}`);
     if (rawStaff) {
       const staffList: CodStaffUser[] = JSON.parse(rawStaff);
       staffList.forEach((s) => {
@@ -1134,7 +1114,10 @@ export async function getAllActiveRidersForCod(hubId?: string): Promise<Rider[]>
     }
   } catch {}
 
-  return Array.from(ridersMap.values());
+  // Absolute Isolation: filter to only active riders belonging strictly to this authenticatedHubId
+  return Array.from(ridersMap.values()).filter(
+    (r) => r.active !== false && (!r.workspaceId || r.workspaceId === hubId || r.hubId === hubId)
+  ).map((r) => ({ ...r, workspaceId: hubId }));
 }
 
 /**
@@ -1174,8 +1157,22 @@ export function subscribeToDailyCodSheet(
   hubId?: string
 ): Unsubscribe {
   const targetDate = date || getTodayDateString();
-  const effectiveHubId = hubId && hubId !== 'super_admin_hub' ? hubId : undefined;
-  const localCacheKey = effectiveHubId ? `cp_cod_sheet_${effectiveHubId}_${targetDate}` : `cp_cod_sheet_${targetDate}`;
+
+  // Strict Hub Isolation: if hubId is missing or empty, companion app has NO access to any sheet
+  if (!hubId || typeof hubId !== 'string' || !hubId.trim()) {
+    onUpdate({
+      date: targetDate,
+      entries: [],
+      isLocked: false,
+      company1Name: DEFAULT_COMPANY_1,
+      company2Name: DEFAULT_COMPANY_2,
+      hubId: '',
+    });
+    return () => {};
+  }
+
+  const effectiveHubId = hubId.trim();
+  const localCacheKey = `cp_cod_sheet_${effectiveHubId}_${targetDate}`;
 
   // Helper to ensure empty entries list is populated with active riders
   const enrichWithActiveRiders = async (baseData: DailyCodSheetData) => {
@@ -1201,7 +1198,7 @@ export function subscribeToDailyCodSheet(
 
   // Instant Cache-First load in 0.0s
   try {
-    const cachedRaw = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+    const cachedRaw = localStorage.getItem(localCacheKey);
     if (cachedRaw) {
       const cached = JSON.parse(cachedRaw);
       const parsedEntries = extractEntriesFromSheetRaw(cached, targetDate);
@@ -1235,10 +1232,8 @@ export function subscribeToDailyCodSheet(
   }
 
   try {
-    // Prefer nested scoped path: hubs/{hubId}/daily_cod_sheets/{targetDate}
-    const docRef = effectiveHubId
-      ? doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate)
-      : doc(db, 'daily_cod_sheets', targetDate);
+    // Strictly scoped path: hubs/{effectiveHubId}/daily_cod_sheets/{targetDate}
+    const docRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate);
 
     const unsubscribe = onSnapshot(
       docRef,
@@ -1290,33 +1285,30 @@ export function subscribeToDailyCodSheet(
           };
           try {
             localStorage.setItem(localCacheKey, JSON.stringify(sheetData));
-            localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(sheetData));
           } catch {}
           onUpdate(sheetData);
         } else {
-          // Document not found in hubs/{hubId}; check fallback daily_cod_sheets/{effectiveHubId}_{targetDate} or root
-          if (effectiveHubId) {
-            try {
-              const rootFallbackSnap = await getDoc(doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`));
-              if (rootFallbackSnap.exists()) {
-                const raw = rootFallbackSnap.data();
-                const existingEntries = extractEntriesFromSheetRaw(raw, targetDate);
-                const sheetData: DailyCodSheetData = {
-                  date: targetDate,
-                  entries: existingEntries,
-                  isLocked: Boolean(raw.isLocked),
-                  company1Name: raw.company1Name || DEFAULT_COMPANY_1,
-                  company2Name: raw.company2Name || DEFAULT_COMPANY_2,
-                  hubId: effectiveHubId,
-                  updatedAt: raw.updatedAt,
-                };
-                onUpdate(sheetData);
-                return;
-              }
-            } catch {}
-          }
+          // Document not found in hubs/{effectiveHubId}; check fallback daily_cod_sheets/{effectiveHubId}_{targetDate}
+          try {
+            const rootFallbackSnap = await getDoc(doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`));
+            if (rootFallbackSnap.exists()) {
+              const raw = rootFallbackSnap.data();
+              const existingEntries = extractEntriesFromSheetRaw(raw, targetDate);
+              const sheetData: DailyCodSheetData = {
+                date: targetDate,
+                entries: existingEntries,
+                isLocked: Boolean(raw.isLocked),
+                company1Name: raw.company1Name || DEFAULT_COMPANY_1,
+                company2Name: raw.company2Name || DEFAULT_COMPANY_2,
+                hubId: effectiveHubId,
+                updatedAt: raw.updatedAt,
+              };
+              onUpdate(sheetData);
+              return;
+            }
+          } catch {}
 
-          // Document does not exist yet! Automatically pull active riders for this hub
+          // Document does not exist yet! Automatically pull active riders strictly for this hub
           const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
           const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
           const defaultSheet: DailyCodSheetData = {
@@ -1329,7 +1321,6 @@ export function subscribeToDailyCodSheet(
           };
           try {
             localStorage.setItem(localCacheKey, JSON.stringify(defaultSheet));
-            localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(defaultSheet));
           } catch {}
           onUpdate(defaultSheet);
         }
@@ -1343,6 +1334,7 @@ export function subscribeToDailyCodSheet(
     return unsubscribe;
   } catch (err) {
     console.warn('Failed to attach daily_cod_sheets listener:', err);
+    if (onError && err instanceof Error) onError(err);
     return () => {};
   }
 }

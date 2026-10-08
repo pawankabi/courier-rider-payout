@@ -25,6 +25,7 @@ export interface Rider {
   createdByEmail?: string; // Email of user who registered the rider
   workspaceId?: string; // Workspace UID isolation tag
   userId?: string; // Associated User UID
+  hubId?: string; // Associated Hub isolation tag
   totalAdvance?: number; // Running advance balance
   advances?: RiderAdvanceEntry[]; // Detailed advance payment records
 }

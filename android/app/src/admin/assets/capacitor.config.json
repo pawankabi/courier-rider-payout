@@ -1,0 +1,9 @@
+{
+  "appId": "com.courierpayout.app",
+  "appName": "Courier Rider Payout",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "courier-rider-payout.firebaseapp.com"
+  }
+}

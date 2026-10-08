@@ -184,9 +184,14 @@ function smsDispatchProxyPlugin() {
   };
 }
 
-export default defineConfig(({ command }) => {
+export default defineConfig(({ command, mode }) => {
   const isDev = command === 'serve';
+  const appTarget = process.env.VITE_APP_TARGET || (mode === 'companion' ? 'cod_companion' : 'admin');
   return {
+    define: {
+      'import.meta.env.VITE_APP_TARGET': JSON.stringify(appTarget),
+      'process.env.VITE_APP_TARGET': JSON.stringify(appTarget),
+    },
     plugins: [
       react(),
       safeTailwindcss(),
@@ -205,9 +210,11 @@ export default defineConfig(({ command }) => {
         ],
         manifest: {
           id: '/',
-          name: 'Courier Rider Payout & Delivery Manager',
-          short_name: 'RiderPayout',
-          description: 'Courier Rider delivery tracking, ₹13 base + ₹2 incentive payout, settlement & WhatsApp slips.',
+          name: appTarget === 'cod_companion' ? 'COD Entry (हिसाब किताब)' : 'Courier Rider Payout & Delivery Manager',
+          short_name: appTarget === 'cod_companion' ? 'CODEntry' : 'RiderPayout',
+          description: appTarget === 'cod_companion'
+            ? 'COD Entry (हिसाब किताब) - Delivery Boys & Hub Staff COD Collection Manager'
+            : 'Courier Rider delivery tracking, ₹13 base + ₹2 incentive payout, settlement & WhatsApp slips.',
           theme_color: '#0f172a',
           background_color: '#0f172a',
           display: 'standalone',
