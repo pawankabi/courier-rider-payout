@@ -130,10 +130,11 @@ function parseCodCompanionRoute(): boolean {
   if (typeof window === 'undefined') return false;
 
   // 1. Direct Build-Time Target Check
-  if (import.meta.env.VITE_APP_TARGET === 'admin') {
+  const appTarget = (import.meta.env.VITE_APP_TARGET || '').trim().toLowerCase();
+  if (appTarget === 'admin') {
     return false;
   }
-  if (import.meta.env.VITE_APP_TARGET === 'cod_companion') {
+  if (appTarget === 'cod_companion' || appTarget === 'rider' || appTarget === 'companion') {
     return true;
   }
 
@@ -143,15 +144,26 @@ function parseCodCompanionRoute(): boolean {
     hash.includes('/cod-entry') || 
     hash.includes('cod-entry') || 
     hash.includes('/cod') || 
+    hash.includes('/companion') || 
+    hash.includes('/rider') || 
     pathname.includes('/cod-entry') || 
-    pathname.includes('/cod');
+    pathname.includes('/cod') || 
+    pathname.includes('/companion') || 
+    pathname.includes('/rider');
 
   if (isCodRoute) return true;
 
   const params = new URLSearchParams(window.location.search);
   const appParam = params.get('app');
   const codParam = params.get('cod');
-  if (appParam === 'cod-entry' || appParam === 'cod' || codParam === 'entry' || codParam === 'true') {
+  if (
+    appParam === 'cod-entry' || 
+    appParam === 'cod' || 
+    appParam === 'companion' || 
+    appParam === 'rider' || 
+    codParam === 'entry' || 
+    codParam === 'true'
+  ) {
     return true;
   }
 
@@ -2641,8 +2653,13 @@ export default function App() {
     };
   }, []);
 
-  const isExplicitCompanionTarget = import.meta.env.VITE_APP_TARGET === 'cod_companion' || isNativeCompanionPackage;
-  const isExplicitAdminTarget = import.meta.env.VITE_APP_TARGET === 'admin';
+  const companionEnv = (import.meta.env.VITE_APP_TARGET || '').trim().toLowerCase();
+  const isExplicitCompanionTarget = 
+    companionEnv === 'cod_companion' || 
+    companionEnv === 'rider' || 
+    companionEnv === 'companion' || 
+    isNativeCompanionPackage;
+  const isExplicitAdminTarget = companionEnv === 'admin';
 
   // 1. Standalone Companion App APK (assembleRiderRelease): "COD Entry (हिसाब किताब)" for Riders & Staff
   // Root route '/' strictly loads CodCompanionApp login only

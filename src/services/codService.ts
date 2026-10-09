@@ -758,6 +758,7 @@ export async function authenticateCodStaffCompanion(
     try {
       let matchedRiderData: any = null;
       let matchedRiderId: string | null = null;
+      let phoneFoundInDb = false;
 
       // Query phone == cleanPhone (10 digits)
       const qClean = query(collection(db, 'riders'), where('phone', '==', cleanPhone));
@@ -765,6 +766,7 @@ export async function authenticateCodStaffCompanion(
       if (!snapClean.empty) {
         matchedRiderData = snapClean.docs[0].data();
         matchedRiderId = snapClean.docs[0].id;
+        phoneFoundInDb = true;
       } else {
         // Query phone == +91{cleanPhone}
         const qPrefixed = query(collection(db, 'riders'), where('phone', '==', `+91${cleanPhone}`));
@@ -772,6 +774,7 @@ export async function authenticateCodStaffCompanion(
         if (!snapPrefixed.empty) {
           matchedRiderData = snapPrefixed.docs[0].data();
           matchedRiderId = snapPrefixed.docs[0].id;
+          phoneFoundInDb = true;
         }
       }
 
@@ -783,6 +786,7 @@ export async function authenticateCodStaffCompanion(
           if (!snapGroupClean.empty) {
             matchedRiderData = snapGroupClean.docs[0].data();
             matchedRiderId = snapGroupClean.docs[0].id;
+            phoneFoundInDb = true;
             const parentWs = snapGroupClean.docs[0].ref.parent?.parent?.id;
             if (parentWs && !matchedRiderData.workspaceId && !matchedRiderData.hubId) {
               matchedRiderData.workspaceId = parentWs;
@@ -793,6 +797,7 @@ export async function authenticateCodStaffCompanion(
             if (!snapGroupPrefix.empty) {
               matchedRiderData = snapGroupPrefix.docs[0].data();
               matchedRiderId = snapGroupPrefix.docs[0].id;
+              phoneFoundInDb = true;
               const parentWs = snapGroupPrefix.docs[0].ref.parent?.parent?.id;
               if (parentWs && !matchedRiderData.workspaceId && !matchedRiderData.hubId) {
                 matchedRiderData.workspaceId = parentWs;
@@ -825,12 +830,12 @@ export async function authenticateCodStaffCompanion(
           return {
             success: false,
             reason: 'invalid_credentials',
-            message: 'मोबाइल नंबर या 4-अंकों का पिन गलत है! कृपया सही विवरण दर्ज करें।',
+            message: 'गलत पिन! कृपया पुनः प्रयास करें।',
           };
         }
 
-        // Extract the hub owner identifier. Check ALL possible owner field names:
-        // riderDoc.workspaceId || riderDoc.hubId || riderDoc.userId || riderDoc.ownerUid || riderDoc.createdBy
+        // When a matching document is found, immediately extract
+        // parent tenant identifier: ownerHubId = riderDoc.workspaceId || riderDoc.hubId || riderDoc.userId || riderDoc.ownerUid || riderDoc.createdBy
         const parentHub = (
           matchedRiderData.workspaceId ||
           matchedRiderData.hubId ||
@@ -876,34 +881,47 @@ export async function authenticateCodStaffCompanion(
   if (!matchedUser && db) {
     try {
       let staffData: any = null;
+      let staffPhoneFound = false;
       const phoneDocRef = doc(db, 'cod_staff_pins', cleanPhone);
       const phoneSnap = await getDoc(phoneDocRef);
       if (phoneSnap.exists()) {
+        staffPhoneFound = true;
         const d = phoneSnap.data();
         if (d.pin === pin) {
           staffData = d;
         }
       }
 
-      if (!staffData) {
+      if (!staffData && !staffPhoneFound) {
         const colRef = collection(db, 'cod_staff_pins');
         const snaps = await getDocs(colRef);
         for (const docSnap of snaps.docs) {
           const d = docSnap.data();
           const dPhone = (d.phone || d.cleanPhone || '').replace(/\D/g, '').slice(-10);
-          if (dPhone === cleanPhone && d.pin === pin) {
-            staffData = d;
-            break;
+          if (dPhone === cleanPhone) {
+            staffPhoneFound = true;
+            if (d.pin === pin) {
+              staffData = d;
+              break;
+            }
           }
         }
       }
 
+      if (staffPhoneFound && !staffData) {
+        return {
+          success: false,
+          reason: 'invalid_credentials',
+          message: '4-अंकों का पिन गलत है! कृपया सही विवरण दर्ज करें।',
+        };
+      }
+
       if (staffData) {
         const staffHub = (
+          staffData.userId ||
+          staffData.workspaceId ||
           staffData.hubId ||
           staffData.ownerUid ||
-          staffData.workspaceId ||
-          staffData.userId ||
           ''
         ).trim();
 
@@ -921,6 +939,7 @@ export async function authenticateCodStaffCompanion(
           hubId: staffHub,
           ownerUid: staffHub,
           workspaceId: staffHub,
+          userId: staffHub,
         };
       }
     } catch (err) {
@@ -934,15 +953,23 @@ export async function authenticateCodStaffCompanion(
       const cachedRaw = localStorage.getItem('cp_cod_staff_pins_cache');
       if (cachedRaw) {
         const staffList: CodStaffUser[] = JSON.parse(cachedRaw);
-        const found = staffList.find((s) => {
+        const phoneMatch = staffList.find((s) => {
           const sPhone = (s.phone || '').replace(/\D/g, '').slice(-10);
-          return sPhone === cleanPhone && s.pin === pin;
+          return sPhone === cleanPhone;
         });
-        if (found) {
-          const staffHub = (found.hubId || found.ownerUid || found.workspaceId || '').trim();
-          if (staffHub) {
-            resolvedHubId = staffHub;
-            matchedUser = { ...found, hubId: staffHub, ownerUid: staffHub, workspaceId: staffHub };
+        if (phoneMatch) {
+          if (phoneMatch.pin === pin) {
+            const staffHub = (phoneMatch.userId || phoneMatch.workspaceId || phoneMatch.hubId || phoneMatch.ownerUid || '').trim();
+            if (staffHub) {
+              resolvedHubId = staffHub;
+              matchedUser = { ...phoneMatch, hubId: staffHub, ownerUid: staffHub, workspaceId: staffHub, userId: staffHub };
+            }
+          } else {
+            return {
+              success: false,
+              reason: 'invalid_credentials',
+              message: '4-अंकों का पिन गलत है! कृपया सही विवरण दर्ज करें।',
+            };
           }
         }
       }
@@ -952,26 +979,35 @@ export async function authenticateCodStaffCompanion(
   // 4. Default Demo accounts for instant testing
   if (!matchedUser) {
     const demoAccounts: CodStaffUser[] = [
-      { id: 'staff_demo_rider', riderId: 'rider_1', name: 'सुरेश कुमार (Rider)', phone: '9876543210', role: 'rider', pin: '1234', isActive: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', createdAt: new Date().toISOString() },
-      { id: 'staff_demo_tl', name: 'रोहित वर्मा (Team Leader)', phone: '9876543211', role: 'team_leader', pin: '4321', isActive: true, canVerifyCod: true, canVerifyCash: false, canVerifyOnline: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', createdAt: new Date().toISOString() },
-      { id: 'staff_demo_sup', name: 'अमित सिंह (Supervisor)', phone: '9876543212', role: 'supervisor', pin: '5678', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', createdAt: new Date().toISOString() },
-      { id: 'staff_demo_incharge', name: 'पवन कबी (Hub Incharge)', phone: '9876543213', role: 'hub_incharge', pin: '9999', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', createdAt: new Date().toISOString() },
+      { id: 'staff_demo_rider', riderId: 'rider_1', name: 'सुरेश कुमार (Rider)', phone: '9876543210', role: 'rider', pin: '1234', isActive: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', userId: 'super_admin_hub', createdAt: new Date().toISOString() },
+      { id: 'staff_demo_tl', name: 'रोहित वर्मा (Team Leader)', phone: '9876543211', role: 'team_leader', pin: '4321', isActive: true, canVerifyCod: true, canVerifyCash: false, canVerifyOnline: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', userId: 'super_admin_hub', createdAt: new Date().toISOString() },
+      { id: 'staff_demo_sup', name: 'अमित सिंह (Supervisor)', phone: '9876543212', role: 'supervisor', pin: '5678', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', userId: 'super_admin_hub', createdAt: new Date().toISOString() },
+      { id: 'staff_demo_incharge', name: 'पवन कबी (Hub Incharge)', phone: '9876543213', role: 'hub_incharge', pin: '9999', isActive: true, canVerifyCod: true, canVerifyCash: true, canVerifyOnline: true, hubId: 'super_admin_hub', ownerUid: 'super_admin_hub', workspaceId: 'super_admin_hub', userId: 'super_admin_hub', createdAt: new Date().toISOString() },
     ];
     const demoFound = demoAccounts.find((d) => {
       const dPhone = d.phone!.replace(/\D/g, '').slice(-10);
-      return dPhone === cleanPhone && d.pin === pin;
+      return dPhone === cleanPhone;
     });
     if (demoFound) {
-      matchedUser = demoFound;
-      resolvedHubId = 'super_admin_hub';
+      if (demoFound.pin === pin) {
+        matchedUser = demoFound;
+        resolvedHubId = 'super_admin_hub';
+      } else {
+        return {
+          success: false,
+          reason: 'invalid_credentials',
+          message: '4-अंकों का पिन गलत है! कृपया सही विवरण दर्ज करें।',
+        };
+      }
     }
   }
 
+  // If no document matches, block login with error: "फोन नंबर पंजीकृत नहीं है।"
   if (!matchedUser) {
     return {
       success: false,
       reason: 'not_found',
-      message: 'मोबाइल नंबर या 4-अंकों का पिन गलत है! कृपया सही विवरण दर्ज करें।',
+      message: 'फोन नंबर पंजीकृत नहीं है।',
     };
   }
 
@@ -994,10 +1030,13 @@ export async function authenticateCodStaffCompanion(
     };
   }
 
-  // Check Feature Gate: codCompanionAccess
+  // Check Feature Gate: codCompanionAccess in users/{ownerHubId} or workspaces/{ownerHubId}
   if (finalHubId !== 'super_admin_hub' && db) {
     try {
       let hubDoc = await getDoc(doc(db, 'users', finalHubId));
+      if (!hubDoc.exists()) {
+        hubDoc = await getDoc(doc(db, 'workspaces', finalHubId));
+      }
       if (!hubDoc.exists()) {
         hubDoc = await getDoc(doc(db, 'all_users', finalHubId));
       }
@@ -1007,7 +1046,11 @@ export async function authenticateCodStaffCompanion(
         const isHubSuperAdmin = isSuperAdmin(hubData?.email);
         if (!isHubSuperAdmin) {
           const perms = normalizeUserPermissions(hubData?.permissions);
-          if (!perms.codCompanionAccess) {
+          const hasAccess = Boolean(
+            hubData?.codCompanionAccess === true || 
+            perms.codCompanionAccess === true
+          );
+          if (!hasAccess) {
             return {
               success: false,
               reason: 'inactive',
@@ -1036,8 +1079,10 @@ export async function authenticateCodStaffCompanion(
   matchedUser.workspaceId = finalHubId;
   matchedUser.ownerUid = finalHubId;
 
-  // 6. SAVE ISOLATED COMPANION SESSION (localStorage: active_companion_hub_id)
+  // 6. SAVE ISOLATED COMPANION SESSION (localStorage: active_hub_id & active_companion_hub_id)
   try {
+    localStorage.setItem('active_hub_id', finalHubId);
+    sessionStorage.setItem('active_hub_id', finalHubId);
     localStorage.setItem('active_companion_hub_id', finalHubId);
     sessionStorage.setItem('active_companion_hub_id', finalHubId);
     localStorage.setItem('cp_authenticated_hub_id', finalHubId);
@@ -1059,7 +1104,9 @@ export async function authenticateCodStaffCompanion(
  */
 export function getActiveCompanionHubId(): string | null {
   try {
-    const hubId = localStorage.getItem('active_companion_hub_id') ||
+    const hubId = localStorage.getItem('active_hub_id') ||
+      sessionStorage.getItem('active_hub_id') ||
+      localStorage.getItem('active_companion_hub_id') ||
       sessionStorage.getItem('active_companion_hub_id') ||
       localStorage.getItem('cp_authenticated_hub_id') ||
       sessionStorage.getItem('cp_authenticated_hub_id');
@@ -1081,13 +1128,16 @@ export async function checkHubCodAccess(hubId?: string): Promise<boolean> {
   try {
     let hubDoc = await getDoc(doc(db, 'users', targetHubId));
     if (!hubDoc.exists()) {
+      hubDoc = await getDoc(doc(db, 'workspaces', targetHubId));
+    }
+    if (!hubDoc.exists()) {
       hubDoc = await getDoc(doc(db, 'all_users', targetHubId));
     }
     if (hubDoc.exists()) {
       const hubData = hubDoc.data();
       if (isSuperAdmin(hubData?.email)) return true;
       const perms = normalizeUserPermissions(hubData?.permissions);
-      return Boolean(perms.codCompanionAccess);
+      return Boolean(hubData?.codCompanionAccess === true || perms.codCompanionAccess);
     }
   } catch {}
   return false;
@@ -1103,6 +1153,8 @@ export function getStoredCodCompanionUser(): CodStaffUser | null {
 
 export function clearCodCompanionSession(): void {
   try {
+    localStorage.removeItem('active_hub_id');
+    sessionStorage.removeItem('active_hub_id');
     localStorage.removeItem('active_companion_hub_id');
     sessionStorage.removeItem('active_companion_hub_id');
     sessionStorage.removeItem('cp_authenticated_hub_id');
@@ -1221,6 +1273,70 @@ export async function getAllActiveRidersForCod(authenticatedHubId?: string | nul
 
   console.log(`🔒 [Hub Isolation] Hub: ${hubId.substring(0, 8)} resolved ${result.length} active riders`);
   return result;
+}
+
+/**
+ * Real-Time Listener to bind strictly to a hub's active riders
+ * query(collection(db, "riders"), where("workspaceId", "==", active_hub_id))
+ * Under NO circumstances load or merge any documents belonging to other hubs.
+ */
+export function subscribeToHubRiders(
+  hubId: string | null | undefined,
+  onRidersUpdate: (riders: Rider[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const targetHubId = (hubId || getActiveCompanionHubId() || '').trim();
+  if (!targetHubId) {
+    onRidersUpdate([]);
+    return () => {};
+  }
+
+  // Initial cached load
+  getAllActiveRidersForCod(targetHubId).then((r) => {
+    if (r.length > 0) onRidersUpdate(r);
+  });
+
+  if (!db) return () => {};
+
+  try {
+    const qWs = query(collection(db, 'riders'), where('workspaceId', '==', targetHubId));
+    const unsubscribeWs = onSnapshot(
+      qWs,
+      (snapshot) => {
+        const riders: Rider[] = [];
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as Rider;
+          const owner = (data.workspaceId || data.hubId || data.userId || data.ownerUid || data.createdBy || '').trim();
+          if (data.active !== false && (!owner || owner === targetHubId)) {
+            riders.push({
+              ...data,
+              id: data.id || docSnap.id,
+              hubId: targetHubId,
+              workspaceId: targetHubId,
+              ownerUid: targetHubId,
+              userId: targetHubId,
+            });
+          }
+        });
+        if (riders.length > 0) {
+          onRidersUpdate(riders);
+        } else {
+          // Check fallback query where("userId", "==", targetHubId)
+          getAllActiveRidersForCod(targetHubId).then((all) => onRidersUpdate(all));
+        }
+      },
+      (err) => {
+        console.warn('Real-time riders listener notice:', err);
+        if (onError) onError(err);
+      }
+    );
+
+    return unsubscribeWs;
+  } catch (err) {
+    console.warn('Failed to bind real-time riders listener:', err);
+    if (onError && err instanceof Error) onError(err);
+    return () => {};
+  }
 }
 
 /**

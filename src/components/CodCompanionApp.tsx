@@ -36,16 +36,19 @@ import {
   CodDailyEntry, 
   CodStaffUser, 
   CodStaffRole,
-  DailyCodSheetData 
+  DailyCodSheetData,
+  Rider
 } from '../types';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth';
+import { auth, db } from '../firebase';
 import { 
   authenticateCodStaffCompanion, 
   getActiveCompanionHubId,
   getStoredCodCompanionUser, 
   clearCodCompanionSession,
   subscribeToDailyCodSheet,
+  subscribeToHubRiders,
   updateSingleRiderEntryInSheet,
   toggleDayEndLockForSheet,
   checkHubCodAccess
@@ -67,6 +70,30 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const [loginError, setLoginError] = useState('');
   const [showDemoLogins, setShowDemoLogins] = useState(false);
   const [isHubAccessBlocked, setIsHubAccessBlocked] = useState<boolean>(false);
+  const [hubRiders, setHubRiders] = useState<Rider[]>([]);
+
+  // 1. INDEPENDENT FIREBASE AUTH & SESSION LIFECYCLE:
+  // Establish dedicated Firebase session using Firebase Anonymous Authentication (signInAnonymously(auth)) on app mount
+  // to guarantee a live, authenticated connection with Firestore security rules.
+  useEffect(() => {
+    let isMounted = true;
+    const initAuth = async () => {
+      try {
+        if (auth && !auth.currentUser) {
+          const userCred = await signInAnonymously(auth);
+          if (isMounted) {
+            console.log('⚡ [Firebase Auth] Standalone companion anonymous session established:', userCred.user?.uid);
+          }
+        }
+      } catch (authErr) {
+        console.warn('Anonymous Firebase auth notice:', authErr);
+      }
+    };
+    initAuth();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const currentHubId = (authenticatedHubId || getActiveCompanionHubId() || authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId || '').trim();
 
@@ -148,7 +175,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     if (!authUser || isHubAccessBlocked || !authenticatedHubId) return;
 
     setIsRealtimeConnected(true);
-    const unsubscribe = subscribeToDailyCodSheet(
+    const unsubscribeSheet = subscribeToDailyCodSheet(
       selectedDate,
       (data) => {
         setSheetData(data);
@@ -162,9 +189,24 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       authenticatedHubId
     );
 
+    // Bind real-time listener (onSnapshot) to ONLY that hub's riders:
+    // query(collection(db, "riders"), where("workspaceId", "==", active_hub_id))
+    const unsubscribeRiders = subscribeToHubRiders(
+      authenticatedHubId,
+      (riders) => {
+        setHubRiders(riders);
+      },
+      (err) => {
+        console.warn('Realtime hub riders notice:', err);
+      }
+    );
+
     return () => {
-      if (typeof unsubscribe === 'function') {
-        unsubscribe();
+      if (typeof unsubscribeSheet === 'function') {
+        unsubscribeSheet();
+      }
+      if (typeof unsubscribeRiders === 'function') {
+        unsubscribeRiders();
       }
     };
   }, [selectedDate, authUser, authenticatedHubId, isHubAccessBlocked]);
@@ -199,8 +241,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           return;
         }
 
-        // Save resolved hubId in companion app session
+        // Save resolved hubId in companion app session (localStorage: active_hub_id & active_companion_hub_id)
         try {
+          localStorage.setItem('active_hub_id', finalHubId);
+          sessionStorage.setItem('active_hub_id', finalHubId);
           localStorage.setItem('active_companion_hub_id', finalHubId);
           sessionStorage.setItem('active_companion_hub_id', finalHubId);
           localStorage.setItem('cp_authenticated_hub_id', finalHubId);
@@ -226,6 +270,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const handleLogout = () => {
     clearCodCompanionSession();
     try {
+      localStorage.removeItem('active_hub_id');
+      sessionStorage.removeItem('active_hub_id');
       localStorage.removeItem('active_companion_hub_id');
       sessionStorage.removeItem('active_companion_hub_id');
       sessionStorage.removeItem('cp_authenticated_hub_id');
