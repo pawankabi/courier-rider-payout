@@ -311,6 +311,7 @@ function MainCourierApp() {
   const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
   const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
   const [isCodStandaloneOpen, setIsCodStandaloneOpen] = useState(false);
+  const [isCodCompanionOpen, setIsCodCompanionOpen] = useState(false);
   const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
 
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
@@ -1815,6 +1816,15 @@ function MainCourierApp() {
     );
   }
 
+  // In-App Rider Entry Sub-App View: साथी ऐप (CodCompanionApp) with back button
+  if (isCodCompanionOpen) {
+    return (
+      <CodCompanionApp
+        onBackToMainApp={() => setIsCodCompanionOpen(false)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
       {/* Admin Inspection Banner */}
@@ -2225,6 +2235,21 @@ function MainCourierApp() {
               </button>
             )}
 
+            {/* Direct साथी ऐप (Rider Entry) Tab Button */}
+            <button
+              id="desktop-tab-companion"
+              type="button"
+              onClick={() => setIsCodCompanionOpen(true)}
+              className="py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 border-transparent text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition cursor-pointer"
+              title="📲 साथी ऐप (Rider Entry Companion)"
+            >
+              <Bike className="w-4 h-4 text-emerald-400" />
+              <span>📲 साथी ऐप</span>
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                Rider
+              </span>
+            </button>
+
             {/* Master Admin Dashboard Tab - Visible ONLY to Super Admin */}
             {isSuperAdminUser && (
               <button
@@ -2324,6 +2349,7 @@ function MainCourierApp() {
                 userId={targetUid}
                 hubName={activeHubName}
                 onOpenCodPortal={() => setIsCodStandaloneOpen(true)}
+                onOpenCodCompanion={() => setIsCodCompanionOpen(true)}
               />
             )}
 

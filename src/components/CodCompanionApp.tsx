@@ -50,8 +50,7 @@ import {
   subscribeToDailyCodSheet,
   subscribeToHubRiders,
   updateSingleRiderEntryInSheet,
-  toggleDayEndLockForSheet,
-  checkHubCodAccess
+  toggleDayEndLockForSheet
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
 
@@ -69,7 +68,6 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showDemoLogins, setShowDemoLogins] = useState(false);
-  const [isHubAccessBlocked, setIsHubAccessBlocked] = useState<boolean>(false);
   const [hubRiders, setHubRiders] = useState<Rider[]>([]);
 
   // 1. INDEPENDENT FIREBASE AUTH & SESSION LIFECYCLE:
@@ -96,23 +94,6 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   }, []);
 
   const currentHubId = (authenticatedHubId || getActiveCompanionHubId() || authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId || '').trim();
-
-  // Real-time Super Admin Feature Gate Check for logged in Hub
-  useEffect(() => {
-    if (!authUser) {
-      setIsHubAccessBlocked(false);
-      return;
-    }
-    const verifyHubAccess = async () => {
-      const allowed = await checkHubCodAccess(currentHubId);
-      if (!allowed) {
-        setIsHubAccessBlocked(true);
-      } else {
-        setIsHubAccessBlocked(false);
-      }
-    };
-    verifyHubAccess();
-  }, [authUser, currentHubId]);
 
   // Sheet & Active Date State
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
@@ -172,7 +153,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
 
   // 1. Subscribe to Firebase Firestore real-time listener (0s zero-delay synchronization strictly scoped to authenticatedHubId)
   useEffect(() => {
-    if (!authUser || isHubAccessBlocked || !authenticatedHubId) return;
+    if (!authUser || !authenticatedHubId) return;
 
     setIsRealtimeConnected(true);
     const unsubscribeSheet = subscribeToDailyCodSheet(
@@ -209,7 +190,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         unsubscribeRiders();
       }
     };
-  }, [selectedDate, authUser, authenticatedHubId, isHubAccessBlocked]);
+  }, [selectedDate, authUser, authenticatedHubId]);
 
   // Online / Offline window monitor
   useEffect(() => {
@@ -658,73 +639,25 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   };
 
   // =========================================================================
-  // VIEW 0: SUPER ADMIN GATE BLOCKED SCREEN
-  // =========================================================================
-  if (authUser && isHubAccessBlocked) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-amber-500 selection:text-white">
-        <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-3xl p-6 sm:p-8 text-center shadow-2xl relative overflow-hidden backdrop-blur-xl">
-          <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center mx-auto mb-5 shadow-lg shadow-amber-500/10">
-            <Lock className="w-8 h-8" />
-          </div>
-          <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">
-            सेवा सक्रिय नहीं है
-          </h2>
-          <p className="text-sm sm:text-base text-amber-300 font-medium mb-5 leading-relaxed">
-            यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।
-          </p>
-          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 mb-6 text-xs text-slate-400 space-y-2 text-left">
-            <div className="flex items-center justify-between text-slate-300">
-              <span className="font-semibold">लॉगिन उपयोगकर्ता:</span>
-              <span className="font-medium text-white">{authUser.name}</span>
-            </div>
-            <div className="flex items-center justify-between text-slate-300">
-              <span className="font-semibold">मोबाइल नंबर:</span>
-              <span className="font-mono">{authUser.phone || 'N/A'}</span>
-            </div>
-            {currentHubId && (
-              <div className="flex items-center justify-between text-slate-300">
-                <span className="font-semibold">हब आईडी:</span>
-                <span className="font-mono text-[11px] text-slate-400">{currentHubId.slice(0, 14)}...</span>
-              </div>
-            )}
-            <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-800/80">
-              मुख्य व्यवस्थापक द्वारा इस हब के लिए 'COD Entry & Companion App Access' अनुमति चालू करने के उपरांत यह स्क्रीन स्वतः सक्रिय हो जाएगी।
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow active:scale-95"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>लॉगआउट करें (Switch Account)</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // =========================================================================
   // VIEW 0.5: UNRESOLVED / INVALID HUB ERROR (Strict Hub Isolation)
   // =========================================================================
   if (authUser && !currentHubId) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-rose-500 selection:text-white">
-        <div className="w-full max-w-md bg-slate-900 border border-rose-500/40 rounded-3xl p-6 sm:p-8 text-center shadow-2xl relative overflow-hidden backdrop-blur-xl">
-          <div className="w-16 h-16 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto mb-5 shadow-lg shadow-rose-500/10">
+      <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-rose-500 selection:text-white">
+        <div className="w-full max-w-md bg-white border border-rose-200 rounded-3xl p-6 sm:p-8 text-center shadow-lg relative overflow-hidden">
+          <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-500 border border-rose-200 flex items-center justify-center mx-auto mb-5 shadow-sm">
             <AlertCircle className="w-8 h-8" />
           </div>
-          <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">
+          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mb-2">
             हब त्रुटि
           </h2>
-          <p className="text-sm sm:text-base text-rose-300 font-medium mb-6 leading-relaxed">
+          <p className="text-sm sm:text-base text-rose-600 font-medium mb-6 leading-relaxed">
             हब की पहचान नहीं हो सकी। कृपया एडमिन से संपर्क करें।
           </p>
           <button
             type="button"
             onClick={handleLogout}
-            className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow active:scale-95"
+            className="w-full py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95"
           >
             <LogOut className="w-4 h-4" />
             <span>लॉगआउट करें (Switch Account)</span>
@@ -735,29 +668,29 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   }
 
   // =========================================================================
-  // VIEW 1: CLEAN SIMPLE LOGIN SCREEN (NO Hub Code)
+  // VIEW 1: CLEAN SIMPLE LOGIN SCREEN (White / Light Theme)
   // =========================================================================
   if (!authUser) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-emerald-500 selection:text-white">
-        {/* Background glow styling */}
-        <div className="fixed inset-0 pointer-events-none opacity-20">
-          <div className="absolute -top-40 -left-40 w-96 h-96 bg-emerald-600 rounded-full blur-3xl" />
-          <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-cyan-600 rounded-full blur-3xl" />
+      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-emerald-500 selection:text-white">
+        {/* Subtle Background Glow */}
+        <div className="fixed inset-0 pointer-events-none opacity-40">
+          <div className="absolute -top-40 -left-40 w-96 h-96 bg-emerald-100/60 rounded-full blur-3xl" />
+          <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-100/60 rounded-full blur-3xl" />
         </div>
 
         {/* Card Container */}
-        <div className="relative w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 backdrop-blur-xl z-10">
+        <div className="relative w-full max-w-md bg-white border border-slate-200/90 rounded-2xl shadow-xl p-6 sm:p-8 z-10">
           {/* Logo & Title */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-lg shadow-emerald-500/20 mb-4 animate-in zoom-in-95">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-600 text-white shadow-md shadow-emerald-600/20 mb-4 animate-in zoom-in-95">
               <Bike className="w-8 h-8" />
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white flex items-center justify-center gap-2">
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 flex items-center justify-center gap-2">
               <span>COD Entry</span>
-              <span className="text-emerald-400 font-hindi">(हिसाब किताब)</span>
+              <span className="text-emerald-600 font-hindi">(हिसाब किताब)</span>
             </h1>
-            <p className="text-xs sm:text-sm text-slate-400 mt-1">
+            <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
               डिलीवरी बॉय & हब स्टाफ साथी ऐप • 0s लाइव सिंक
             </p>
           </div>
@@ -772,12 +705,12 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           >
             {/* Input 1: Registered Mobile Number (10 digits) */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                रजिस्टर्ड मोबाइल नंबर <span className="text-emerald-400 font-normal">(10 अंक)</span>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                रजिस्टर्ड मोबाइल नंबर <span className="text-emerald-600 font-normal">(10 अंक)</span>
               </label>
               <div className="relative rounded-xl shadow-inner">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 text-sm font-semibold">
-                  <Phone className="w-4 h-4 mr-1 text-slate-500" />
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 text-sm font-semibold">
+                  <Phone className="w-4 h-4 mr-1 text-slate-400" />
                   <span>+91</span>
                 </div>
                 <input
@@ -794,18 +727,18 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   }}
                   autoFocus
                   required
-                  className="w-full pl-20 pr-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-base font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
+                  className="w-full pl-20 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 text-base font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition"
                 />
               </div>
             </div>
 
             {/* Input 2: 4-Digit Security PIN */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                4-अंकों का सिक्योरिटी PIN <span className="text-emerald-400 font-normal">(Security PIN)</span>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                4-अंकों का सिक्योरिटी PIN <span className="text-emerald-600 font-normal">(Security PIN)</span>
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                   <KeyRound className="w-4 h-4" />
                 </div>
                 <input
@@ -821,16 +754,16 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                     if (loginError) setLoginError('');
                   }}
                   required
-                  className="w-full pl-10 pr-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-xl font-mono tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
+                  className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 text-xl font-mono tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition"
                 />
               </div>
             </div>
 
             {/* Error Message in Hindi */}
             {loginError && (
-              <div className="p-3 bg-rose-500/10 border border-rose-500/40 rounded-xl text-rose-300 text-xs flex items-center gap-2 animate-in fade-in">
-                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                <span>{loginError}</span>
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                <span className="font-medium">{loginError}</span>
               </div>
             )}
 
@@ -838,7 +771,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
             <button
               type="submit"
               disabled={isLoggingIn || phoneInput.length !== 10 || pinInput.length !== 4}
-              className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition transform active:scale-98 flex items-center justify-center gap-2"
+              className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 transition transform active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
             >
               {isLoggingIn ? (
                 <>
@@ -847,7 +780,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                 </>
               ) : (
                 <>
-                  <CheckCircle2 className="w-5 h-5 text-emerald-200" />
+                  <CheckCircle2 className="w-5 h-5 text-emerald-100" />
                   <span>लॉगिन करें (Sign In)</span>
                 </>
               )}
@@ -855,17 +788,17 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           </form>
 
           {/* Quick Demo Login Switcher */}
-          <div className="mt-6 pt-6 border-t border-slate-800/80">
+          <div className="mt-6 pt-6 border-t border-slate-200">
             <button
               type="button"
               onClick={() => setShowDemoLogins(!showDemoLogins)}
-              className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-emerald-400 py-1 transition"
+              className="w-full flex items-center justify-between text-xs text-slate-500 hover:text-emerald-600 py-1 transition"
             >
-              <span className="flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span className="flex items-center gap-1.5 font-medium">
+                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
                 <span>त्वरित परीक्षण / डेमो खाते (Instant 1-Click Test)</span>
               </span>
-              <span className="text-[11px] bg-slate-800 px-2 py-0.5 rounded text-slate-300">
+              <span className="text-[11px] bg-slate-100 px-2 py-0.5 rounded text-slate-600 font-semibold">
                 {showDemoLogins ? 'छिपाएं' : 'दिखाएं'}
               </span>
             </button>
@@ -880,10 +813,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       setPinInput('1234');
                       handleLogin('9876543210', '1234');
                     }}
-                    className="p-2.5 bg-slate-800/90 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-left transition"
+                    className="p-2.5 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 rounded-xl text-left transition"
                   >
-                    <div className="font-semibold text-emerald-300">🏍️ राइडर खाता</div>
-                    <div className="text-[11px] text-slate-400 font-mono">9876543210 / 1234</div>
+                    <div className="font-bold text-emerald-700">🏍️ राइडर खाता</div>
+                    <div className="text-[11px] text-slate-500 font-mono">9876543210 / 1234</div>
                   </button>
                   <button
                     type="button"
@@ -892,10 +825,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       setPinInput('4321');
                       handleLogin('9876543211', '4321');
                     }}
-                    className="p-2.5 bg-slate-800/90 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-left transition"
+                    className="p-2.5 bg-slate-50 hover:bg-sky-50 border border-slate-200 hover:border-sky-200 rounded-xl text-left transition"
                   >
-                    <div className="font-semibold text-sky-300">🎖️ टीम लीडर</div>
-                    <div className="text-[11px] text-slate-400 font-mono">9876543211 / 4321</div>
+                    <div className="font-bold text-sky-700">🎖️ टीम लीडर</div>
+                    <div className="text-[11px] text-slate-500 font-mono">9876543211 / 4321</div>
                   </button>
                   <button
                     type="button"
@@ -904,10 +837,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       setPinInput('5678');
                       handleLogin('9876543212', '5678');
                     }}
-                    className="p-2.5 bg-slate-800/90 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-left transition"
+                    className="p-2.5 bg-slate-50 hover:bg-purple-50 border border-slate-200 hover:border-purple-200 rounded-xl text-left transition"
                   >
-                    <div className="font-semibold text-purple-300">📋 सुपरवाइजर</div>
-                    <div className="text-[11px] text-slate-400 font-mono">9876543212 / 5678</div>
+                    <div className="font-bold text-purple-700">📋 सुपरवाइजर</div>
+                    <div className="text-[11px] text-slate-500 font-mono">9876543212 / 5678</div>
                   </button>
                   <button
                     type="button"
@@ -916,10 +849,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       setPinInput('9999');
                       handleLogin('9876543213', '9999');
                     }}
-                    className="p-2.5 bg-slate-800/90 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-left transition"
+                    className="p-2.5 bg-slate-50 hover:bg-amber-50 border border-slate-200 hover:border-amber-200 rounded-xl text-left transition"
                   >
-                    <div className="font-semibold text-amber-300">👑 हब इंचार्ज</div>
-                    <div className="text-[11px] text-slate-400 font-mono">9876543213 / 9999</div>
+                    <div className="font-bold text-amber-700">👑 हब इंचार्ज</div>
+                    <div className="text-[11px] text-slate-500 font-mono">9876543213 / 9999</div>
                   </button>
                 </div>
               </div>
@@ -932,7 +865,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               <button
                 type="button"
                 onClick={onBackToMainApp}
-                className="text-xs text-slate-400 hover:text-slate-200 transition underline underline-offset-4"
+                className="text-xs text-slate-500 hover:text-slate-800 transition underline underline-offset-4 font-medium"
               >
                 ← मुख्य कूरियर ऐप पर वापस जाएं (Back to Hub App)
               </button>
@@ -940,7 +873,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           )}
 
           {/* Hub Resolution Debug Indicator */}
-          <div className="mt-4 pt-3 border-t border-slate-800/80 text-center text-[10px] text-slate-500 font-mono">
+          <div className="mt-4 pt-3 border-t border-slate-200 text-center text-[10px] text-slate-400 font-mono">
             Hub: {currentHubId ? currentHubId.substring(0, 8) : 'Not Resolved'}
           </div>
         </div>
@@ -949,19 +882,19 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   }
 
   // =========================================================================
-  // VIEW 2: AUTHENTICATED COMPANION MOBILE WEB APP
+  // VIEW 2: AUTHENTICATED COMPANION MOBILE WEB APP (Clean White Theme)
   // =========================================================================
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans pb-16 selection:bg-emerald-500 selection:text-white">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans pb-16 selection:bg-emerald-500 selection:text-white">
       {/* Toast Notification */}
       {toast && (
         <div
-          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl shadow-2xl text-xs sm:text-sm font-semibold flex items-center gap-2 backdrop-blur-md animate-in slide-in-from-top-4 ${
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl shadow-xl text-xs sm:text-sm font-semibold flex items-center gap-2 backdrop-blur-md animate-in slide-in-from-top-4 ${
             toast.type === 'success'
-              ? 'bg-emerald-600/90 text-white border border-emerald-400/50'
+              ? 'bg-emerald-600 text-white border border-emerald-500'
               : toast.type === 'error'
-              ? 'bg-rose-600/90 text-white border border-rose-400/50'
-              : 'bg-indigo-600/90 text-white border border-indigo-400/50'
+              ? 'bg-rose-600 text-white border border-rose-500'
+              : 'bg-indigo-600 text-white border border-indigo-500'
           }`}
         >
           {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 shrink-0" />}
@@ -971,29 +904,29 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         </div>
       )}
 
-      {/* 1. STICKY TOP APP BAR */}
-      <header className="sticky top-0 z-40 bg-slate-900/95 border-b border-slate-800 backdrop-blur-md px-3 sm:px-6 py-3 shadow-md">
+      {/* 1. STICKY TOP APP BAR (Crisp White with Indigo Header Accent) */}
+      <header className="sticky top-0 z-40 bg-white/95 border-b border-slate-200 backdrop-blur-md px-3 sm:px-6 py-3 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           {/* Brand & Active User Info */}
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shrink-0 shadow-md">
+            <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
               <Bike className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-sm sm:text-base font-bold text-white tracking-tight truncate">
-                  COD Entry <span className="text-emerald-400 font-hindi">(हिसाब किताब)</span>
+                <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight truncate">
+                  COD Entry <span className="text-indigo-600 font-hindi">(हिसाब किताब)</span>
                 </h1>
                 {/* Role Badge */}
                 <span
                   className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
                     authUser.role === 'rider'
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : authUser.role === 'team_leader'
-                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                      ? 'bg-sky-50 text-sky-700 border border-sky-200'
                       : authUser.role === 'supervisor'
-                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                      : 'bg-amber-50 text-amber-700 border border-amber-200'
                   }`}
                 >
                   {authUser.role === 'rider' && '🏍️ राइडर'}
@@ -1002,10 +935,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   {authUser.role === 'hub_incharge' && '👑 हब इंचार्ज'}
                 </span>
               </div>
-              <div className="text-[11px] text-slate-400 truncate flex items-center gap-1.5 flex-wrap">
-                <span className="font-medium text-slate-300">{authUser.name}</span>
+              <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5 flex-wrap">
+                <span className="font-semibold text-slate-800">{authUser.name}</span>
                 {authUser.phone && <span>• {authUser.phone}</span>}
-                <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-mono border border-slate-700">
+                <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono border border-slate-200">
                   Hub: {currentHubId ? currentHubId.substring(0, 8) : 'Not Resolved'}
                 </span>
               </div>
@@ -1018,29 +951,41 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
             <div
               className={`hidden sm:flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border ${
                 isRealtimeConnected
-                  ? 'bg-emerald-950/40 text-emerald-300 border-emerald-800/60'
-                  : 'bg-amber-950/40 text-amber-300 border-amber-800/60'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 font-medium'
+                  : 'bg-amber-50 text-amber-700 border-amber-200 font-medium'
               }`}
               title="Firebase Firestore onSnapshot Live Sync"
             >
               {isRealtimeConnected ? (
                 <>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
                   <span>0s लाइव सिंक</span>
                 </>
               ) : (
                 <>
-                  <WifiOff className="w-3 h-3 text-amber-400" />
+                  <WifiOff className="w-3 h-3 text-amber-500" />
                   <span>ऑफ़लाइन</span>
                 </>
               )}
             </div>
 
+            {/* Back to Main Hub App if triggered */}
+            {onBackToMainApp && (
+              <button
+                type="button"
+                onClick={onBackToMainApp}
+                className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                title="मुख्य कूरियर ऐप पर वापस जाएं"
+              >
+                <span>← मुख्य ऐप</span>
+              </button>
+            )}
+
             {/* Logout Button */}
             <button
               type="button"
               onClick={handleLogout}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1 transition"
+              className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
               title="लॉगआउट"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -1053,30 +998,30 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       {/* Main Body */}
       <main className="max-w-6xl mx-auto w-full px-3 sm:px-6 pt-4 space-y-4">
         {/* 2. DATE SELECTOR & STATUS TOOLBAR */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+        <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
           {/* Date Navigator */}
           <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
             <button
               type="button"
               onClick={() => handleDateStep(-1)}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
               title="पिछला दिन"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
             <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-emerald-400 shrink-0" />
+              <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-sm font-semibold text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
               {!isToday && (
                 <button
                   type="button"
                   onClick={() => setSelectedDate(todayStr)}
-                  className="px-2 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs rounded font-medium transition"
+                  className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs rounded font-semibold transition cursor-pointer"
                 >
                   आज (Today)
                 </button>
@@ -1085,7 +1030,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
             <button
               type="button"
               onClick={() => handleDateStep(1)}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
               title="अगला दिन"
             >
               <ChevronRight className="w-4 h-4" />
@@ -1095,20 +1040,20 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           {/* Date Status Badges & Incharge Controls */}
           <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
             {isPastDate && (
-              <span className="text-xs bg-slate-800 border border-slate-700 text-amber-300 px-2.5 py-1 rounded-lg flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-xs bg-slate-100 border border-slate-200 text-amber-700 px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium">
+                <Lock className="w-3.5 h-3.5 text-amber-600" />
                 <span>पुराना रिकॉर्ड (Read-Only)</span>
               </span>
             )}
 
             {isDayEndLocked ? (
-              <span className="text-xs bg-rose-500/10 border border-rose-500/30 text-rose-300 px-2.5 py-1 rounded-lg flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5 text-rose-400" />
+              <span className="text-xs bg-rose-50 border border-rose-200 text-rose-700 px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium">
+                <Lock className="w-3.5 h-3.5 text-rose-600" />
                 <span>दिन का हिसाब लॉक (Locked)</span>
               </span>
             ) : isToday ? (
-              <span className="text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 px-2.5 py-1 rounded-lg flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                 <span>आज का दिन (Active)</span>
               </span>
             ) : null}
@@ -1118,10 +1063,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               <button
                 type="button"
                 onClick={handleToggleDayEndLock}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer ${
                   isDayEndLocked
-                    ? 'bg-amber-600 hover:bg-amber-500 text-white'
-                    : 'bg-rose-600 hover:bg-rose-500 text-white'
+                    ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                    : 'bg-rose-600 hover:bg-rose-700 text-white'
                 }`}
               >
                 {isDayEndLocked ? (
@@ -1142,36 +1087,36 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
 
         {/* 3. RIDER SHORTAGE ALERT BANNER (Rider App Visibility) */}
         {myShortageAlert && (
-          <div className="bg-gradient-to-r from-rose-950/80 to-amber-950/80 border-2 border-rose-500/60 rounded-2xl p-4 shadow-xl animate-in zoom-in-95">
+          <div className="bg-rose-50 border-2 border-rose-200 rounded-2xl p-4 shadow-sm animate-in zoom-in-95">
             <div className="flex items-start gap-3">
-              <div className="p-2 rounded-xl bg-rose-600/30 border border-rose-500 text-rose-300 shrink-0">
+              <div className="p-2 rounded-xl bg-rose-100 text-rose-600 shrink-0">
                 <AlertTriangle className="w-6 h-6 animate-pulse" />
               </div>
               <div className="space-y-1.5 min-w-0">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-rose-200">
+                  <h3 className="text-sm font-bold text-rose-800">
                     ⚠️ हिसाब में शॉर्टेज पाई गई है! (Shortage Flagged by Hub)
                   </h3>
                   <span className="text-xs bg-rose-600 text-white font-extrabold px-2 py-0.5 rounded-full font-mono">
                     कुल कमी: {formatINR(myShortageAlert.totalShort)}
                   </span>
                 </div>
-                <p className="text-xs text-rose-300/90">
+                <p className="text-xs text-rose-700">
                   हब सुपरवाइजर/इंचार्ज द्वारा आपके आज के जमा में निम्नलिखित अंतर दर्ज किया गया है:
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                   {myShortageAlert.items.map((item, idx) => (
                     <div
                       key={idx}
-                      className="bg-slate-900/80 border border-rose-700/50 rounded-xl px-3 py-1.5 text-xs flex items-center justify-between"
+                      className="bg-white border border-rose-200 rounded-xl px-3 py-1.5 text-xs flex items-center justify-between shadow-xs"
                     >
-                      <span className="font-medium text-slate-300">{item.label}:</span>
-                      <span className="font-bold text-rose-400 font-mono">-{formatINR(item.amount)}</span>
-                      {item.notes && <span className="text-[10px] text-slate-400 truncate max-w-[120px]">({item.notes})</span>}
+                      <span className="font-medium text-slate-700">{item.label}:</span>
+                      <span className="font-bold text-rose-600 font-mono">-{formatINR(item.amount)}</span>
+                      {item.notes && <span className="text-[10px] text-slate-500 truncate max-w-[120px]">({item.notes})</span>}
                     </div>
                   ))}
                 </div>
-                <div className="text-[11px] text-amber-300/90 pt-1">
+                <div className="text-[11px] text-amber-800 font-medium pt-1">
                   💡 कृपया तुरंत हब कैश काउंटर पर संपर्क कर अपनी रसीद या बैंक UPI यूटीआर दिखाएं।
                 </div>
               </div>
@@ -1179,40 +1124,40 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           </div>
         )}
 
-        {/* 4. SUMMARY STATS CARDS */}
+        {/* 4. SUMMARY STATS CARDS (Crisp White with Soft Borders) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
           {/* Card 1: Total COD */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-md">
-            <div className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5 mb-1">
-              <Building2 className="w-3.5 h-3.5 text-sky-400" />
+          <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-sm">
+            <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mb-1">
+              <Building2 className="w-3.5 h-3.5 text-sky-600" />
               <span>{isRider ? 'मेरी कुल COD' : 'हब कुल COD'}</span>
             </div>
-            <div className="text-lg sm:text-2xl font-extrabold text-white font-mono">
+            <div className="text-lg sm:text-2xl font-extrabold text-slate-900 font-mono">
               {formatINR(isRider && myRiderRow ? myRiderRow.totalCod : stats.totalCod)}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
+            <div className="text-[10px] text-slate-400 mt-0.5">
               {sheetData.company1Name} + {sheetData.company2Name}
             </div>
           </div>
 
           {/* Card 2: Total Deposit */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-md">
-            <div className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5 mb-1">
-              <Coins className="w-3.5 h-3.5 text-emerald-400" />
+          <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-sm">
+            <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mb-1">
+              <Coins className="w-3.5 h-3.5 text-emerald-600" />
               <span>{isRider ? 'मेरी कुल जमा' : 'कुल जमा (Deposit)'}</span>
             </div>
-            <div className="text-lg sm:text-2xl font-extrabold text-emerald-400 font-mono">
+            <div className="text-lg sm:text-2xl font-extrabold text-emerald-600 font-mono">
               {formatINR(isRider && myRiderRow ? myRiderRow.totalDeposit : stats.totalDeposit)}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
+            <div className="text-[10px] text-slate-400 mt-0.5">
               कैश + ऑनलाइन UPI
             </div>
           </div>
 
           {/* Card 3: Difference / Balance */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-md">
-            <div className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5 mb-1">
-              <Clock className="w-3.5 h-3.5 text-amber-400" />
+          <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-sm">
+            <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mb-1">
+              <Clock className="w-3.5 h-3.5 text-amber-600" />
               <span>अंतर / बकाया (Due)</span>
             </div>
             {(() => {
@@ -1221,31 +1166,31 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                 <div
                   className={`text-lg sm:text-2xl font-extrabold font-mono ${
                     bal === 0
-                      ? 'text-emerald-400'
+                      ? 'text-emerald-600'
                       : bal > 0
-                      ? 'text-amber-400'
-                      : 'text-purple-400'
+                      ? 'text-amber-600'
+                      : 'text-purple-600'
                   }`}
                 >
                   {formatINR(bal)}
                 </div>
               );
             })()}
-            <div className="text-[10px] text-slate-500 mt-0.5">
+            <div className="text-[10px] text-slate-400 mt-0.5">
               कुल COD - कुल जमा
             </div>
           </div>
 
           {/* Card 4: Shortages Flagged */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-md">
-            <div className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5 mb-1">
-              <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+          <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-sm">
+            <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mb-1">
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
               <span>शॉर्टेज (Shortage)</span>
             </div>
-            <div className="text-lg sm:text-2xl font-extrabold text-rose-400 font-mono">
+            <div className="text-lg sm:text-2xl font-extrabold text-rose-600 font-mono">
               {formatINR(isRider && myRiderRow ? (myShortageAlert?.totalShort || 0) : stats.totalShortage)}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
+            <div className="text-[10px] text-slate-400 mt-0.5">
               पेंडिंग रिकवरी
             </div>
           </div>
@@ -1261,20 +1206,20 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                 handleOpenEditRow(null);
               }
             }}
-            className="cursor-pointer bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/40 hover:border-emerald-400 rounded-2xl p-4 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-3 transition active:scale-[0.99]"
+            className="cursor-pointer bg-white border border-emerald-200 hover:border-emerald-400 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3 transition active:scale-[0.99]"
           >
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-200">
                 <Edit3 className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <span>आपकी दैनिक COD शीट ({selectedDate})</span>
-                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
                     क्लिक कर भरें
                   </span>
                 </h4>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-slate-500">
                   {myRiderRow && (Number(myRiderRow.totalCod) > 0 || Number(myRiderRow.totalDeposit) > 0)
                     ? `दर्ज: Co 1: ₹${myRiderRow.company1Amount} | Co 2: ₹${myRiderRow.company2Amount} | कैश: ₹${myRiderRow.cashDeposit} | UPI: ₹${myRiderRow.onlineDeposit}`
                     : 'आज की एंट्री अभी खाली है। तुरंत टैप कर दर्ज करें।'}
@@ -1288,7 +1233,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   e.stopPropagation();
                   handleOpenEditRow(myRiderRow);
                 }}
-                className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition flex items-center justify-center gap-2"
+                className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md shadow-emerald-600/20 transition flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Edit3 className="w-4 h-4" />
                 <span>✍️ अपनी COD एंट्री भरें / एडिट करें</span>
@@ -1301,25 +1246,25 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
           {/* Search Input */}
           <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               placeholder="राइडर नाम या फोन से खोजें..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500 shadow-xs"
             />
           </div>
 
           {/* View Mode Toggle: Cards vs Table */}
-          <div className="flex items-center gap-1.5 self-end sm:self-auto bg-slate-900 border border-slate-800 p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 self-end sm:self-auto bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
               type="button"
               onClick={() => setViewMode('cards')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
                 viewMode === 'cards'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-white'
+                  ? 'bg-white text-emerald-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
@@ -1328,10 +1273,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
             <button
               type="button"
               onClick={() => setViewMode('table')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
                 viewMode === 'table'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-white'
+                  ? 'bg-white text-emerald-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -1340,13 +1285,13 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           </div>
         </div>
 
-        {/* 7. RENDERING ENTRIES: CARDS VIEW */}
+        {/* 7. RENDERING ENTRIES: CARDS VIEW (Clean White UI) */}
         {viewMode === 'cards' && (
           <div className="space-y-3">
             {filteredEntries.length === 0 ? (
-              <div className="text-center py-10 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 text-slate-400 space-y-3">
-                <Bike className="w-10 h-10 mx-auto text-slate-600 mb-2" />
-                <p className="text-sm font-semibold">कोई राइडर एंट्री नहीं मिली।</p>
+              <div className="text-center py-10 bg-white border border-slate-200 rounded-2xl p-6 text-slate-500 space-y-3 shadow-sm">
+                <Bike className="w-10 h-10 mx-auto text-slate-400 mb-2" />
+                <p className="text-sm font-semibold text-slate-800">कोई राइडर एंट्री नहीं मिली।</p>
                 <p className="text-xs text-slate-500">
                   इस तारीख के लिए अभी तक कोई रिकॉर्ड उपलब्ध नहीं है।
                 </p>
@@ -1354,7 +1299,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   <button
                     type="button"
                     onClick={() => handleOpenEditRow(null)}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/30 transition transform active:scale-95"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition transform active:scale-95 cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
                     <span>+ आज की COD एंट्री शुरू करें</span>
@@ -1380,35 +1325,35 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                         handleOpenEditRow(row);
                       }
                     }}
-                    className={`bg-slate-900 border rounded-2xl p-4 shadow-md transition ${
-                      canEditThis ? 'cursor-pointer hover:border-emerald-500/80 active:scale-[0.99]' : ''
+                    className={`bg-white border rounded-2xl p-4 shadow-sm transition ${
+                      canEditThis ? 'cursor-pointer hover:border-emerald-500 hover:shadow-md active:scale-[0.99]' : ''
                     } ${
                       isMyRow
-                        ? 'border-emerald-500/70 ring-1 ring-emerald-500/30'
+                        ? 'border-emerald-400 ring-2 ring-emerald-400/20 bg-emerald-50/20'
                         : hasShortage
-                        ? 'border-rose-700/60 bg-rose-950/20'
-                        : 'border-slate-800 hover:border-slate-700'
+                        ? 'border-rose-300 bg-rose-50/20'
+                        : 'border-slate-200 hover:border-slate-300'
                     }`}
                   >
                     {/* Top Row: Rider Name, Role badge, and Edit button */}
-                    <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800/80">
+                    <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
                       <div className="flex items-center gap-2 min-w-0">
                         <div
                           className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-bold text-xs ${
                             isMyRow
                               ? 'bg-emerald-600 text-white'
-                              : 'bg-slate-800 text-slate-300'
+                              : 'bg-slate-100 text-slate-700'
                           }`}
                         >
                           {row.riderName.charAt(0)}
                         </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="font-bold text-sm text-white truncate">
+                            <span className="font-bold text-sm text-slate-900 truncate">
                               {row.riderName}
                             </span>
                             {isMyRow && (
-                              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-bold">
+                              <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.2 rounded font-bold">
                                 मेरी एंट्री
                               </span>
                             )}
@@ -1430,13 +1375,13 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                               e.stopPropagation();
                               handleOpenEditRow(row);
                             }}
-                            className="px-3 py-1.5 bg-emerald-600/90 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shadow"
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-xs cursor-pointer"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                             <span>एडिट करें</span>
                           </button>
                         ) : (
-                          <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                          <span className="text-[11px] text-slate-400 flex items-center gap-1">
                             <Eye className="w-3 h-3" />
                             <span>केवल देखें</span>
                           </span>
@@ -1447,8 +1392,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                     {/* Financial Values Grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3">
                       {/* Co 1: Valmo COD */}
-                      <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-800">
-                        <div className="text-[10px] font-semibold text-slate-400 flex items-center justify-between mb-0.5">
+                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
+                        <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
                           <span>{sheetData.company1Name}</span>
                           {/* Verification Checkmark */}
                           <button
@@ -1457,10 +1402,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             disabled={!canVerifyField('company1')}
                             className={`p-0.5 rounded transition ${
                               row.company1Verified
-                                ? 'text-emerald-400 bg-emerald-500/20'
+                                ? 'text-emerald-600 bg-emerald-100'
                                 : canVerifyField('company1')
-                                ? 'text-slate-600 hover:text-slate-300'
-                                : 'text-slate-700 cursor-not-allowed'
+                                ? 'text-slate-400 hover:text-slate-700 cursor-pointer'
+                                : 'text-slate-300 cursor-not-allowed'
                             }`}
                             title={
                               row.company1Verified
@@ -1471,11 +1416,11 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             <Check className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        <div className="text-sm font-bold text-white font-mono">
+                        <div className="text-sm font-bold text-slate-900 font-mono">
                           {formatINR(row.company1Amount)}
                         </div>
                         {row.company1Shortage ? (
-                          <div className="text-[10px] text-rose-400 font-bold mt-0.5 flex items-center gap-0.5">
+                          <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
                             <AlertTriangle className="w-2.5 h-2.5" />
                             <span>शॉर्ट: -₹{row.company1Shortage}</span>
                           </div>
@@ -1483,8 +1428,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       </div>
 
                       {/* Co 2: Xpressbees COD */}
-                      <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-800">
-                        <div className="text-[10px] font-semibold text-slate-400 flex items-center justify-between mb-0.5">
+                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
+                        <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
                           <span>{sheetData.company2Name}</span>
                           {/* Verification Checkmark */}
                           <button
@@ -1493,10 +1438,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             disabled={!canVerifyField('company2')}
                             className={`p-0.5 rounded transition ${
                               row.company2Verified
-                                ? 'text-emerald-400 bg-emerald-500/20'
+                                ? 'text-emerald-600 bg-emerald-100'
                                 : canVerifyField('company2')
-                                ? 'text-slate-600 hover:text-slate-300'
-                                : 'text-slate-700 cursor-not-allowed'
+                                ? 'text-slate-400 hover:text-slate-700 cursor-pointer'
+                                : 'text-slate-300 cursor-not-allowed'
                             }`}
                             title={
                               row.company2Verified
@@ -1507,11 +1452,11 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             <Check className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        <div className="text-sm font-bold text-white font-mono">
+                        <div className="text-sm font-bold text-slate-900 font-mono">
                           {formatINR(row.company2Amount)}
                         </div>
                         {row.company2Shortage ? (
-                          <div className="text-[10px] text-rose-400 font-bold mt-0.5 flex items-center gap-0.5">
+                          <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
                             <AlertTriangle className="w-2.5 h-2.5" />
                             <span>शॉर्ट: -₹{row.company2Shortage}</span>
                           </div>
@@ -1519,8 +1464,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       </div>
 
                       {/* Cash Deposit */}
-                      <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-800">
-                        <div className="text-[10px] font-semibold text-slate-400 flex items-center justify-between mb-0.5">
+                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
+                        <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
                           <span>कैश जमा (Cash)</span>
                           {/* Verification Checkmark */}
                           <button
@@ -1529,10 +1474,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             disabled={!canVerifyField('cash')}
                             className={`p-0.5 rounded transition ${
                               row.cashVerified
-                                ? 'text-emerald-400 bg-emerald-500/20'
+                                ? 'text-emerald-600 bg-emerald-100'
                                 : canVerifyField('cash')
-                                ? 'text-slate-600 hover:text-slate-300'
-                                : 'text-slate-700 cursor-not-allowed'
+                                ? 'text-slate-400 hover:text-slate-700 cursor-pointer'
+                                : 'text-slate-300 cursor-not-allowed'
                             }`}
                             title={
                               row.cashVerified
@@ -1543,11 +1488,11 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             <Check className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        <div className="text-sm font-bold text-emerald-400 font-mono">
+                        <div className="text-sm font-bold text-emerald-600 font-mono">
                           {formatINR(row.cashDeposit)}
                         </div>
                         {row.cashShortage ? (
-                          <div className="text-[10px] text-rose-400 font-bold mt-0.5 flex items-center gap-0.5">
+                          <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
                             <AlertTriangle className="w-2.5 h-2.5" />
                             <span>कम कैश: -₹{row.cashShortage}</span>
                           </div>
@@ -1555,8 +1500,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       </div>
 
                       {/* Online Deposit */}
-                      <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-800">
-                        <div className="text-[10px] font-semibold text-slate-400 flex items-center justify-between mb-0.5">
+                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
+                        <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
                           <span>ऑनलाइन (UPI/QR)</span>
                           {/* Verification Checkmark */}
                           <button
@@ -1565,10 +1510,10 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             disabled={!canVerifyField('online')}
                             className={`p-0.5 rounded transition ${
                               row.onlineVerified
-                                ? 'text-emerald-400 bg-emerald-500/20'
+                                ? 'text-emerald-600 bg-emerald-100'
                                 : canVerifyField('online')
-                                ? 'text-slate-600 hover:text-slate-300'
-                                : 'text-slate-700 cursor-not-allowed'
+                                ? 'text-slate-400 hover:text-slate-700 cursor-pointer'
+                                : 'text-slate-300 cursor-not-allowed'
                             }`}
                             title={
                               row.onlineVerified
@@ -1579,11 +1524,11 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             <Check className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        <div className="text-sm font-bold text-sky-400 font-mono">
+                        <div className="text-sm font-bold text-sky-600 font-mono">
                           {formatINR(row.onlineDeposit)}
                         </div>
                         {row.onlineShortage ? (
-                          <div className="text-[10px] text-rose-400 font-bold mt-0.5 flex items-center gap-0.5">
+                          <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
                             <AlertTriangle className="w-2.5 h-2.5" />
                             <span>कम ऑनलाइन: -₹{row.onlineShortage}</span>
                           </div>
@@ -1592,24 +1537,24 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                     </div>
 
                     {/* Bottom Summary Pill: Total COD, Total Deposit, Balance */}
-                    <div className="mt-3 pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono">
+                    <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs font-mono">
                       <div className="flex items-center gap-3">
-                        <span className="text-slate-400">
-                          कुल COD: <strong className="text-white">{formatINR(row.totalCod)}</strong>
+                        <span className="text-slate-500">
+                          कुल COD: <strong className="text-slate-900">{formatINR(row.totalCod)}</strong>
                         </span>
-                        <span className="text-slate-400">
-                          कुल जमा: <strong className="text-emerald-400">{formatINR(row.totalDeposit)}</strong>
+                        <span className="text-slate-500">
+                          कुल जमा: <strong className="text-emerald-600">{formatINR(row.totalDeposit)}</strong>
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-slate-400">अंतर:</span>
+                        <span className="text-slate-500">अंतर:</span>
                         <span
                           className={`font-extrabold px-2 py-0.5 rounded ${
                             row.balance === 0
-                              ? 'bg-emerald-500/20 text-emerald-300'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                               : row.balance > 0
-                              ? 'bg-amber-500/20 text-amber-300'
-                              : 'bg-purple-500/20 text-purple-300'
+                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                              : 'bg-purple-50 text-purple-700 border border-purple-200'
                           }`}
                         >
                           {formatINR(row.balance)}
@@ -1620,7 +1565,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                           <button
                             type="button"
                             onClick={() => handleOpenShortageModal(row, 'cash')}
-                            className="text-[11px] text-rose-400 hover:text-rose-300 underline font-sans ml-1"
+                            className="text-[11px] text-rose-600 hover:text-rose-700 underline font-sans ml-1 cursor-pointer"
                           >
                             ⚠️ शॉर्टेज
                           </button>
@@ -1634,36 +1579,36 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           </div>
         )}
 
-        {/* 8. RENDERING ENTRIES: EXCEL SPREADSHEET TABLE VIEW */}
+        {/* 8. RENDERING ENTRIES: EXCEL SPREADSHEET TABLE VIEW (Clean White UI) */}
         {viewMode === 'table' && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-md overflow-hidden">
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs font-sans whitespace-nowrap">
-                <thead className="bg-slate-800/90 text-slate-300 text-[11px] uppercase tracking-wider font-semibold border-b border-slate-700">
+                <thead className="bg-slate-100 text-slate-700 text-[11px] uppercase tracking-wider font-bold border-b border-slate-200">
                   <tr>
                     <th className="py-3 px-3">राइडर नाम (Rider)</th>
                     <th className="py-3 px-3 text-right">{sheetData.company1Name} (₹)</th>
                     <th className="py-3 px-3 text-right">{sheetData.company2Name} (₹)</th>
-                    <th className="py-3 px-3 text-right text-sky-300 font-bold">कुल COD (₹)</th>
-                    <th className="py-3 px-3 text-right text-emerald-300">कैश जमा (₹)</th>
-                    <th className="py-3 px-3 text-right text-teal-300">ऑनलाइन (₹)</th>
-                    <th className="py-3 px-3 text-right text-emerald-400 font-bold">कुल जमा (₹)</th>
+                    <th className="py-3 px-3 text-right text-indigo-700 font-bold">कुल COD (₹)</th>
+                    <th className="py-3 px-3 text-right text-emerald-700">कैश जमा (₹)</th>
+                    <th className="py-3 px-3 text-right text-sky-700">ऑनलाइन (₹)</th>
+                    <th className="py-3 px-3 text-right text-emerald-700 font-bold">कुल जमा (₹)</th>
                     <th className="py-3 px-3 text-right font-bold">बकाया / अंतर (₹)</th>
                     <th className="py-3 px-3 text-center">एक्शन</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800 font-mono">
+                <tbody className="divide-y divide-slate-100 font-mono">
                   {filteredEntries.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-10 px-4 text-center text-slate-400 font-sans">
+                      <td colSpan={9} className="py-10 px-4 text-center text-slate-500 font-sans">
                         <div className="space-y-2.5">
-                          <p className="text-sm font-semibold">कोई राइडर एंट्री नहीं मिली।</p>
+                          <p className="text-sm font-semibold text-slate-800">कोई राइडर एंट्री नहीं मिली।</p>
                           <p className="text-xs text-slate-500">इस तारीख के लिए अभी तक कोई रिकॉर्ड उपलब्ध नहीं है।</p>
                           {!isPastDate && !isDayEndLocked && (
                             <button
                               type="button"
                               onClick={() => handleOpenEditRow(null)}
-                              className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow transition"
+                              className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
                             >
                               <Plus className="w-3.5 h-3.5" />
                               <span>+ आज की COD एंट्री शुरू करें</span>
@@ -1689,15 +1634,15 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                             canEditThis ? 'cursor-pointer' : ''
                           } ${
                             isMyRow
-                              ? 'bg-emerald-950/30 hover:bg-emerald-950/50'
-                              : 'hover:bg-slate-800/50'
+                              ? 'bg-emerald-50/60 hover:bg-emerald-50'
+                              : 'hover:bg-slate-50'
                           }`}
                         >
                           <td className="py-3 px-3 font-sans">
-                            <div className="font-bold text-white flex items-center gap-1.5">
+                            <div className="font-bold text-slate-900 flex items-center gap-1.5">
                               <span>{row.riderName}</span>
                               {isMyRow && (
-                                <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-bold">
+                                <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 rounded font-bold">
                                   You
                                 </span>
                               )}
@@ -1710,34 +1655,34 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                           </td>
                           <td className="py-3 px-3 text-right">
                             <span>{formatINR(row.company1Amount)}</span>
-                            {row.company1Verified && <span className="text-emerald-400 ml-1">✓</span>}
+                            {row.company1Verified && <span className="text-emerald-600 ml-1">✓</span>}
                           </td>
                           <td className="py-3 px-3 text-right">
                             <span>{formatINR(row.company2Amount)}</span>
-                            {row.company2Verified && <span className="text-emerald-400 ml-1">✓</span>}
+                            {row.company2Verified && <span className="text-emerald-600 ml-1">✓</span>}
                           </td>
-                          <td className="py-3 px-3 text-right font-bold text-white">
+                          <td className="py-3 px-3 text-right font-bold text-slate-900">
                             {formatINR(row.totalCod)}
                           </td>
-                          <td className="py-3 px-3 text-right text-emerald-300">
+                          <td className="py-3 px-3 text-right text-emerald-700 font-semibold">
                             <span>{formatINR(row.cashDeposit)}</span>
-                            {row.cashVerified && <span className="text-emerald-400 ml-1">✓</span>}
+                            {row.cashVerified && <span className="text-emerald-600 ml-1">✓</span>}
                           </td>
-                          <td className="py-3 px-3 text-right text-teal-300">
+                          <td className="py-3 px-3 text-right text-sky-700 font-semibold">
                             <span>{formatINR(row.onlineDeposit)}</span>
-                            {row.onlineVerified && <span className="text-emerald-400 ml-1">✓</span>}
+                            {row.onlineVerified && <span className="text-emerald-600 ml-1">✓</span>}
                           </td>
-                          <td className="py-3 px-3 text-right font-bold text-emerald-400">
+                          <td className="py-3 px-3 text-right font-bold text-emerald-700">
                             {formatINR(row.totalDeposit)}
                           </td>
                           <td className="py-3 px-3 text-right font-bold">
                             <span
                               className={
                                 row.balance === 0
-                                  ? 'text-emerald-400'
+                                  ? 'text-emerald-700'
                                   : row.balance > 0
-                                  ? 'text-amber-400'
-                                  : 'text-purple-400'
+                                  ? 'text-amber-700'
+                                  : 'text-purple-700'
                               }
                             >
                               {formatINR(row.balance)}
@@ -1751,12 +1696,12 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                                   e.stopPropagation();
                                   handleOpenEditRow(row);
                                 }}
-                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold"
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
                               >
                                 एडिट
                               </button>
                             ) : (
-                              <span className="text-slate-600 text-xs">—</span>
+                              <span className="text-slate-400 text-xs">—</span>
                             )}
                           </td>
                         </tr>
@@ -1771,22 +1716,22 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       </main>
 
       {/* =====================================================================
-          MODAL 1: RIDER ROW EDIT MODAL (Mobile Touch Friendly)
+          MODAL 1: RIDER ROW EDIT MODAL (Clean White Theme)
       ===================================================================== */}
       {editingEntry && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
-          <div className="w-full sm:max-w-lg bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-2xl p-5 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
+          <div className="w-full sm:max-w-lg bg-white border border-slate-200 rounded-t-3xl sm:rounded-2xl p-5 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto space-y-4">
             {/* Modal Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
+                <div className="p-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <Edit3 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">
+                  <h3 className="text-base font-bold text-slate-900">
                     COD एंट्री दर्ज करें ({editingEntry.riderName})
                   </h3>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-500">
                     तारीख: {selectedDate} • तुरंत 0s लाइव सिंक
                   </p>
                 </div>
@@ -1794,7 +1739,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               <button
                 type="button"
                 onClick={() => setEditingEntry(null)}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+                className="p-1.5 rounded-lg bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1804,7 +1749,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
             <div className="space-y-3.5">
               {/* Co 1 COD */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                   {sheetData.company1Name} (₹ COD कलेक्शन)
                 </label>
                 <input
@@ -1814,13 +1759,13 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   placeholder="0"
                   value={editCompany1}
                   onChange={(e) => setEditCompany1(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
                 />
               </div>
 
               {/* Co 2 COD */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                   {sheetData.company2Name} (₹ COD कलेक्शन)
                 </label>
                 <input
@@ -1830,13 +1775,13 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   placeholder="0"
                   value={editCompany2}
                   onChange={(e) => setEditCompany2(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
                 />
               </div>
 
               {/* Cash Deposit */}
               <div>
-                <label className="block text-xs font-semibold text-emerald-300 uppercase tracking-wider mb-1">
+                <label className="block text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">
                   कैश जमा (Physical Cash Handed In ₹)
                 </label>
                 <input
@@ -1846,13 +1791,13 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   placeholder="0"
                   value={editCash}
                   onChange={(e) => setEditCash(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-800 border border-emerald-600/60 rounded-xl text-emerald-300 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3.5 py-2.5 bg-emerald-50/50 border border-emerald-300 rounded-xl text-emerald-700 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
                 />
               </div>
 
               {/* Online Deposit */}
               <div>
-                <label className="block text-xs font-semibold text-sky-300 uppercase tracking-wider mb-1">
+                <label className="block text-xs font-bold text-sky-700 uppercase tracking-wider mb-1">
                   ऑनलाइन जमा (UPI / QR Payment ₹)
                 </label>
                 <input
@@ -1862,7 +1807,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   placeholder="0"
                   value={editOnline}
                   onChange={(e) => setEditOnline(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-800 border border-sky-600/60 rounded-xl text-sky-300 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className="w-full px-3.5 py-2.5 bg-sky-50/50 border border-sky-300 rounded-xl text-sky-700 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white"
                 />
               </div>
 
@@ -1877,24 +1822,24 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                 const diff = totCod - totDep;
 
                 return (
-                  <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1.5 font-mono text-xs">
-                    <div className="flex justify-between text-slate-300">
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5 font-mono text-xs">
+                    <div className="flex justify-between text-slate-700">
                       <span>कुल COD (Co1 + Co2):</span>
-                      <strong className="text-white">{formatINR(totCod)}</strong>
+                      <strong className="text-slate-900">{formatINR(totCod)}</strong>
                     </div>
-                    <div className="flex justify-between text-emerald-300">
+                    <div className="flex justify-between text-emerald-700">
                       <span>कुल जमा (कैश + ऑनलाइन):</span>
                       <strong>{formatINR(totDep)}</strong>
                     </div>
-                    <div className="flex justify-between border-t border-slate-800 pt-1.5 font-bold">
-                      <span className="text-slate-300">अंतर / बैलेंस (COD - जमा):</span>
+                    <div className="flex justify-between border-t border-slate-200 pt-1.5 font-bold">
+                      <span className="text-slate-700">अंतर / बैलेंस (COD - जमा):</span>
                       <span
                         className={
                           diff === 0
-                            ? 'text-emerald-400'
+                            ? 'text-emerald-600'
                             : diff > 0
-                            ? 'text-amber-400'
-                            : 'text-purple-400'
+                            ? 'text-amber-600'
+                            : 'text-purple-600'
                         }
                       >
                         {formatINR(diff)} {diff === 0 ? '(हिसाब बराबर ✓)' : diff > 0 ? '(बकाया Due)' : '(अधिक जमा)'}
@@ -1906,7 +1851,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
 
               {/* Notes */}
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
                   टिप्पणी / Notes (Optional)
                 </label>
                 <input
@@ -1914,17 +1859,17 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   placeholder="e.g. 500 का नोट बाद में दिया..."
                   value={editNotes}
                   onChange={(e) => setEditNotes(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white"
                 />
               </div>
             </div>
 
             {/* Modal Actions */}
-            <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+            <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setEditingEntry(null)}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition"
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
               >
                 रद्द करें
               </button>
@@ -1932,7 +1877,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                 type="button"
                 onClick={handleSaveEditRow}
                 disabled={isSavingEntry}
-                className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg shadow-emerald-600/30"
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer"
               >
                 {isSavingEntry ? (
                   <>
@@ -1952,37 +1897,37 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       )}
 
       {/* =====================================================================
-          MODAL 2: INCHARGE SHORTAGE MARKING MODAL
+          MODAL 2: INCHARGE SHORTAGE MARKING MODAL (Clean White Theme)
       ===================================================================== */}
       {shortageModal.isOpen && shortageModal.row && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-          <div className="w-full max-w-md bg-slate-900 border border-rose-500/50 rounded-2xl p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-md bg-white border border-rose-200 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
               <div className="flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-rose-400" />
-                <h3 className="text-sm font-bold text-white">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+                <h3 className="text-sm font-bold text-slate-900">
                   शॉर्टेज मार्क करें ({shortageModal.row.riderName})
                 </h3>
               </div>
               <button
                 type="button"
                 onClick={() => setShortageModal((prev) => ({ ...prev, isOpen: false }))}
-                className="text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-slate-700 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="space-y-3 text-xs">
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <div className="text-slate-400">रिपोर्टेड रकम:</div>
-                <div className="text-base font-bold text-white font-mono">
+              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                <div className="text-slate-500 font-medium">रिपोर्टेड रकम:</div>
+                <div className="text-base font-bold text-slate-900 font-mono">
                   {formatINR(shortageModal.reportedAmount)}
                 </div>
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-300 mb-1">
+                <label className="block font-bold text-slate-700 mb-1">
                   वास्तविक प्राप्त रकम (Actual Received ₹):
                 </label>
                 <input
@@ -1993,18 +1938,18 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   onChange={(e) =>
                     setShortageModal((prev) => ({ ...prev, actualReceived: e.target.value }))
                   }
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-base font-bold focus:outline-none focus:ring-1 focus:ring-rose-500"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-base font-bold focus:outline-none focus:ring-1 focus:ring-rose-500 focus:bg-white"
                 />
               </div>
 
               {shortageModal.actualReceived !== '' && (
-                <div className="bg-rose-500/10 border border-rose-500/30 p-2.5 rounded-xl text-rose-300 font-mono font-bold">
+                <div className="bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-rose-700 font-mono font-bold">
                   शॉर्टेज रकम: {formatINR(Math.max(0, shortageModal.reportedAmount - Number(shortageModal.actualReceived)))}
                 </div>
               )}
 
               <div>
-                <label className="block font-semibold text-slate-300 mb-1">
+                <label className="block font-semibold text-slate-700 mb-1">
                   कारण / टिप्पणी (Notes):
                 </label>
                 <input
@@ -2014,23 +1959,23 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   onChange={(e) =>
                     setShortageModal((prev) => ({ ...prev, notes: e.target.value }))
                   }
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-1 focus:ring-rose-500 focus:bg-white"
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
               <button
                 type="button"
                 onClick={() => setShortageModal((prev) => ({ ...prev, isOpen: false }))}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs"
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer"
               >
                 रद्द करें
               </button>
               <button
                 type="button"
                 onClick={handleSaveShortage}
-                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold"
+                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer"
               >
                 कन्फर्म शॉर्टेज
               </button>

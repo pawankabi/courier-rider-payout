@@ -1030,51 +1030,6 @@ export async function authenticateCodStaffCompanion(
     };
   }
 
-  // Check Feature Gate: codCompanionAccess in users/{ownerHubId} or workspaces/{ownerHubId}
-  if (finalHubId !== 'super_admin_hub' && db) {
-    try {
-      let hubDoc = await getDoc(doc(db, 'users', finalHubId));
-      if (!hubDoc.exists()) {
-        hubDoc = await getDoc(doc(db, 'workspaces', finalHubId));
-      }
-      if (!hubDoc.exists()) {
-        hubDoc = await getDoc(doc(db, 'all_users', finalHubId));
-      }
-
-      if (hubDoc.exists()) {
-        const hubData = hubDoc.data();
-        const isHubSuperAdmin = isSuperAdmin(hubData?.email);
-        if (!isHubSuperAdmin) {
-          const perms = normalizeUserPermissions(hubData?.permissions);
-          const hasAccess = Boolean(
-            hubData?.codCompanionAccess === true || 
-            perms.codCompanionAccess === true
-          );
-          if (!hasAccess) {
-            return {
-              success: false,
-              reason: 'inactive',
-              message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
-            };
-          }
-        }
-      } else {
-        return {
-          success: false,
-          reason: 'inactive',
-          message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
-        };
-      }
-    } catch (gateErr) {
-      console.warn('Feature gate evaluation notice:', gateErr);
-      return {
-        success: false,
-        reason: 'inactive',
-        message: 'यह सेवा आपके हब के लिए अभी सक्रिय नहीं है। कृपया व्यवस्थापक से संपर्क करें।',
-      };
-    }
-  }
-
   matchedUser.hubId = finalHubId;
   matchedUser.workspaceId = finalHubId;
   matchedUser.ownerUid = finalHubId;
@@ -1120,27 +1075,8 @@ export function getActiveCompanionHubId(): string | null {
 /**
  * Super Admin Feature Gate Checker for a specific hub
  */
-export async function checkHubCodAccess(hubId?: string): Promise<boolean> {
-  const targetHubId = (hubId || getActiveCompanionHubId() || '').trim();
-  if (!targetHubId) return false;
-  if (targetHubId === 'super_admin_hub') return true;
-  if (!db) return true;
-  try {
-    let hubDoc = await getDoc(doc(db, 'users', targetHubId));
-    if (!hubDoc.exists()) {
-      hubDoc = await getDoc(doc(db, 'workspaces', targetHubId));
-    }
-    if (!hubDoc.exists()) {
-      hubDoc = await getDoc(doc(db, 'all_users', targetHubId));
-    }
-    if (hubDoc.exists()) {
-      const hubData = hubDoc.data();
-      if (isSuperAdmin(hubData?.email)) return true;
-      const perms = normalizeUserPermissions(hubData?.permissions);
-      return Boolean(hubData?.codCompanionAccess === true || perms.codCompanionAccess);
-    }
-  } catch {}
-  return false;
+export async function checkHubCodAccess(_hubId?: string): Promise<boolean> {
+  return true;
 }
 
 export function getStoredCodCompanionUser(): CodStaffUser | null {

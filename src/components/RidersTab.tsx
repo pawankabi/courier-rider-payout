@@ -84,6 +84,7 @@ interface Props {
   userId?: string;
   hubName?: string;
   onOpenCodPortal?: () => void;
+  onOpenCodCompanion?: () => void;
 }
 
 export const RidersTab: React.FC<Props> = ({
@@ -107,6 +108,7 @@ export const RidersTab: React.FC<Props> = ({
   userId = 'guest',
   hubName = 'सरायकेला कूरियर हब',
   onOpenCodPortal,
+  onOpenCodCompanion,
 }) => {
   // COD हिसाब-किताब Sub-App Modal State & Feature Flag
   const [isCodModalOpen, setIsCodModalOpen] = useState(false);
@@ -877,7 +879,11 @@ export const RidersTab: React.FC<Props> = ({
                   type="button"
                   id="open-cod-companion-banner-btn"
                   onClick={() => {
-                    window.location.hash = '/cod-entry';
+                    if (onOpenCodCompanion) {
+                      onOpenCodCompanion();
+                    } else {
+                      window.location.hash = '/cod-entry';
+                    }
                   }}
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold text-xs shadow-sm active:scale-95 transition cursor-pointer"
                   title="डिलीवरी बॉय साथी ऐप (COD Entry Companion)"

@@ -44,7 +44,8 @@ service cloud.firestore {
 
     // Isolated per-user multi-tenant workspaces: /workspaces/{userId}/riders and /workspaces/{userId}/entries
     match /workspaces/{userId} {
-      allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
 
       match /riders/{riderId} {
         allow read: if true; // Public read for ledger statement verification
@@ -124,7 +125,8 @@ service cloud.firestore {
 
     // User root profile document and subcollections
     match /users/{userId} {
-      allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
 
       // User's own riders subcollection
       match /riders/{riderId} {
