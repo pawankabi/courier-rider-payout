@@ -60,6 +60,7 @@ import {
   fetchCodRiders
 } from '../services/codService';
 import { isEntityOwnedByUser } from '../services/firestoreSync';
+import { purgeLegacyMockStorage } from '../utils/storage';
 import { getRiderAppUrl } from '../utils/shareLink';
 import { 
   formatINR, 
@@ -88,23 +89,45 @@ export const CodStandaloneApp: React.FC<Props> = ({
   // Dedicated Bottom Navigation Tabs: 'grid' | 'access_control' | 'audit_logs' | 'settings'
   const [activeTab, setActiveTab] = useState<'grid' | 'access_control' | 'audit_logs' | 'settings'>('grid');
 
+  // Purge any legacy cached keys in localStorage/sessionStorage related to mock riders on app init
+  useEffect(() => {
+    purgeLegacyMockStorage();
+  }, []);
+
+  // Strict Clean Memory Filter:
+  // Add a clean memory filter:
+  // const cleanRiders = riders.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
+  const cleanRiders = useMemo(() => {
+    if (!riders || !Array.isArray(riders)) return [];
+    return riders.filter((r) => {
+      const name = (r.name || '').trim();
+      const phone = (r.phone || '').trim().replace(/\D/g, '');
+      return (
+        name !== 'Akash Mahato' &&
+        name.toLowerCase() !== 'akash mahato' &&
+        phone !== '6207262418' &&
+        !phone.endsWith('6207262418')
+      );
+    });
+  }, [riders]);
+
   // Strict Multi-Tenant Rider Isolation:
   // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab.
-  // Filters out riders belonging to other hubs (such as "Akash Mahato") completely from memory and display.
+  // Filters out riders belonging to other hubs completely from memory and display.
   const activeTenantRiders = useMemo(() => {
-    if (!riders || !Array.isArray(riders)) return [];
+    if (!cleanRiders || !Array.isArray(cleanRiders)) return [];
     const cleanUid = (userId || '').trim();
     if (!cleanUid || cleanUid === 'guest') {
-      return riders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
+      return cleanRiders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
     }
-    return riders.filter((r) => {
+    return cleanRiders.filter((r) => {
       const owner = (r.workspaceId || r.userId || r.hubId || r.ownerUid || r.createdBy || '').trim();
       if (owner) {
         return owner === cleanUid;
       }
       return isEntityOwnedByUser(r, cleanUid);
     });
-  }, [riders, userId]);
+  }, [cleanRiders, userId]);
 
   // Selected Date for COD Grid (defaults to Today)
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());

@@ -53,6 +53,7 @@ import {
 } from '../services/codService';
 import { formatINR, formatDateDisplay, getTodayDateString, getDaysAgoDateString } from '../utils/formatters';
 import { isEntityOwnedByUser } from '../services/firestoreSync';
+import { purgeLegacyMockStorage } from '../utils/storage';
 
 interface Props {
   isOpen: boolean;
@@ -133,22 +134,35 @@ export const CodManagementModal: React.FC<Props> = ({
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Strict Multi-Tenant Rider Isolation:
+  // Strict Multi-Tenant Rider Isolation & Clean Memory Filter:
+  // Add a clean memory filter:
+  // const cleanRiders = riders.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
+  const cleanRiders = useMemo(() => {
+    if (!riders || !Array.isArray(riders)) return [];
+    return riders.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
+  }, [riders]);
+
   // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab.
   const activeTenantRiders = useMemo(() => {
-    if (!riders || !Array.isArray(riders)) return [];
+    if (!cleanRiders || !Array.isArray(cleanRiders)) return [];
     const cleanUid = (userId || '').trim();
     if (!cleanUid || cleanUid === 'guest') {
-      return riders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
+      return cleanRiders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
     }
-    return riders.filter((r) => {
+    return cleanRiders.filter((r) => {
       const owner = (r.workspaceId || r.userId || r.hubId || r.ownerUid || r.createdBy || '').trim();
       if (owner) {
         return owner === cleanUid;
       }
       return isEntityOwnedByUser(r, cleanUid);
     });
-  }, [riders, userId]);
+  }, [cleanRiders, userId]);
+
+  useEffect(() => {
+    if (isOpen) {
+      purgeLegacyMockStorage();
+    }
+  }, [isOpen]);
 
   // 1. Initial Load of Settings, Staff, and Today's Grid
   useEffect(() => {

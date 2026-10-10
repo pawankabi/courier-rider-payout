@@ -78,7 +78,8 @@ import {
   saveSettlementsToStorage,
   saveSettingsToStorage,
   loadSettingsFromStorage,
-  hasUserCachedData 
+  hasUserCachedData,
+  purgeLegacyMockStorage
 } from './utils/storage';
 import {
   DailyEntrySkeleton,
@@ -293,7 +294,10 @@ function MainCourierApp() {
   };
   
   // Instant Cache-First initialization: load authentic user data directly from localStorage in 0.0s!
-  const [riders, setRiders] = useState<Rider[]>(() => loadRidersFromStorage());
+  const [riders, setRiders] = useState<Rider[]>(() => {
+    purgeLegacyMockStorage();
+    return loadRidersFromStorage();
+  });
   const [entries, setEntries] = useState<DeliveryEntry[]>(() => loadDeliveriesFromStorage());
   const [settlements, setSettlements] = useState<SettlementRecord[]>(() => loadSettlementsFromStorage());
   const [isDataLoading, setIsDataLoading] = useState<boolean>(() => !hasUserCachedData());

@@ -55,6 +55,7 @@ import {
   resolveHubIdFromPhone
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
+import { purgeLegacyMockStorage } from '../utils/storage';
 
 interface CodCompanionAppProps {
   onBackToMainApp?: () => void;
@@ -103,6 +104,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       setResolvedPreviewHub(null);
     }
   }, [phoneInput]);
+
+  // Purge any legacy cached keys in localStorage/sessionStorage related to mock riders on mount
+  useEffect(() => {
+    purgeLegacyMockStorage();
+  }, []);
 
   // 1. INDEPENDENT FIREBASE AUTH & SESSION LIFECYCLE:
   // Establish dedicated Firebase session using Firebase Anonymous Authentication (signInAnonymously(auth)) on app mount
@@ -217,7 +223,10 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     const unsubscribeRiders = subscribeToHubRiders(
       authenticatedHubId,
       (riders) => {
-        setHubRiders(riders);
+        const cleanRiders = (riders || []).filter(
+          (r) => r.name !== 'Akash Mahato' && r.phone !== '6207262418'
+        );
+        setHubRiders(cleanRiders);
       },
       (err) => {
         console.warn('Realtime hub riders notice:', err);

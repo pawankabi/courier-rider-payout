@@ -434,15 +434,21 @@ export async function loadCodDailyEntries(
     }
   }
 
-  // Populate/reconcile with active riders
+  // Populate/reconcile with active riders (strictly filtered by clean memory filter)
+  const cleanRiders = (riders || []).filter(
+    (r) => (r.name || '').trim().toLowerCase() !== 'akash mahato' && (r.phone || '').trim().replace(/\D/g, '') !== '6207262418'
+  );
+
   const entryMap = new Map<string, CodDailyEntry>();
   savedEntries.forEach((e) => {
-    if (e.riderId) entryMap.set(e.riderId, e);
+    const name = (e.riderName || '').trim().toLowerCase();
     const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+    if (name === 'akash mahato' || cleanPhone === '6207262418') return;
+    if (e.riderId) entryMap.set(e.riderId, e);
     if (cleanPhone) entryMap.set(cleanPhone, e);
   });
 
-  const result: CodDailyEntry[] = riders.map((rider) => {
+  const result: CodDailyEntry[] = cleanRiders.map((rider) => {
     const cleanRiderPhone = (rider.phone || '').replace(/\D/g, '').slice(-10);
     const existing = entryMap.get(rider.id) || (cleanRiderPhone ? entryMap.get(cleanRiderPhone) : undefined);
 
@@ -490,22 +496,25 @@ export async function saveCodDailyEntries(
 ): Promise<void> {
   const targetDate = date || getTodayDateString();
   const localKey = getEntriesStorageKey(userId, targetDate);
+  const cleanEntries = (entries || []).filter(
+    (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
+  );
   try {
-    localStorage.setItem(localKey, JSON.stringify(entries));
-    localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(entries));
+    localStorage.setItem(localKey, JSON.stringify(cleanEntries));
+    localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(cleanEntries));
     if (userId) {
-      localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify(entries));
+      localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify(cleanEntries));
     }
   } catch {}
 
   if (db) {
     try {
-      const entriesMap = buildEntriesMap(entries);
+      const entriesMap = buildEntriesMap(cleanEntries);
       const payload = cleanForFirestore({
         date: targetDate,
         hubId: userId,
         ownerUid: userId,
-        entries,
+        entries: cleanEntries,
         entriesMap,
         updatedAt: new Date().toISOString(),
       });
@@ -1292,8 +1301,11 @@ export async function getAllActiveRidersForCod(authenticatedHubId?: string | nul
     return owner && owner === hubId;
   });
 
-  console.log(`🔒 [Hub Isolation] Hub: ${hubId.substring(0, 8)} resolved ${result.length} active riders`);
-  return result;
+  // Strict clean memory filter: exclude any mock/alien rider completely
+  const cleanRiders = result.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
+
+  console.log(`🔒 [Hub Isolation] Hub: ${hubId.substring(0, 8)} resolved ${cleanRiders.length} active riders`);
+  return cleanRiders;
 }
 
 /**
@@ -1366,10 +1378,11 @@ export function subscribeToHubRiders(
           const owner = (r.workspaceId || r.hubId || r.userId || r.ownerUid || r.createdBy || '').trim();
           return owner && owner === targetHubId;
         });
+        const cleanRiders = filtered.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
         try {
-          localStorage.setItem(`cp_cache_riders_${targetHubId}`, JSON.stringify(filtered));
+          localStorage.setItem(`cp_cache_riders_${targetHubId}`, JSON.stringify(cleanRiders));
         } catch {}
-        onRidersUpdate(filtered);
+        onRidersUpdate(cleanRiders);
       }
     };
 
@@ -1612,9 +1625,13 @@ export function subscribeToDailyCodSheet(
             }
           }
 
+          const cleanFinalEntries = finalEntries.filter(
+            (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
+          );
+
           const sheetData: DailyCodSheetData = {
             date: targetDate,
-            entries: finalEntries,
+            entries: cleanFinalEntries,
             isLocked: Boolean(raw.isLocked),
             lockedBy: raw.lockedBy,
             lockedAt: raw.lockedAt,
@@ -1632,7 +1649,9 @@ export function subscribeToDailyCodSheet(
           // Document does not exist yet in hubs/{effectiveHubId}/daily_cod_sheets!
           // Automatically pull active riders strictly for this hub
           const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
-          const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
+          const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders).filter(
+            (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
+          );
           const defaultSheet: DailyCodSheetData = {
             date: targetDate,
             entries: defaultEntries,

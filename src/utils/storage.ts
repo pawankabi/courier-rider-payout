@@ -49,24 +49,106 @@ export const INITIAL_RIDERS: Rider[] = [];
  */
 function isSampleRider(r: any): boolean {
   if (!r) return false;
+  const name = (r.name || '').trim().toLowerCase();
+  const phone = (r.phone || '').trim().replace(/\D/g, '');
   return (
     r.id === 'rider_1' ||
     r.id === 'rider_2' ||
     r.id === 'rider_3' ||
     r.name === 'Rahul Sharma' ||
     r.name === 'Amit Kumar' ||
-    r.name === 'Priya Singh'
+    r.name === 'Priya Singh' ||
+    name === 'akash mahato' ||
+    phone === '6207262418' ||
+    phone.endsWith('6207262418')
   );
 }
 
 function isSampleDelivery(d: any): boolean {
   if (!d) return false;
+  const riderName = (d.riderName || '').trim().toLowerCase();
+  const riderPhone = (d.riderPhone || '').trim().replace(/\D/g, '');
   return (
     (typeof d.id === 'string' && d.id.startsWith('del_')) ||
     d.riderName === 'Rahul Sharma' ||
     d.riderName === 'Amit Kumar' ||
-    d.riderName === 'Priya Singh'
+    d.riderName === 'Priya Singh' ||
+    riderName === 'akash mahato' ||
+    riderPhone === '6207262418'
   );
+}
+
+/**
+ * Purges any legacy cached keys or mock data in localStorage/sessionStorage related to mock riders on app init.
+ */
+export function purgeLegacyMockStorage(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    // 1. Scan and purge or sanitize localStorage keys
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      if (key.includes('sample') || key.includes('mock_rider')) {
+        localStorage.removeItem(key);
+        continue;
+      }
+
+      if (key.includes('riders') || key.includes('cod') || key.includes('deliveries') || key.includes('courier')) {
+        const val = localStorage.getItem(key);
+        if (val && (val.toLowerCase().includes('akash mahato') || val.includes('6207262418'))) {
+          try {
+            const parsed = JSON.parse(val);
+            if (Array.isArray(parsed)) {
+              const cleaned = parsed.filter((item: any) => {
+                const name = (item.name || item.riderName || '').trim().toLowerCase();
+                const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
+                return name !== 'akash mahato' && phone !== '6207262418';
+              });
+              localStorage.setItem(key, JSON.stringify(cleaned));
+            } else if (parsed && typeof parsed === 'object') {
+              if (Array.isArray(parsed.entries)) {
+                parsed.entries = parsed.entries.filter((item: any) => {
+                  const name = (item.name || item.riderName || '').trim().toLowerCase();
+                  const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
+                  return name !== 'akash mahato' && phone !== '6207262418';
+                });
+                localStorage.setItem(key, JSON.stringify(parsed));
+              }
+            }
+          } catch {
+            localStorage.removeItem(key);
+          }
+        }
+      }
+    }
+
+    // 2. Scan and purge sessionStorage
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (!key) continue;
+      const val = sessionStorage.getItem(key);
+      if (val && (val.toLowerCase().includes('akash mahato') || val.includes('6207262418'))) {
+        try {
+          const parsed = JSON.parse(val);
+          if (Array.isArray(parsed)) {
+            const cleaned = parsed.filter((item: any) => {
+              const name = (item.name || item.riderName || '').trim().toLowerCase();
+              const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
+              return name !== 'akash mahato' && phone !== '6207262418';
+            });
+            sessionStorage.setItem(key, JSON.stringify(cleaned));
+          } else {
+            sessionStorage.removeItem(key);
+          }
+        } catch {
+          sessionStorage.removeItem(key);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Notice during purgeLegacyMockStorage:', err);
+  }
 }
 
 /**
