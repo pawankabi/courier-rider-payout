@@ -52,6 +52,24 @@ export function formatAdvanceSmsText(params: {
 }
 
 /**
+ * Format Incentive & Bonus SMS text:
+ * "नमस्ते {riderName}, आपके खाते में ₹{amount} इंसेंटिव/बोनस जोड़ा गया है ({reason})। विस्तृत खाता लेजर देखें: {statementUrl}"
+ */
+export function formatIncentiveSmsText(params: {
+  riderName: string;
+  amount: number;
+  reason?: string;
+  totalIncentive?: number;
+  statementUrl: string;
+}): string {
+  const reasonText = params.reason && params.reason.trim().length > 0
+    ? params.reason.trim()
+    : 'इंसेंटिव / बोनस';
+  const totalText = params.totalIncentive !== undefined ? `। कुल इंसेंटिव कमाई: ₹${params.totalIncentive}` : '';
+  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} इंसेंटिव/बोनस जोड़ा गया है (${reasonText})${totalText}। विस्तृत खाता लेजर देखें: ${params.statementUrl}`;
+}
+
+/**
  * Format Salary / Payout SMS text according to exact specification:
  * "नमस्ते {riderName}, आपका {fromDate} से {toDate} का ₹{netSalary} वेतन जमा कर दिया गया है। विस्तृत पे-आउट व एडवांस स्लिप देखें: {statementUrl}"
  */

@@ -29,10 +29,13 @@ import {
   FileSpreadsheet,
   Plus,
   Table,
-  Share2
+  Share2,
+  Gift,
+  Receipt
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings } from '../types';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
+import { RiderIncentiveModal } from './RiderIncentiveModal';
 import { generateStatementUrl, formatSalarySmsText, dispatchAutomatedSms, getWhatsAppUrl, getNativeSmsUrl } from '../services/smsService';
 import { 
   getRiderAppUrl, 
@@ -81,6 +84,15 @@ interface Props {
   onToggleEntryStatus?: (entryId: string) => void;
   onSaveAdvance?: (updatedRider: Rider, newAdvance: RiderAdvanceEntry) => Promise<void>;
   onDeleteAdvance?: (updatedRider: Rider, advanceId: string) => Promise<void>;
+  onSaveIncentive?: (
+    riderId: string,
+    incentive: {
+      amount: number;
+      reason: string;
+      date: string;
+    }
+  ) => Promise<void>;
+  onDeleteIncentive?: (riderId: string, incentiveId: string) => Promise<void>;
   onViewLedger?: (riderId: string) => void;
   settlements?: SettlementRecord[];
   canAccessFestivalGreetings?: boolean;
@@ -106,6 +118,8 @@ export const RidersTab: React.FC<Props> = ({
   onToggleEntryStatus,
   onSaveAdvance,
   onDeleteAdvance,
+  onSaveIncentive,
+  onDeleteIncentive,
   onViewLedger,
   canAccessFestivalGreetings = false,
   hubSignature,
@@ -188,6 +202,8 @@ export const RidersTab: React.FC<Props> = ({
 
   // Advance Management Modal state
   const [advanceModalRider, setAdvanceModalRider] = useState<Rider | null>(null);
+  // Incentive Management Modal state
+  const [incentiveModalRider, setIncentiveModalRider] = useState<Rider | null>(null);
 
   // Expanded entry lists per rider ID
   const [expandedRiderIds, setExpandedRiderIds] = useState<Record<string, boolean>>({});
@@ -559,6 +575,7 @@ export const RidersTab: React.FC<Props> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (advanceModalRider) setAdvanceModalRider(null);
+        else if (incentiveModalRider) setIncentiveModalRider(null);
         else if (isAddModalOpen) setIsAddModalOpen(false);
         else if (editingRider) setEditingRider(null);
         else if (deletingRider) setDeletingRider(null);
@@ -568,7 +585,7 @@ export const RidersTab: React.FC<Props> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [advanceModalRider, isAddModalOpen, editingRider, deletingRider, payingRiderData, isFestivalModalOpen]);
+  }, [advanceModalRider, incentiveModalRider, isAddModalOpen, editingRider, deletingRider, payingRiderData, isFestivalModalOpen]);
 
   // Mark all unpaid entries for rider as paid
   const handleOpenMarkPaid = (rider: Rider) => {
@@ -1301,14 +1318,58 @@ export const RidersTab: React.FC<Props> = ({
                     {hasAdvance && (
                       <div className="text-right">
                         <div className="text-xs text-rose-400">Advance Balance</div>
-                        <div className="text-sm font-bold text-rose-400">
+                        <div className="text-sm font-bold text-rose-400 font-mono">
                           {formatINR(Number(rider.totalAdvance) || 0)}
                         </div>
                       </div>
                     )}
 
+                    {Number(rider.totalIncentive) > 0 && (
+                      <div className="text-right">
+                        <div className="text-xs text-emerald-400">Incentive Total</div>
+                        <div className="text-sm font-bold text-emerald-400 font-mono">
+                          +{formatINR(Number(rider.totalIncentive) || 0)}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Actions */}
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* Prominent Advance Button [Prompt Requirement] */}
+                      <button
+                        type="button"
+                        onClick={() => setAdvanceModalRider(rider)}
+                        className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 hover:border-amber-400 rounded-xl text-xs font-bold flex items-center gap-1 transition active:scale-95 shadow-sm shadow-amber-500/10 cursor-pointer"
+                        title="एडवांस जोड़ें / देखें (+ Advance)"
+                      >
+                        <IndianRupee className="w-3.5 h-3.5 text-amber-400" />
+                        <span>+ एडवांस</span>
+                      </button>
+
+                      {/* Matching Prominent Incentive Button [Prompt Requirement] */}
+                      <button
+                        type="button"
+                        onClick={() => setIncentiveModalRider(rider)}
+                        className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 hover:text-emerald-200 border border-emerald-500/40 hover:border-emerald-400 rounded-xl text-xs font-bold flex items-center gap-1 transition active:scale-95 shadow-sm shadow-emerald-500/10 cursor-pointer"
+                        title="इंसेंटिव जोड़ें / देखें (+ Incentive)"
+                      >
+                        <Gift className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>+ इंसेंटिव</span>
+                      </button>
+
+                      {/* Single-Page Khatabook Statement Button */}
+                      {onViewLedger && (
+                        <button
+                          type="button"
+                          onClick={() => onViewLedger(rider.id)}
+                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700/80 rounded-xl text-xs font-semibold flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                          title="खाता लेजर देखें (Khatabook Statement)"
+                        >
+                          <Receipt className="w-3.5 h-3.5 text-blue-400" />
+                          <span className="hidden sm:inline">खाता</span>
+                        </button>
+                      )}
+
                       {stats.unpaidAmount > 0 && (
                         <button
                           type="button"
@@ -1318,15 +1379,6 @@ export const RidersTab: React.FC<Props> = ({
                           Settle
                         </button>
                       )}
-
-                      <button
-                        type="button"
-                        onClick={() => setAdvanceModalRider(rider)}
-                        className="p-2 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-xl transition"
-                        title="Manage Advance"
-                      >
-                        <Coins className="w-4 h-4" />
-                      </button>
 
                       <button
                         type="button"
@@ -1715,11 +1767,40 @@ export const RidersTab: React.FC<Props> = ({
       {/* Advance Modal */}
       {advanceModalRider && (
         <RiderAdvanceModal
-          rider={advanceModalRider}
+          rider={riders.find((r) => r.id === advanceModalRider.id) || advanceModalRider}
           onClose={() => setAdvanceModalRider(null)}
-          onSaveAdvance={onSaveAdvance || (async () => {})}
-          onDeleteAdvance={onDeleteAdvance || (async () => {})}
+          onSaveAdvance={async (updatedRider, newAdv) => {
+            if (onSaveAdvance) await onSaveAdvance(updatedRider, newAdv);
+            setAdvanceModalRider(updatedRider);
+          }}
+          onDeleteAdvance={async (updatedRider, advId) => {
+            if (onDeleteAdvance) await onDeleteAdvance(updatedRider, advId);
+            setAdvanceModalRider(updatedRider);
+          }}
+          onViewLedger={onViewLedger}
           hubSignature={hubSignature}
+          hubName={hubName}
+        />
+      )}
+
+      {/* Incentive Modal */}
+      {incentiveModalRider && (
+        <RiderIncentiveModal
+          rider={riders.find((r) => r.id === incentiveModalRider.id) || incentiveModalRider}
+          onClose={() => setIncentiveModalRider(null)}
+          onSaveIncentive={async (rId, incData) => {
+            if (onSaveIncentive) await onSaveIncentive(rId, incData);
+            const ref = riders.find((r) => r.id === rId);
+            if (ref) setIncentiveModalRider(ref);
+          }}
+          onDeleteIncentive={async (rId, incId) => {
+            if (onDeleteIncentive) await onDeleteIncentive(rId, incId);
+            const ref = riders.find((r) => r.id === rId);
+            if (ref) setIncentiveModalRider(ref);
+          }}
+          onViewLedger={onViewLedger}
+          hubSignature={hubSignature}
+          hubName={hubName}
         />
       )}
 

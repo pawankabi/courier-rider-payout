@@ -25,9 +25,11 @@ import {
   Share2,
   Sparkles,
   CreditCard,
-  Scale
+  Scale,
+  Gift,
+  IndianRupee
 } from 'lucide-react';
-import { copyAppShareLink, SHARE_SUCCESS_MESSAGE } from './utils/shareLink';
+import { copyAppShareLink, SHARE_SUCCESS_MESSAGE, getRiderStatementUrl } from './utils/shareLink';
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { auth } from './firebase';
 import { 
@@ -48,8 +50,15 @@ import {
   normalizeUserPermissions,
   normalizeUserSubscription,
   isEntityOwnedByUser,
-  syncPublicRiderStatement
+  syncPublicRiderStatement,
+  writeIncentiveEntryToFirestore,
+  deleteAdvanceFromFirestore,
+  deleteIncentiveFromFirestore
 } from './services/firestoreSync';
+import { 
+  formatIncentiveSmsText, 
+  dispatchAutomatedSms 
+} from './services/smsService';
 import { 
   Rider, 
   DeliveryEntry, 
@@ -64,6 +73,7 @@ import {
   DEFAULT_USER_SUBSCRIPTION,
   checkSubscriptionLock,
   RiderAdvanceEntry,
+  RiderIncentiveEntry,
   PublicRiderStatement
 } from './types';
 import { RiderLedgerStatement } from './components/RiderLedgerStatement';
@@ -92,6 +102,8 @@ import { initKeepAlive } from './utils/keepAlive';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { DailyEntryTab } from './components/DailyEntryTab';
 import { RidersTab } from './components/RidersTab';
+import { AdvancesTab } from './components/AdvancesTab';
+import { IncentivesTab } from './components/IncentivesTab';
 import { AnalyticsReportsTab } from './components/AnalyticsReportsTab';
 import { SettlementTab } from './components/SettlementTab';
 import { AdminDashboardTab } from './components/AdminDashboardTab';
@@ -550,7 +562,7 @@ function MainCourierApp() {
     if (activeTab === 'entry' && !canAccessDailyEntry) {
       if (canAccessRiders) setActiveTab('riders');
       else if (canAccessReports) setActiveTab('reports');
-    } else if (activeTab === 'riders' && !canAccessRiders) {
+    } else if ((activeTab === 'riders' || activeTab === 'advance' || activeTab === 'incentive') && !canAccessRiders) {
       if (canAccessDailyEntry) setActiveTab('entry');
       else if (canAccessReports) setActiveTab('reports');
     } else if ((activeTab === 'reports' || activeTab === 'settlement') && !canAccessReports) {
@@ -1567,6 +1579,13 @@ function MainCourierApp() {
     setRiders(updatedRiders);
     saveRidersToStorage(updatedRiders, targetUid);
 
+    // 1. Remove advance document from Firestore
+    try {
+      await deleteAdvanceFromFirestore(targetUid || '', advanceId);
+    } catch (err) {
+      console.warn('Error deleting advance from Firestore:', err);
+    }
+
     if (isProUser && targetUid) {
       try {
         await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
@@ -1592,6 +1611,154 @@ function MainCourierApp() {
 
     setToastMessage({
       text: `एडवांस एंट्री सफलतापूर्वक हटाई गई।`,
+      type: 'info',
+    });
+  };
+
+  // Save Rider Incentive / Bonus Entry, dispatch background SMS, and sync public statement
+  const handleSaveRiderIncentive = async (
+    riderId: string,
+    incentiveData: { amount: number; reason: string; date: string }
+  ) => {
+    const targetRider = riders.find((r) => r.id === riderId);
+    if (!targetRider) return;
+
+    const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+
+    const prevTotal = Number(targetRider.totalIncentive) || 0;
+    const newTotal = prevTotal + incentiveData.amount;
+    const incId = `inc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+    const newIncEntry: RiderIncentiveEntry = {
+      id: incId,
+      riderId: targetRider.id,
+      riderName: targetRider.name,
+      riderPhone: targetRider.phone,
+      amount: incentiveData.amount,
+      date: incentiveData.date,
+      reason: incentiveData.reason,
+      source: 'manual',
+      createdAt: new Date().toISOString(),
+      createdBy: currentOwnerEmail || currentOwnerId,
+    };
+
+    const updatedIncentives = [newIncEntry, ...(targetRider.incentives || [])];
+    const updatedRider: Rider = {
+      ...targetRider,
+      totalIncentive: newTotal,
+      incentives: updatedIncentives,
+    };
+
+    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+    setRiders(updatedRiders);
+    saveRidersToStorage(updatedRiders, targetUid);
+
+    try {
+      await writeIncentiveEntryToFirestore(targetUid || '', {
+        id: incId,
+        riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
+        amount: incentiveData.amount,
+        date: incentiveData.date,
+        reason: incentiveData.reason,
+        source: 'manual',
+        createdBy: currentOwnerEmail,
+      });
+
+      if (isProUser && targetUid) {
+        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+      }
+    } catch (err) {
+      console.warn('Error saving incentive to Firestore:', err);
+    }
+
+    try {
+      await syncPublicRiderStatement(
+        updatedRider,
+        updatedRider.advances || [],
+        settlements,
+        entries,
+        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature
+      );
+    } catch (err) {
+      console.warn('Error syncing statement for incentive:', err);
+    }
+
+    const statementUrl = getRiderStatementUrl(targetRider.id);
+    const smsText = formatIncentiveSmsText({
+      riderName: targetRider.name,
+      amount: incentiveData.amount,
+      reason: incentiveData.reason,
+      totalIncentive: newTotal,
+      statementUrl,
+    });
+
+    dispatchAutomatedSms({
+      riderName: targetRider.name,
+      riderPhone: targetRider.phone,
+      amount: incentiveData.amount,
+      message: smsText,
+      type: 'general',
+      statementUrl,
+    }).catch((e) => console.warn('Incentive background SMS notice:', e));
+
+    setToastMessage({
+      text: `🎉 ₹${incentiveData.amount} का इंसेंटिव सुरक्षित हुआ एवं SMS भेजा गया!`,
+      type: 'success',
+    });
+  };
+
+  // Delete Rider Incentive Entry
+  const handleDeleteRiderIncentive = async (riderId: string, incentiveId: string) => {
+    const targetRider = riders.find((r) => r.id === riderId);
+    if (!targetRider) return;
+
+    const remainingIncentives = (targetRider.incentives || []).filter((i) => i.id !== incentiveId);
+    const newTotal = remainingIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+
+    const updatedRider: Rider = {
+      ...targetRider,
+      totalIncentive: newTotal,
+      incentives: remainingIncentives,
+    };
+
+    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+    setRiders(updatedRiders);
+    saveRidersToStorage(updatedRiders, targetUid);
+
+    // Remove document from Firestore incentives collection
+    try {
+      await deleteIncentiveFromFirestore(targetUid || '', incentiveId);
+    } catch (err) {
+      console.warn('Error deleting incentive document from Firestore:', err);
+    }
+
+    if (isProUser && targetUid) {
+      try {
+        await saveRiderToFirestore(targetUid, updatedRider, currentUser?.email || '');
+      } catch (err) {
+        console.warn('Error updating rider after deleting incentive:', err);
+      }
+    }
+
+    try {
+      await syncPublicRiderStatement(
+        updatedRider,
+        updatedRider.advances || [],
+        settlements,
+        entries,
+        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature
+      );
+    } catch (err) {
+      console.warn('Error syncing statement:', err);
+    }
+
+    setToastMessage({
+      text: 'इंसेंटिव रिकॉर्ड सफलतापूर्वक हटा दिया गया।',
       type: 'info',
     });
   };
@@ -2340,6 +2507,8 @@ function MainCourierApp() {
                 onToggleEntryStatus={handleToggleEntryStatus}
                 onSaveAdvance={handleSaveRiderAdvance}
                 onDeleteAdvance={handleDeleteRiderAdvance}
+                onSaveIncentive={handleSaveRiderIncentive}
+                onDeleteIncentive={handleDeleteRiderIncentive}
                 onViewLedger={handleViewLedger}
                 canAccessFestivalGreetings={canAccessFestivalGreetings}
                 hubSignature={userRateConfig?.hubSignature}
@@ -2350,6 +2519,30 @@ function MainCourierApp() {
                 hubName={activeHubName}
                 onOpenCodPortal={() => setIsCodStandaloneOpen(true)}
                 onOpenCodCompanion={() => setIsCodCompanionOpen(true)}
+              />
+            )}
+
+            {activeTab === 'advance' && (
+              <AdvancesTab
+                key={`advances-tab-${restoreRefreshKey}`}
+                riders={dashboardRiders}
+                onSaveAdvance={handleSaveRiderAdvance}
+                onDeleteAdvance={handleDeleteRiderAdvance}
+                onViewLedger={handleViewLedger}
+                hubName={activeHubName}
+                userId={targetUid}
+              />
+            )}
+
+            {activeTab === 'incentive' && (
+              <IncentivesTab
+                key={`incentives-tab-${restoreRefreshKey}`}
+                riders={dashboardRiders}
+                onSaveIncentive={handleSaveRiderIncentive}
+                onDeleteIncentive={handleDeleteRiderIncentive}
+                onViewLedger={handleViewLedger}
+                hubName={activeHubName}
+                userId={targetUid}
               />
             )}
 
@@ -2638,6 +2831,30 @@ function MainCourierApp() {
             riderId={viewingLedgerRiderId}
             initialStatement={inAppLedgerInitialStatement}
             onBackToApp={() => setViewingLedgerRiderId(null)}
+            onDeleteAdvance={async (advId) => {
+              const rider = riders.find((r) => r.id === viewingLedgerRiderId);
+              if (rider) {
+                const rem = (rider.advances || []).filter((a) => a.id !== advId);
+                const sorted = [...rem].sort(
+                  (a, b) => new Date(a.date || a.createdAt).getTime() - new Date(b.date || b.createdAt).getTime()
+                );
+                let running = 0;
+                const updatedAdvances = sorted
+                  .map((item) => {
+                    running += Number(item.amount) || 0;
+                    return { ...item, runningBalance: running };
+                  })
+                  .reverse();
+                await handleDeleteRiderAdvance(
+                  { ...rider, totalAdvance: running, advances: updatedAdvances },
+                  advId
+                );
+              }
+            }}
+            onDeleteIncentive={async (incId) => {
+              await handleDeleteRiderIncentive(viewingLedgerRiderId, incId);
+            }}
+            userId={targetUid}
           />
         </div>
       )}

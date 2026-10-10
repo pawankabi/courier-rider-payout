@@ -10,6 +10,20 @@ export interface RiderAdvanceEntry {
   settlementId?: string;
 }
 
+export interface RiderIncentiveEntry {
+  id: string;
+  riderId: string;
+  riderName?: string;
+  riderPhone?: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  reason: string; // e.g. "त्यौहार बोनस", "बढ़िया परफॉर्मेंस", "अतिरिक्त माइलेज", "अतिरिक्त जमा: Cash"
+  createdAt: string; // ISO string
+  createdBy?: string;
+  settlementId?: string;
+  source?: 'manual' | 'surplus';
+}
+
 export interface Rider {
   id: string;
   name: string;
@@ -29,6 +43,8 @@ export interface Rider {
   ownerUid?: string; // Associated Owner UID tag
   totalAdvance?: number; // Running advance balance
   advances?: RiderAdvanceEntry[]; // Detailed advance payment records
+  totalIncentive?: number; // Running incentive & bonus earnings
+  incentives?: RiderIncentiveEntry[]; // Detailed incentive & bonus records
 }
 
 export interface PublicRiderStatement {
@@ -40,6 +56,8 @@ export interface PublicRiderStatement {
   hubSignature?: string;
   totalAdvance: number;
   advances: RiderAdvanceEntry[];
+  totalIncentive?: number;
+  incentives?: RiderIncentiveEntry[];
   salaries: {
     id: string;
     startDate: string;
@@ -117,7 +135,7 @@ export interface SettlementRecord {
   userId?: string;
 }
 
-export type TabType = 'entry' | 'riders' | 'reports' | 'settlement' | 'festivals' | 'admin';
+export type TabType = 'entry' | 'riders' | 'advance' | 'incentive' | 'reports' | 'settlement' | 'festivals' | 'admin';
 
 export interface UserPermissions {
   dailyEntry: boolean;
@@ -411,24 +429,28 @@ export interface CodDailyEntry {
   company1ShortageNotes?: string;
   company1ShortageFlaggedBy?: string;
   company1ShortageFlaggedAt?: string;
+  company1SyncedToAdvance?: boolean;
 
   company2Shortage?: number;
   company2ActualReceived?: number;
   company2ShortageNotes?: string;
   company2ShortageFlaggedBy?: string;
   company2ShortageFlaggedAt?: string;
+  company2SyncedToAdvance?: boolean;
 
   cashShortage?: number;
   cashActualReceived?: number;
   cashShortageNotes?: string;
   cashShortageFlaggedBy?: string;
   cashShortageFlaggedAt?: string;
+  cashSyncedToAdvance?: boolean;
 
   onlineShortage?: number;
   onlineActualReceived?: number;
   onlineShortageNotes?: string;
   onlineShortageFlaggedBy?: string;
   onlineShortageFlaggedAt?: string;
+  onlineSyncedToAdvance?: boolean;
 
   status: 'draft' | 'submitted' | 'verified' | 'locked';
   submittedAt?: string;

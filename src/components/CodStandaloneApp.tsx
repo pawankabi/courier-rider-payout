@@ -35,7 +35,9 @@ import {
   HelpCircle,
   X,
   Plus,
-  Bike
+  Bike,
+  ArrowRightCircle,
+  Gift
 } from 'lucide-react';
 import { 
   Rider, 
@@ -43,7 +45,9 @@ import {
   CodStaffUser, 
   CodAuditLog, 
   CodSettings, 
-  CodStaffRole 
+  CodStaffRole,
+  RiderAdvanceEntry,
+  RiderIncentiveEntry
 } from '../types';
 import { 
   loadCodSettings, 
@@ -59,9 +63,21 @@ import {
   subscribeToDailyCodSheet,
   fetchCodRiders
 } from '../services/codService';
-import { isEntityOwnedByUser } from '../services/firestoreSync';
+import { 
+  isEntityOwnedByUser, 
+  writeAdvanceEntryToFirestore, 
+  writeIncentiveEntryToFirestore, 
+  saveRiderToFirestore, 
+  syncPublicRiderStatement 
+} from '../services/firestoreSync';
+import { 
+  formatAdvanceSmsText, 
+  formatIncentiveSmsText, 
+  dispatchAutomatedSms 
+} from '../services/smsService';
+import { CodShortageModal } from './CodShortageModal';
 import { purgeLegacyMockStorage } from '../utils/storage';
-import { getRiderAppUrl } from '../utils/shareLink';
+import { getRiderAppUrl, getRiderStatementUrl } from '../utils/shareLink';
 import { 
   formatINR, 
   formatDateDisplay, 
@@ -576,15 +592,20 @@ export const CodStandaloneApp: React.FC<Props> = ({
   };
 
   // Save Shortage Amount & Actual Received for Field
-  const handleSaveShortage = async () => {
+  const handleSaveShortage = async (data: {
+    actualAmount: number;
+    shortageAmount: number;
+    surplusAmount: number;
+    notes: string;
+  }) => {
     if (!shortageModal) return;
-    const { riderId, field, fieldLabel, reportedAmount, actualReceived, notes } = shortageModal;
+    const { riderId, field, fieldLabel, reportedAmount } = shortageModal;
 
     const targetRow = gridEntries.find((r) => r.riderId === riderId);
     if (!targetRow) return;
 
-    const safeActual = Math.max(0, actualReceived || 0);
-    const safeShortage = Math.max(0, reportedAmount - safeActual);
+    const safeActual = Math.max(0, data.actualAmount || 0);
+    const safeShortage = Math.max(0, data.shortageAmount || 0);
 
     const shortageProp = `${field}Shortage` as keyof CodDailyEntry;
     const actualProp = `${field}ActualReceived` as keyof CodDailyEntry;
@@ -600,7 +621,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
         ...row,
         [shortageProp]: safeShortage,
         [actualProp]: safeActual,
-        [notesProp]: notes.trim() || undefined,
+        [notesProp]: data.notes.trim() || undefined,
         [flaggedByProp]: safeShortage > 0 ? activeUser.name : undefined,
         [flaggedAtProp]: safeShortage > 0 ? new Date().toISOString() : undefined,
         updatedAt: new Date().toISOString(),
@@ -618,10 +639,10 @@ export const CodStandaloneApp: React.FC<Props> = ({
       riderId: targetRow.riderId,
       riderName: targetRow.riderName,
       date: targetRow.date,
-      field: `${field.toUpperCase()} Shortage Flagged`,
+      field: `${field.toUpperCase()} Audit Verified`,
       previousValue: previousShortage > 0 ? `Short: ₹${previousShortage}` : 'No Shortage',
-      newValue: safeShortage > 0 ? `Short: ₹${safeShortage} (Actual Recv: ₹${safeActual})` : 'Cleared / No Shortage',
-      notes: notes.trim() || `Shortage flagged on ${fieldLabel}`,
+      newValue: safeShortage > 0 ? `Short: ₹${safeShortage} (Actual: ₹${safeActual})` : `Verified: ₹${safeActual} (No Shortage)`,
+      notes: data.notes.trim() || `Shortage flagged on ${fieldLabel}`,
     }).then(() => {
       loadCodAuditLogs(userId).then(setAuditLogs);
     });
@@ -633,6 +654,187 @@ export const CodStandaloneApp: React.FC<Props> = ({
         : `✅ Full ₹${reportedAmount} received confirmed for ${targetRow.riderName}`,
       safeShortage > 0 ? 'info' : 'success'
     );
+  };
+
+  // One-click Shortage to Advance Transfer with SMS Trigger
+  const handleSyncShortageToAdvance = async (
+    row: CodDailyEntry,
+    item: {
+      field: 'company1' | 'company2' | 'cash' | 'online';
+      fieldLabel: string;
+      sourceType: 'cod' | 'cash_online';
+      shortage: number;
+    }
+  ) => {
+    const shortAmount = item.shortage;
+    if (!shortAmount || shortAmount <= 0) return;
+
+    const shortType = item.sourceType === 'cod' ? 'COD शॉर्टेज' : 'कैश/ऑनलाइन शॉर्टेज';
+    const reasonText = `दैनिक शॉर्टेज: ${shortType} (${selectedDate})`;
+
+    const targetRider = activeTenantRiders.find((r) => r.id === row.riderId);
+    const riderName = targetRider ? targetRider.name : row.riderName;
+    const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
+    const previousPendingAdvance = Number(targetRider?.totalAdvance) || 0;
+    const newTotalAdvance = previousPendingAdvance + shortAmount;
+
+    try {
+      // 1. Automatically write entry into `advances` collection for that rider
+      const advId = await writeAdvanceEntryToFirestore(userId, {
+        riderId: row.riderId,
+        riderName,
+        riderPhone,
+        amount: shortAmount,
+        date: selectedDate,
+        reason: reasonText,
+        runningBalance: newTotalAdvance,
+      });
+
+      // Update rider advance ledger document and public statement
+      if (targetRider) {
+        const newAdvanceItem: RiderAdvanceEntry = {
+          id: advId,
+          riderId: targetRider.id,
+          amount: shortAmount,
+          date: selectedDate,
+          reason: reasonText,
+          runningBalance: newTotalAdvance,
+          createdAt: new Date().toISOString(),
+          createdBy: activeUser.name,
+        };
+        const updatedAdvances = [newAdvanceItem, ...(targetRider.advances || [])];
+        const updatedRider: Rider = {
+          ...targetRider,
+          totalAdvance: newTotalAdvance,
+          advances: updatedAdvances,
+        };
+        await saveRiderToFirestore(userId, updatedRider);
+        try {
+          await syncPublicRiderStatement(updatedRider, updatedAdvances);
+        } catch (e) {
+          console.warn('Notice syncing statement for shortage advance:', e);
+        }
+      }
+
+      // 2. Mark this shortage item as `synced_to_advance: true`
+      const syncedProp = `${item.field}SyncedToAdvance` as keyof CodDailyEntry;
+      const updatedEntries = gridEntries.map((e) => {
+        if (e.riderId !== row.riderId) return e;
+        return {
+          ...e,
+          [syncedProp]: true,
+          updatedAt: new Date().toISOString(),
+          updatedBy: activeUser.name,
+        };
+      });
+      setGridEntries(updatedEntries);
+      await saveCodDailyEntries(userId, selectedDate, updatedEntries);
+
+      // 3. Trigger background SMS using existing smsService with:
+      // Shortage amount added, Previous pending advance, New total pending advance, Statement link
+      const statementUrl = getRiderStatementUrl(row.riderId);
+      const smsText = formatAdvanceSmsText({
+        riderName,
+        amount: shortAmount,
+        reason: reasonText,
+        totalAdvance: newTotalAdvance,
+        statementUrl,
+      });
+
+      dispatchAutomatedSms({
+        riderName,
+        riderPhone,
+        amount: shortAmount,
+        message: smsText,
+        type: 'advance',
+        statementUrl,
+      }).catch((e) => console.warn('Background shortage SMS notice:', e));
+
+      showToast(`✅ ₹${shortAmount} ${shortType} सफलतापूर्वक एडवांस खाते में ट्रांसफर कर दिया गया एवं SMS भेजा गया!`, 'success');
+    } catch (err: any) {
+      console.error('Error syncing shortage to advance:', err);
+      showToast('एडवांस खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
+    }
+  };
+
+  // Surplus (Excess Cash) Auto-Transfer to Incentive Ledger with SMS Trigger
+  const handleAddSurplusToIncentive = async (data: {
+    surplusAmount: number;
+    source: string;
+    date: string;
+  }) => {
+    if (!shortageModal) return;
+    const targetRider = activeTenantRiders.find((r) => r.id === shortageModal.riderId);
+    const riderName = targetRider ? targetRider.name : shortageModal.riderName;
+    const riderPhone = targetRider ? targetRider.phone : '';
+    const reasonText = `अतिरिक्त जमा: ${data.source} (${data.date})`;
+
+    try {
+      // 1. Write directly to incentives collection
+      const incId = await writeIncentiveEntryToFirestore(userId, {
+        riderId: shortageModal.riderId,
+        riderName,
+        riderPhone,
+        amount: data.surplusAmount,
+        date: data.date,
+        reason: reasonText,
+        source: 'surplus',
+        createdBy: activeUser.name,
+      });
+
+      // 2. Update rider incentive in profile & statement
+      if (targetRider) {
+        const prevTotal = Number(targetRider.totalIncentive) || 0;
+        const newTotalIncentive = prevTotal + data.surplusAmount;
+        const newIncItem: RiderIncentiveEntry = {
+          id: incId,
+          riderId: targetRider.id,
+          riderName: targetRider.name,
+          riderPhone: targetRider.phone,
+          amount: data.surplusAmount,
+          date: data.date,
+          reason: reasonText,
+          source: 'surplus',
+          createdAt: new Date().toISOString(),
+          createdBy: activeUser.name,
+        };
+        const updatedIncentives = [newIncItem, ...(targetRider.incentives || [])];
+        const updatedRider: Rider = {
+          ...targetRider,
+          totalIncentive: newTotalIncentive,
+          incentives: updatedIncentives,
+        };
+        await saveRiderToFirestore(userId, updatedRider);
+        try {
+          await syncPublicRiderStatement(updatedRider, updatedRider.advances || []);
+        } catch (e) {
+          console.warn('Notice syncing statement for surplus incentive:', e);
+        }
+      }
+
+      // 3. Trigger background SMS confirmation
+      const statementUrl = getRiderStatementUrl(shortageModal.riderId);
+      const smsText = formatIncentiveSmsText({
+        riderName,
+        amount: data.surplusAmount,
+        reason: reasonText,
+        statementUrl,
+      });
+
+      dispatchAutomatedSms({
+        riderName,
+        riderPhone,
+        amount: data.surplusAmount,
+        message: smsText,
+        type: 'general',
+        statementUrl,
+      }).catch((e) => console.warn('Background surplus SMS notice:', e));
+
+      showToast(`🎉 ₹${data.surplusAmount} सरप्लस सफलतापूर्वक ${riderName} के इंसेंटिव खाते में जोड़ दिया गया एवं SMS भेजा गया!`, 'success');
+    } catch (err: any) {
+      console.error('Error adding surplus to incentive:', err);
+      showToast('इंसेंटिव में जोड़ने में त्रुटि हुई।', 'error');
+    }
   };
 
   // Clear Shortage for Field
@@ -905,9 +1107,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
       items: Array<{
         field: 'company1' | 'company2' | 'cash' | 'online';
         fieldLabel: string;
+        sourceType: 'cod' | 'cash_online';
         reported: number;
         received: number;
         shortage: number;
+        syncedToAdvance: boolean;
         notes?: string;
         flaggedBy?: string;
         flaggedAt?: string;
@@ -921,9 +1125,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
       const items: Array<{
         field: 'company1' | 'company2' | 'cash' | 'online';
         fieldLabel: string;
+        sourceType: 'cod' | 'cash_online';
         reported: number;
         received: number;
         shortage: number;
+        syncedToAdvance: boolean;
         notes?: string;
         flaggedBy?: string;
         flaggedAt?: string;
@@ -933,9 +1139,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
         items.push({
           field: 'company1',
           fieldLabel: settings.company1Name,
+          sourceType: 'cod',
           reported: row.company1Amount,
           received: row.company1ActualReceived ?? Math.max(0, row.company1Amount - row.company1Shortage),
           shortage: row.company1Shortage,
+          syncedToAdvance: !!row.company1SyncedToAdvance,
           notes: row.company1ShortageNotes,
           flaggedBy: row.company1ShortageFlaggedBy,
           flaggedAt: row.company1ShortageFlaggedAt,
@@ -946,9 +1154,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
         items.push({
           field: 'company2',
           fieldLabel: settings.company2Name,
+          sourceType: 'cod',
           reported: row.company2Amount,
           received: row.company2ActualReceived ?? Math.max(0, row.company2Amount - row.company2Shortage),
           shortage: row.company2Shortage,
+          syncedToAdvance: !!row.company2SyncedToAdvance,
           notes: row.company2ShortageNotes,
           flaggedBy: row.company2ShortageFlaggedBy,
           flaggedAt: row.company2ShortageFlaggedAt,
@@ -959,9 +1169,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
         items.push({
           field: 'cash',
           fieldLabel: 'Cash Deposit',
+          sourceType: 'cash_online',
           reported: row.cashDeposit,
           received: row.cashActualReceived ?? Math.max(0, row.cashDeposit - row.cashShortage),
           shortage: row.cashShortage,
+          syncedToAdvance: !!row.cashSyncedToAdvance,
           notes: row.cashShortageNotes,
           flaggedBy: row.cashShortageFlaggedBy,
           flaggedAt: row.cashShortageFlaggedAt,
@@ -972,9 +1184,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
         items.push({
           field: 'online',
           fieldLabel: 'Online Deposit',
+          sourceType: 'cash_online',
           reported: row.onlineDeposit,
           received: row.onlineActualReceived ?? Math.max(0, row.onlineDeposit - row.onlineShortage),
           shortage: row.onlineShortage,
+          syncedToAdvance: !!row.onlineSyncedToAdvance,
           notes: row.onlineShortageNotes,
           flaggedBy: row.onlineShortageFlaggedBy,
           flaggedAt: row.onlineShortageFlaggedAt,
@@ -1962,38 +2176,67 @@ export const CodStandaloneApp: React.FC<Props> = ({
                           </div>
 
                           {/* Component breakdown */}
-                          <div className="mt-2.5 space-y-1.5">
+                          <div className="mt-2.5 space-y-2">
                             {items.map((item, idx) => (
                               <div
                                 key={idx}
-                                className="p-2 rounded-lg bg-slate-900 border border-slate-800 text-[11px] flex items-center justify-between gap-2"
+                                className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
                               >
-                                <div className="min-w-0">
+                                <div className="min-w-0 space-y-1">
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="font-bold text-amber-300">{item.fieldLabel}:</span>
+                                    {/* Clearly badge the shortage type: [COD शॉर्टेज] vs [कैश/ऑनलाइन शॉर्टेज] */}
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold uppercase border ${
+                                        item.sourceType === 'cod'
+                                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                          : 'bg-blue-500/20 text-blue-300 border-blue-500/40'
+                                      }`}
+                                    >
+                                      {item.sourceType === 'cod' ? '[COD शॉर्टेज]' : '[कैश/ऑनलाइन शॉर्टेज]'}
+                                    </span>
+                                    <span className="font-bold text-white">{item.fieldLabel}:</span>
                                     <span className="text-slate-300 font-mono">
-                                      Reported ₹{item.reported} ➔ Recv ₹{item.received}
+                                      Reported ₹{item.reported} ➔ Recv/Actual ₹{item.received}
                                     </span>
                                   </div>
                                   {item.notes && (
-                                    <p className="text-[10px] text-slate-400 italic truncate mt-0.5">
+                                    <p className="text-[10px] text-slate-400 italic truncate">
                                       विवरण: "{item.notes}"
                                     </p>
                                   )}
                                 </div>
                                 
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  <span className="font-mono font-black text-rose-400 text-xs bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-500/30">
+                                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                                  <span className="font-mono font-black text-rose-400 text-xs bg-rose-950/60 px-2 py-0.5 rounded-lg border border-rose-500/30">
                                     -₹{item.shortage} Short
                                   </span>
+
+                                  {/* One-click Advance Sync Button / Synced Badge */}
+                                  {item.syncedToAdvance ? (
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                      <span>✓ एडवांस खाते में ट्रांसफर्ड</span>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSyncShortageToAdvance(row, item)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white text-[11px] font-bold shadow transition cursor-pointer active:scale-95"
+                                      title="इस शॉर्टेज को राइडर के एडवांस लेजर खाते में ट्रांसफर करें और SMS भेजें"
+                                    >
+                                      <ArrowRightCircle className="w-3.5 h-3.5" />
+                                      <span>एडवांस खाते में ट्रांसफर करें (Transfer to Advance)</span>
+                                    </button>
+                                  )}
+
                                   {checkFieldVerificationPermission(item.field) && (
                                     <button
                                       type="button"
                                       onClick={() => handleOpenShortageModal(row, item.field)}
-                                      className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                                      className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
                                       title="Edit or Clear Shortage"
                                     >
-                                      <Edit3 className="w-3 h-3 text-amber-400" />
+                                      <Edit3 className="w-3.5 h-3.5 text-amber-400" />
                                     </button>
                                   )}
                                 </div>
@@ -2493,148 +2736,25 @@ export const CodStandaloneApp: React.FC<Props> = ({
         </div>
       </nav>
 
-      {/* 5. PER-FIELD SHORTAGE & DISCREPANCY MARKING MODAL */}
+      {/* 5. PER-FIELD SHORTAGE & DISCREPANCY AUDIT MODAL */}
       {shortageModal && (
-        <div className="fixed inset-0 z-[125] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-rose-500/50 w-full max-w-md rounded-2xl p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/40">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                    <span>Shortage / Discrepancy Marking</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400 font-medium">
-                    {shortageModal.riderName} • <span className="text-amber-300 font-bold">{shortageModal.fieldLabel}</span>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShortageModal(null)}
-                className="text-slate-400 hover:text-white p-1 text-sm font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3.5">
-              {/* Reported / Due Amount Display */}
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
-                    Reported / Due Amount (दर्ज राशि)
-                  </span>
-                  <span className="text-xs text-slate-300 font-medium">
-                    As reported by rider
-                  </span>
-                </div>
-                <span className="text-base font-black text-white font-mono">
-                  {formatINR(shortageModal.reportedAmount)}
-                </span>
-              </div>
-
-              {/* Actual Received Amount Input */}
-              <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
-                  Actual Received Amount (वास्तविक प्राप्त राशि ₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  autoFocus
-                  value={shortageModal.actualReceived === 0 ? '' : shortageModal.actualReceived}
-                  onChange={(e) => {
-                    const val = Math.max(0, parseFloat(e.target.value) || 0);
-                    const calcShortage = Math.max(0, shortageModal.reportedAmount - val);
-                    setShortageModal({
-                      ...shortageModal,
-                      actualReceived: val,
-                      shortageAmount: calcShortage,
-                    });
-                  }}
-                  placeholder="0"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-emerald-300 font-mono font-bold focus:outline-none focus:border-rose-500"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  Enter physical cash or verified online amount handed in by rider.
-                </span>
-              </div>
-
-              {/* Auto-Calculated Shortage Amount Alert Card */}
-              <div className={`p-3.5 rounded-xl border flex items-center justify-between ${
-                shortageModal.shortageAmount > 0
-                  ? 'bg-rose-950/40 border-rose-500/50 text-rose-200'
-                  : 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
-              }`}>
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider block">
-                    {shortageModal.shortageAmount > 0 ? '⚠️ Calculated Shortage (कमी राशि)' : '✓ Verification Status'}
-                  </span>
-                  <span className="text-xs text-slate-300 font-medium">
-                    {shortageModal.shortageAmount > 0
-                      ? `Reported ${formatINR(shortageModal.reportedAmount)} - Received ${formatINR(shortageModal.actualReceived)}`
-                      : 'No Shortage (Full amount received)'}
-                  </span>
-                </div>
-                <span className={`text-base font-black font-mono ${
-                  shortageModal.shortageAmount > 0 ? 'text-rose-300' : 'text-emerald-300'
-                }`}>
-                  {shortageModal.shortageAmount > 0 ? `-${formatINR(shortageModal.shortageAmount)}` : '₹0 Short'}
-                </span>
-              </div>
-
-              {/* Optional Discrepancy Reason / Note */}
-              <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
-                  Shortage Reason / Remark (कारण / विवरण - Optional)
-                </label>
-                <input
-                  type="text"
-                  value={shortageModal.notes}
-                  onChange={(e) => setShortageModal({ ...shortageModal, notes: e.target.value })}
-                  placeholder="e.g. ₹500 short in cash handoff, rider to clear tomorrow"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center justify-between gap-2 pt-2">
-                {shortageModal.shortageAmount > 0 || Number(gridEntries.find(r => r.riderId === shortageModal.riderId)?.[`${shortageModal.field}Shortage` as keyof CodDailyEntry] || 0) > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => handleClearShortage(shortageModal.riderId, shortageModal.field)}
-                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-300 hover:text-rose-200 text-xs font-bold transition border border-rose-500/30 cursor-pointer"
-                  >
-                    Clear Shortage
-                  </button>
-                ) : (
-                  <div />
-                )}
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShortageModal(null)}
-                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveShortage}
-                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-950/50 transition cursor-pointer"
-                  >
-                    Confirm Shortage
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <CodShortageModal
+          isOpen={shortageModal.isOpen}
+          onClose={() => setShortageModal(null)}
+          riderId={shortageModal.riderId}
+          riderName={shortageModal.riderName}
+          riderPhone={activeTenantRiders.find((r) => r.id === shortageModal.riderId)?.phone}
+          field={shortageModal.field}
+          fieldLabel={shortageModal.fieldLabel}
+          reportedAmount={shortageModal.reportedAmount}
+          initialActual={shortageModal.actualReceived}
+          initialNotes={shortageModal.notes}
+          currentShortage={shortageModal.shortageAmount}
+          date={selectedDate}
+          onSaveShortage={handleSaveShortage}
+          onClearShortage={() => handleClearShortage(shortageModal.riderId, shortageModal.field)}
+          onAddSurplusToIncentive={handleAddSurplusToIncentive}
+        />
       )}
 
       {/* 4. ADD STAFF MEMBER MODAL (Supervisor, Hub Incharge, Team Leader) */}

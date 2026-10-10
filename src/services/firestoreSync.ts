@@ -35,6 +35,7 @@ import {
   DEFAULT_SUBSCRIPTION_CONFIG,
   createDefaultUserSubscription,
   RiderAdvanceEntry,
+  RiderIncentiveEntry,
   PublicRiderStatement
 } from '../types';
 import { 
@@ -2175,6 +2176,12 @@ export async function syncPublicRiderStatement(
         status: d.status,
       }));
 
+    const sortedIncentives = [...(rider.incentives || [])].sort((a, b) => {
+      const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
+      const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
+      return timeB - timeA;
+    });
+
     const statementPayload: PublicRiderStatement = {
       riderId: rider.id,
       riderName: rider.name,
@@ -2184,6 +2191,8 @@ export async function syncPublicRiderStatement(
       hubSignature: hubSignature || '',
       totalAdvance: typeof rider.totalAdvance === 'number' ? rider.totalAdvance : 0,
       advances: sortedAdvances,
+      totalIncentive: typeof rider.totalIncentive === 'number' ? rider.totalIncentive : 0,
+      incentives: sortedIncentives,
       salaries: riderSettlements,
       recentDeliveries,
       updatedAt: new Date().toISOString(),
@@ -2550,6 +2559,158 @@ export async function syncAllRidersPublicStatements(
       await syncPublicRiderStatement(r, r.advances || [], settlements, deliveries, hubName, hubSignature);
     } catch (e) {
       console.warn('Notice syncing statement for rider:', r.name, e);
+    }
+  }
+}
+
+/**
+ * Write advance entry directly to Firestore 'advances' collection
+ */
+export async function writeAdvanceEntryToFirestore(
+  userId: string,
+  advance: {
+    id?: string;
+    riderId: string;
+    riderName?: string;
+    riderPhone?: string;
+    amount: number;
+    date: string;
+    reason: string;
+    runningBalance?: number;
+  }
+): Promise<string> {
+  const advId = advance.id || `adv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const advData = cleanForFirestore({
+    id: advId,
+    riderId: advance.riderId,
+    riderName: advance.riderName || '',
+    riderPhone: advance.riderPhone || '',
+    amount: advance.amount,
+    date: advance.date,
+    reason: advance.reason,
+    runningBalance: advance.runningBalance || advance.amount,
+    workspaceId: userId,
+    userId: userId,
+    createdAt: new Date().toISOString(),
+  });
+
+  try {
+    const advRef = doc(db, 'advances', advId);
+    await setDoc(advRef, advData, { merge: true });
+  } catch (err) {
+    console.warn('Direct /advances write notice:', err);
+  }
+
+  if (userId) {
+    try {
+      const wsAdvRef = doc(db, 'workspaces', userId, 'advances', advId);
+      await setDoc(wsAdvRef, advData, { merge: true });
+    } catch (err) {
+      console.warn('Workspace advances write notice:', err);
+    }
+  }
+
+  return advId;
+}
+
+/**
+ * Write incentive entry directly to Firestore 'incentives' collection
+ */
+export async function writeIncentiveEntryToFirestore(
+  userId: string,
+  incentive: {
+    id?: string;
+    riderId: string;
+    riderName?: string;
+    riderPhone?: string;
+    amount: number;
+    date: string;
+    reason: string;
+    source?: 'manual' | 'surplus';
+    createdBy?: string;
+  }
+): Promise<string> {
+  const incId = incentive.id || `inc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const incData = cleanForFirestore({
+    id: incId,
+    riderId: incentive.riderId,
+    riderName: incentive.riderName || '',
+    riderPhone: incentive.riderPhone || '',
+    amount: incentive.amount,
+    date: incentive.date,
+    reason: incentive.reason,
+    source: incentive.source || 'manual',
+    workspaceId: userId,
+    userId: userId,
+    createdBy: incentive.createdBy || '',
+    createdAt: new Date().toISOString(),
+  });
+
+  try {
+    const incRef = doc(db, 'incentives', incId);
+    await setDoc(incRef, incData, { merge: true });
+  } catch (err) {
+    console.warn('Direct /incentives write notice:', err);
+  }
+
+  if (userId) {
+    try {
+      const wsIncRef = doc(db, 'workspaces', userId, 'incentives', incId);
+      await setDoc(wsIncRef, incData, { merge: true });
+    } catch (err) {
+      console.warn('Workspace incentives write notice:', err);
+    }
+  }
+
+  return incId;
+}
+
+/**
+ * Delete advance document from Firestore root and workspace collections
+ */
+export async function deleteAdvanceFromFirestore(
+  userId: string,
+  advanceId: string
+): Promise<void> {
+  if (!advanceId) return;
+  try {
+    const advRef = doc(db, 'advances', advanceId);
+    await deleteDoc(advRef);
+  } catch (err) {
+    console.warn('Direct /advances delete notice:', err);
+  }
+
+  if (userId) {
+    try {
+      const wsAdvRef = doc(db, 'workspaces', userId, 'advances', advanceId);
+      await deleteDoc(wsAdvRef);
+    } catch (err) {
+      console.warn('Workspace /advances delete notice:', err);
+    }
+  }
+}
+
+/**
+ * Delete incentive document from Firestore root and workspace collections
+ */
+export async function deleteIncentiveFromFirestore(
+  userId: string,
+  incentiveId: string
+): Promise<void> {
+  if (!incentiveId) return;
+  try {
+    const incRef = doc(db, 'incentives', incentiveId);
+    await deleteDoc(incRef);
+  } catch (err) {
+    console.warn('Direct /incentives delete notice:', err);
+  }
+
+  if (userId) {
+    try {
+      const wsIncRef = doc(db, 'workspaces', userId, 'incentives', incentiveId);
+      await deleteDoc(wsIncRef);
+    } catch (err) {
+      console.warn('Workspace /incentives delete notice:', err);
     }
   }
 }

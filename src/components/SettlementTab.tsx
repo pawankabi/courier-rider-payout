@@ -194,10 +194,28 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
   const totalBaseAmount = filteredEntries.reduce((sum, e) => sum + e.baseAmount, 0);
   const totalIncentiveAmount = filteredEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
-  const grossTotal = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
+  const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
+
+  // Additional bonuses & incentives logged for this rider (festival bonus, performance rewards, surplus credits)
+  const riderBonusIncentives = useMemo(() => {
+    if (!selectedRider || !Array.isArray(selectedRider.incentives)) return 0;
+    return selectedRider.incentives
+      .filter((inc) => {
+        if (inc.settlementId) return false;
+        if (!startDate && !endDate) return true;
+        const incDate = inc.date || inc.createdAt?.slice(0, 10);
+        if (startDate && incDate < startDate) return false;
+        if (endDate && incDate > endDate) return false;
+        return true;
+      })
+      .reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
+  }, [selectedRider, startDate, endDate]);
+
+  // Gross Earning = Sum of daily delivery earnings + logged fleet incentives/bonuses
+  const grossTotal = deliveryGross + riderBonusIncentives;
 
   // Real-Time Calculation with Advance Deduction:
-  // Gross Earning = Sum of daily deliveries within the selected Date Range
+  // Gross Earning = Delivery Earnings + Bonus/Incentive within the selected Date Range
   // Total Advance Deducted = Entire active advance balance of the rider
   // Net Settlement = Gross Earning - Total Advance
   const numericAdvance = Math.max(0, Number(advanceAmount) || 0);
@@ -743,9 +761,14 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         {/* Real-time Calculation Breakdown Strip */}
         <div className="mt-4 p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-slate-400">Gross Total:</span>
               <span className="font-bold text-white">{formatINR(grossTotal)}</span>
+              {riderBonusIncentives > 0 && (
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-bold px-1.5 py-0.2 rounded border border-emerald-500/40">
+                  +₹{riderBonusIncentives} बोनस/इंसेंटिव
+                </span>
+              )}
             </div>
             <span className="text-slate-600 hidden sm:inline">—</span>
             <div className="flex items-center gap-1.5">
