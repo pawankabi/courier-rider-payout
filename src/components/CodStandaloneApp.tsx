@@ -56,8 +56,11 @@ import {
   loadCodAuditLogs, 
   recordCodAuditLog, 
   exportCodGridToCSV,
-  subscribeToDailyCodSheet
+  subscribeToDailyCodSheet,
+  fetchCodRiders
 } from '../services/codService';
+import { isEntityOwnedByUser } from '../services/firestoreSync';
+import { getRiderAppUrl } from '../utils/shareLink';
 import { 
   formatINR, 
   formatDateDisplay, 
@@ -84,6 +87,24 @@ export const CodStandaloneApp: React.FC<Props> = ({
 }) => {
   // Dedicated Bottom Navigation Tabs: 'grid' | 'access_control' | 'audit_logs' | 'settings'
   const [activeTab, setActiveTab] = useState<'grid' | 'access_control' | 'audit_logs' | 'settings'>('grid');
+
+  // Strict Multi-Tenant Rider Isolation:
+  // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab.
+  // Filters out riders belonging to other hubs (such as "Akash Mahato") completely from memory and display.
+  const activeTenantRiders = useMemo(() => {
+    if (!riders || !Array.isArray(riders)) return [];
+    const cleanUid = (userId || '').trim();
+    if (!cleanUid || cleanUid === 'guest') {
+      return riders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
+    }
+    return riders.filter((r) => {
+      const owner = (r.workspaceId || r.userId || r.hubId || r.ownerUid || r.createdBy || '').trim();
+      if (owner) {
+        return owner === cleanUid;
+      }
+      return isEntityOwnedByUser(r, cleanUid);
+    });
+  }, [riders, userId]);
 
   // Selected Date for COD Grid (defaults to Today)
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
@@ -190,7 +211,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
       try {
         const [loadedSettings, loadedStaff, loadedLogs] = await Promise.all([
           loadCodSettings(userId),
-          loadCodStaffUsers(userId, riders),
+          loadCodStaffUsers(userId, activeTenantRiders),
           loadCodAuditLogs(userId),
         ]);
 
@@ -203,8 +224,8 @@ export const CodStandaloneApp: React.FC<Props> = ({
           setAuditLogs(loadedLogs);
         }
 
-        // Load Grid for Selected Date
-        const entries = await loadCodDailyEntries(userId, selectedDate, riders);
+        // Load Grid for Selected Date strictly with active tenant riders
+        const entries = await loadCodDailyEntries(userId, selectedDate, activeTenantRiders);
         if (mounted) {
           setGridEntries(entries);
         }
@@ -219,7 +240,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
     return () => {
       mounted = false;
     };
-  }, [userId, riders]);
+  }, [userId, activeTenantRiders]);
 
   // 2. Real-Time bi-directional synchronization on daily_cod_sheets/{selectedDate}
   // Immediately syncs whenever a rider saves in companion app without needing page reload
@@ -230,7 +251,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
     setOwnerTemporaryUnlock(false);
 
     // Initial cache-first load
-    loadCodDailyEntries(userId, selectedDate, riders).then((entries) => {
+    loadCodDailyEntries(userId, selectedDate, activeTenantRiders).then((entries) => {
       if (mounted) {
         setGridEntries(entries);
       }
@@ -242,7 +263,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
       (sheetData) => {
         if (!mounted) return;
         if (sheetData && Array.isArray(sheetData.entries) && sheetData.entries.length > 0) {
-          // Reconcile entries with riders list
+          // Reconcile entries strictly with active tenant riders list
           const entryMap = new Map<string, CodDailyEntry>();
           sheetData.entries.forEach((e) => {
             if (e.riderId) entryMap.set(e.riderId, e);
@@ -250,7 +271,8 @@ export const CodStandaloneApp: React.FC<Props> = ({
             if (cleanPhone) entryMap.set(cleanPhone, e);
           });
 
-          const merged: CodDailyEntry[] = riders.map((r) => {
+          // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab
+          const merged: CodDailyEntry[] = activeTenantRiders.map((r) => {
             const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
             const ex = entryMap.get(r.id) || (cleanPhone ? entryMap.get(cleanPhone) : undefined);
             if (ex) {
@@ -284,24 +306,14 @@ export const CodStandaloneApp: React.FC<Props> = ({
             };
           });
 
-          // Also include any rider rows present in sheet that might not be in riders array
-          sheetData.entries.forEach((e) => {
-            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-            const alreadyInMerged = merged.some((m) => 
-              m.riderId === e.riderId ||
-              ((m.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanPhone && cleanPhone)
-            );
-            if (!alreadyInMerged) {
-              merged.push(e);
-            }
-          });
-
+          // STRICT PRIVACY PROTECTION: Any entry not in activeTenantRiders is completely excluded!
           setGridEntries(merged);
         }
       },
       (err) => {
         console.warn('Real-time sheet subscription notice in admin app:', err);
-      }
+      },
+      userId
     );
 
     return () => {
@@ -310,7 +322,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
         unsubscribe();
       }
     };
-  }, [selectedDate, userId, riders]);
+  }, [selectedDate, userId, activeTenantRiders]);
 
   // Fail-Safe Midnight / Historical Date Check
   const todayDateStr = getTodayDateString();
@@ -979,17 +991,16 @@ export const CodStandaloneApp: React.FC<Props> = ({
       {/* 1. DEDICATED TOP APP BAR FOR COD SUB-APP */}
       <header className="bg-gradient-to-r from-emerald-950 via-slate-900 to-sky-950 px-3 py-2.5 sm:px-5 sm:py-3 border-b border-emerald-500/30 flex items-center justify-between gap-3 shrink-0 shadow-lg shadow-emerald-950/40 z-30">
         <div className="flex items-center gap-3">
-          {/* Prominent Exit Button */}
+          {/* Prominent Exit Button to Admin Dashboard */}
           <button
             type="button"
             id="exit-to-main-app-btn"
             onClick={onExit}
             className="inline-flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800/90 hover:bg-slate-750 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs sm:text-sm font-bold shadow-md transition active:scale-95 cursor-pointer"
-            title="Exit standalone sub-app and return to main Riders tab"
+            title="वापस एडमिन डैशबोर्ड (Back to Admin)"
           >
             <ArrowLeft className="w-4 h-4 text-emerald-400" />
-            <span className="hidden sm:inline">← Exit to Main App</span>
-            <span className="sm:hidden">← वापस जाएँ</span>
+            <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
           </button>
 
           <div className="h-6 w-px bg-slate-700 hidden sm:block" />
@@ -1026,7 +1037,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
             type="button"
             id="open-companion-app-top-btn"
             onClick={() => {
-              const companionUrl = `${window.location.origin}/#cod-entry`;
+              const companionUrl = getRiderAppUrl();
               if (navigator.clipboard) {
                 navigator.clipboard.writeText(companionUrl);
                 showToast('📋 राइडर ऐप लिंक कॉपी हो गया! डिलीवरी बॉय को WhatsApp पर भेजें।', 'success');
@@ -2054,7 +2065,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const url = `${window.location.origin}/#cod-entry`;
+                    const url = getRiderAppUrl();
                     if (navigator.clipboard) {
                       navigator.clipboard.writeText(url);
                       showToast('📋 लिंक कॉपी हो गया! डिलीवरी बॉय को WhatsApp पर भेजें।', 'success');
@@ -2067,7 +2078,12 @@ export const CodStandaloneApp: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    window.location.hash = '/cod-entry';
+                    const riderUrl = getRiderAppUrl();
+                    try {
+                      window.open(riderUrl, '_blank');
+                    } catch {
+                      window.location.hash = '/cod-entry';
+                    }
                   }}
                   className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow"
                 >

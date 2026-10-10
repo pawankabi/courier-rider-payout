@@ -52,6 +52,7 @@ import {
   subscribeToDailyCodSheet
 } from '../services/codService';
 import { formatINR, formatDateDisplay, getTodayDateString, getDaysAgoDateString } from '../utils/formatters';
+import { isEntityOwnedByUser } from '../services/firestoreSync';
 
 interface Props {
   isOpen: boolean;
@@ -132,6 +133,23 @@ export const CodManagementModal: React.FC<Props> = ({
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Strict Multi-Tenant Rider Isolation:
+  // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab.
+  const activeTenantRiders = useMemo(() => {
+    if (!riders || !Array.isArray(riders)) return [];
+    const cleanUid = (userId || '').trim();
+    if (!cleanUid || cleanUid === 'guest') {
+      return riders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
+    }
+    return riders.filter((r) => {
+      const owner = (r.workspaceId || r.userId || r.hubId || r.ownerUid || r.createdBy || '').trim();
+      if (owner) {
+        return owner === cleanUid;
+      }
+      return isEntityOwnedByUser(r, cleanUid);
+    });
+  }, [riders, userId]);
+
   // 1. Initial Load of Settings, Staff, and Today's Grid
   useEffect(() => {
     if (!isOpen) return;
@@ -142,7 +160,7 @@ export const CodManagementModal: React.FC<Props> = ({
       try {
         const [loadedSettings, loadedStaff, loadedLogs] = await Promise.all([
           loadCodSettings(userId),
-          loadCodStaffUsers(userId, riders),
+          loadCodStaffUsers(userId, activeTenantRiders),
           loadCodAuditLogs(userId),
         ]);
 
@@ -155,7 +173,7 @@ export const CodManagementModal: React.FC<Props> = ({
         }
 
         // Load Grid for Selected Date
-        const entries = await loadCodDailyEntries(userId, selectedDate, riders);
+        const entries = await loadCodDailyEntries(userId, selectedDate, activeTenantRiders);
         if (mounted) {
           setGridEntries(entries);
         }
@@ -170,7 +188,7 @@ export const CodManagementModal: React.FC<Props> = ({
     return () => {
       mounted = false;
     };
-  }, [isOpen, userId, riders]);
+  }, [isOpen, userId, activeTenantRiders]);
 
   // 2. Real-Time bi-directional synchronization on daily_cod_sheets/{selectedDate}
   useEffect(() => {
@@ -179,7 +197,7 @@ export const CodManagementModal: React.FC<Props> = ({
     let mounted = true;
 
     // Cache-first fast initialization
-    loadCodDailyEntries(userId, selectedDate, riders).then((entries) => {
+    loadCodDailyEntries(userId, selectedDate, activeTenantRiders).then((entries) => {
       if (mounted) {
         setGridEntries(entries);
       }
@@ -198,7 +216,7 @@ export const CodManagementModal: React.FC<Props> = ({
             if (cleanPhone) entryMap.set(cleanPhone, e);
           });
 
-          const merged: CodDailyEntry[] = riders.map((r) => {
+          const merged: CodDailyEntry[] = activeTenantRiders.map((r) => {
             const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
             const ex = entryMap.get(r.id) || (cleanPhone ? entryMap.get(cleanPhone) : undefined);
             if (ex) {
@@ -232,18 +250,7 @@ export const CodManagementModal: React.FC<Props> = ({
             };
           });
 
-          // Also include any rider rows present in sheet that aren't in riders list
-          sheetData.entries.forEach((e) => {
-            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-            const alreadyInMerged = merged.some((m) => 
-              m.riderId === e.riderId ||
-              ((m.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanPhone && cleanPhone)
-            );
-            if (!alreadyInMerged) {
-              merged.push(e);
-            }
-          });
-
+          // Strictly filter out any alien riders from other hubs
           setGridEntries(merged);
         }
       },
@@ -259,7 +266,7 @@ export const CodManagementModal: React.FC<Props> = ({
         unsubscribe();
       }
     };
-  }, [selectedDate, userId, riders, isOpen]);
+  }, [selectedDate, userId, activeTenantRiders, isOpen]);
 
   // Smooth Escape key handler
   useEffect(() => {

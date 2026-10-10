@@ -117,6 +117,7 @@ import { VerifiedBadge } from './components/VerifiedBadge';
 import { ProfileSettingsModal } from './components/ProfileSettingsModal';
 import { CodStandaloneApp } from './components/CodStandaloneApp';
 import { CodCompanionApp } from './components/CodCompanionApp';
+import { ShareAppModal } from './components/ShareAppModal';
 
 /**
  * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
@@ -312,6 +313,7 @@ function MainCourierApp() {
   const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
   const [isCodStandaloneOpen, setIsCodStandaloneOpen] = useState(false);
   const [isCodCompanionOpen, setIsCodCompanionOpen] = useState(false);
+  const [isShareAppModalOpen, setIsShareAppModalOpen] = useState(false);
   const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
 
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
@@ -1922,15 +1924,9 @@ function MainCourierApp() {
             {isSuperAdminUser && (
               <button
                 id="header-share-app-link-btn"
-                onClick={async () => {
-                  await copyAppShareLink();
-                  setToastMessage({
-                    text: SHARE_SUCCESS_MESSAGE,
-                    type: 'success',
-                  });
-                }}
+                onClick={() => setIsShareAppModalOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md shadow-blue-600/20 transition active:scale-95 cursor-pointer"
-                title="Copy web app preview link to share with riders and team"
+                title="Share dynamic app links with riders and team"
               >
                 <Share2 className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Share App Link</span>
@@ -2568,6 +2564,13 @@ function MainCourierApp() {
         />
       )}
 
+      {/* Share App Link & Dynamic Portal Modal */}
+      <ShareAppModal
+        isOpen={isShareAppModalOpen}
+        onClose={() => setIsShareAppModalOpen(false)}
+        onToast={(text, type) => setToastMessage({ text, type: type || 'success' })}
+      />
+
       {/* Regular User Subscription / Payment Slip Modal */}
       {!isSuperAdminUser && (
         <UserPaymentModal
@@ -2651,6 +2654,28 @@ function MainCourierApp() {
  * Do NOT render the main layout, do NOT render the Header (Courier Payout Pro), do NOT show Sign In / Sync, and do NOT show Daily Delivery Entry.
  */
 export default function App() {
+  // 1. Standalone Rider APK Boot & Direct Route Interception:
+  // For the standalone Rider APK build, the app must boot directly into <CodCompanionApp /> on startup without opening any browser or external intent.
+  const initialAppTarget = (import.meta.env.VITE_APP_TARGET || '').trim().toLowerCase();
+  const isCompanionBuild = initialAppTarget === 'cod_companion' || initialAppTarget === 'rider' || initialAppTarget === 'companion';
+  const isCompanionHostname = typeof window !== 'undefined' && (
+    window.location.hostname.includes('cod-entry') || 
+    window.location.hostname === 'cod-entry-rider.firebaseapp.com'
+  );
+  const isCompanionHashOrPath = typeof window !== 'undefined' && (
+    window.location.hash.includes('cod-entry') || 
+    window.location.hash.includes('rider') ||
+    window.location.pathname.includes('/cod-entry') ||
+    window.location.pathname.includes('/cod') ||
+    window.location.pathname.includes('/companion') ||
+    window.location.search.includes('app=cod-entry') ||
+    window.location.search.includes('app=rider')
+  );
+
+  if (isCompanionBuild || isCompanionHostname || isCompanionHashOrPath) {
+    return <CodCompanionApp />;
+  }
+
   const [statementRiderId, setStatementRiderId] = useState<string | null>(() => parseRiderStatementRoute());
   const [isCodCompanionRoute, setIsCodCompanionRoute] = useState<boolean>(() => parseCodCompanionRoute());
   const [isNativeCompanionPackage, setIsNativeCompanionPackage] = useState<boolean>(false);
@@ -2688,8 +2713,8 @@ export default function App() {
   const isExplicitAdminTarget = companionEnv === 'admin';
 
   // 1. Standalone Companion App APK (assembleRiderRelease): "COD Entry (हिसाब किताब)" for Riders & Staff
-  // Root route '/' strictly loads CodCompanionApp login only
-  if (isExplicitCompanionTarget) {
+  // Root route '/' strictly loads CodCompanionApp login only without opening any browser or external intent
+  if (isExplicitCompanionTarget || isNativeCompanionPackage) {
     return <CodCompanionApp />;
   }
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { MessageCircle, Send, X, Check, Copy, ExternalLink, Sparkles } from 'lucide-react';
 import { formatINR } from '../utils/formatters';
+import { getRiderStatementUrl } from '../utils/shareLink';
 
 interface InstantShareSuccessModalProps {
   isOpen: boolean;
@@ -32,7 +33,7 @@ export const InstantShareSuccessModal: React.FC<InstantShareSuccessModalProps> =
 
   if (!isOpen) return null;
 
-  const statementUrl = `https://courier-rider-payout.vercel.app/#/statement/${encodeURIComponent(riderId)}`;
+  const statementUrl = getRiderStatementUrl(riderId);
   const message = customMessage || `नमस्ते ${riderName}, आपका पे-आउट/एडवांस अपडेट कर दिया गया है। कुल बकाया/हिसाब देखने के लिए खाता लेजर लिंक पर क्लिक करें: ${statementUrl}`;
   const cleanPhone = (riderPhone || '').trim().replace(/\D/g, '').slice(-10);
 

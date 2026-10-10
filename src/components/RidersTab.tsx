@@ -28,11 +28,16 @@ import {
   IndianRupee,
   FileSpreadsheet,
   Plus,
-  Table
+  Table,
+  Share2
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings } from '../types';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
 import { generateStatementUrl, formatSalarySmsText, dispatchAutomatedSms, getWhatsAppUrl, getNativeSmsUrl } from '../services/smsService';
+import { 
+  getRiderAppUrl, 
+  copyAppShareLink 
+} from '../utils/shareLink';
 import { 
   formatINR, 
   isValidIndianPhone, 
@@ -45,6 +50,8 @@ import { FestivalBannerCard } from './FestivalBannerCard';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
 import { BulkDateRangeSmsModal } from './BulkDateRangeSmsModal';
 import { CodManagementModal } from './CodManagementModal';
+import { CodCompanionApp } from './CodCompanionApp';
+import { CodStandaloneApp } from './CodStandaloneApp';
 import { loadCodSettings, DEFAULT_COD_SETTINGS } from '../services/codService';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
@@ -112,7 +119,28 @@ export const RidersTab: React.FC<Props> = ({
 }) => {
   // COD हिसाब-किताब Sub-App Modal State & Feature Flag
   const [isCodModalOpen, setIsCodModalOpen] = useState(false);
+  const [copiedRiderUrl, setCopiedRiderUrl] = useState(false);
   const [codSettings, setCodSettings] = useState<CodSettings>(DEFAULT_COD_SETTINGS);
+  const [isInternalCompanionOpen, setIsInternalCompanionOpen] = useState(false);
+  const [isInternalStandaloneOpen, setIsInternalStandaloneOpen] = useState(false);
+
+  // 1. Rider Companion Action: strictly opens CodCompanionApp
+  const handleOpenCompanion = () => {
+    if (onOpenCodCompanion) {
+      onOpenCodCompanion();
+    } else {
+      setIsInternalCompanionOpen(true);
+    }
+  };
+
+  // 2. Admin Standalone COD Portal Action: strictly opens CodStandaloneApp
+  const handleOpenStandalonePortal = () => {
+    if (onOpenCodPortal) {
+      onOpenCodPortal();
+    } else {
+      setIsInternalStandaloneOpen(true);
+    }
+  };
 
   useEffect(() => {
     loadCodSettings(userId).then(setCodSettings);
@@ -135,6 +163,28 @@ export const RidersTab: React.FC<Props> = ({
       localStorage.setItem('cp_riders_status_filter', statusFilter);
     } catch {}
   }, [statusFilter]);
+
+  // Full-screen in-app rendering of CodCompanionApp when opened internally without external browser
+  if (isInternalCompanionOpen) {
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-900 overflow-y-auto">
+        <CodCompanionApp onBackToMainApp={() => setIsInternalCompanionOpen(false)} />
+      </div>
+    );
+  }
+
+  // Full-screen in-app rendering of Admin Standalone COD Grid/Sub-App (CodStandaloneApp)
+  if (isInternalStandaloneOpen) {
+    return (
+      <CodStandaloneApp
+        onExit={() => setIsInternalStandaloneOpen(false)}
+        riders={riders}
+        userId={userId || 'guest'}
+        isSuperAdmin={Boolean(isSuperAdmin)}
+        hubName={hubName}
+      />
+    );
+  }
 
   // Advance Management Modal state
   const [advanceModalRider, setAdvanceModalRider] = useState<Rider | null>(null);
@@ -831,10 +881,7 @@ export const RidersTab: React.FC<Props> = ({
               <button
                 type="button"
                 id="open-cod-portal-top-btn"
-                onClick={() => {
-                  if (onOpenCodPortal) onOpenCodPortal();
-                  else setIsCodModalOpen(true);
-                }}
+                onClick={handleOpenStandalonePortal}
                 className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-gradient-to-r from-emerald-600/25 to-teal-600/25 hover:from-emerald-600/35 hover:to-teal-600/35 text-emerald-300 border border-emerald-500/40 text-xs font-bold rounded-xl active:scale-95 transition shadow-sm cursor-pointer"
                 title="Open Multi-Company COD हिसाब-किताब & Staff PIN Portal"
               >
@@ -862,11 +909,9 @@ export const RidersTab: React.FC<Props> = ({
                         Standalone Sub-App
                       </span>
                     </h3>
-                    {isSuperAdmin && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
-                        {codSettings.isEnabled ? '✓ Public to Staff' : '🔒 Admin Only Mode'}
-                      </span>
-                    )}
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
+                      ✓ Public to Staff
+                    </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-0.5">
                     Multi-Company Excel Grid ({codSettings.company1Name} / {codSettings.company2Name}), Daily Cash/UPI Deposits, Balance Tally & 4-Digit Staff PIN Security.
@@ -878,30 +923,47 @@ export const RidersTab: React.FC<Props> = ({
                 <button
                   type="button"
                   id="open-cod-companion-banner-btn"
-                  onClick={() => {
-                    if (onOpenCodCompanion) {
-                      onOpenCodCompanion();
-                    } else {
-                      window.location.hash = '/cod-entry';
-                    }
-                  }}
+                  onClick={handleOpenCompanion}
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold text-xs shadow-sm active:scale-95 transition cursor-pointer"
                   title="डिलीवरी बॉय साथी ऐप (COD Entry Companion)"
                 >
                   <Bike className="w-4 h-4 text-emerald-400" />
-                  <span>📱 साथी ऐप (Rider Entry)</span>
+                  <span>📲 साथी ऐप (Rider Entry)</span>
                 </button>
                 <button
                   type="button"
                   id="open-cod-portal-main-btn"
-                  onClick={() => {
-                    if (onOpenCodPortal) onOpenCodPortal();
-                    else setIsCodModalOpen(true);
-                  }}
+                  onClick={handleOpenStandalonePortal}
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-md shadow-emerald-500/25 active:scale-95 transition cursor-pointer"
+                  title="Open Admin Standalone COD Portal"
                 >
                   <Table className="w-4 h-4 text-slate-950" />
                   <span>Open Standalone Portal</span>
+                </button>
+                <button
+                  type="button"
+                  id="share-cod-rider-url-btn"
+                  onClick={async () => {
+                    const copied = await copyAppShareLink('https://courier-rider-payout.vercel.app/#cod-entry');
+                    if (copied) {
+                      setCopiedRiderUrl(true);
+                      setTimeout(() => setCopiedRiderUrl(false), 2500);
+                    }
+                  }}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs shadow-sm active:scale-95 transition cursor-pointer"
+                  title="साथी ऐप लिंक कॉपी करें (WhatsApp Share)"
+                >
+                  {copiedRiderUrl ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-400" />
+                      <span className="text-emerald-400">कॉपी हो गया!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Share2 className="w-4 h-4 text-blue-400" />
+                      <span>शेयर लिंक</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

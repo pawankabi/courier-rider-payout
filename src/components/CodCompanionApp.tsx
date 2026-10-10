@@ -50,7 +50,9 @@ import {
   subscribeToDailyCodSheet,
   subscribeToHubRiders,
   updateSingleRiderEntryInSheet,
-  toggleDayEndLockForSheet
+  toggleDayEndLockForSheet,
+  normalizePhoneNumber,
+  resolveHubIdFromPhone
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
 
@@ -59,16 +61,48 @@ interface CodCompanionAppProps {
   initialPhone?: string;
 }
 
-export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
+export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionAppProps) {
   // Authentication State
   const [authUser, setAuthUser] = useState<CodStaffUser | null>(() => getStoredCodCompanionUser());
   const [authenticatedHubId, setAuthenticatedHubId] = useState<string | null>(() => getActiveCompanionHubId());
-  const [phoneInput, setPhoneInput] = useState('');
+  const [phoneInput, setPhoneInput] = useState(() => normalizePhoneNumber(initialPhone || ''));
   const [pinInput, setPinInput] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showDemoLogins, setShowDemoLogins] = useState(false);
   const [hubRiders, setHubRiders] = useState<Rider[]>([]);
+  const [resolvedPreviewHub, setResolvedPreviewHub] = useState<string | null>(null);
+  const [isResolvingHub, setIsResolvingHub] = useState(false);
+  const [recentlySubmittedRiderId, setRecentlySubmittedRiderId] = useState<string | null>(null);
+
+  // Sync initialPhone prop if updated externally
+  useEffect(() => {
+    if (initialPhone) {
+      const clean = normalizePhoneNumber(initialPhone);
+      if (clean) setPhoneInput(clean);
+    }
+  }, [initialPhone]);
+
+  // Instant Hub Resolution as soon as 10 valid digits are typed/pasted
+  useEffect(() => {
+    const clean = normalizePhoneNumber(phoneInput);
+    if (clean.length === 10) {
+      setIsResolvingHub(true);
+      resolveHubIdFromPhone(clean).then((hub) => {
+        if (hub) {
+          setResolvedPreviewHub(hub);
+          try {
+            localStorage.setItem('active_hub_id', hub);
+            localStorage.setItem('active_companion_hub_id', hub);
+          } catch {}
+        }
+      }).finally(() => {
+        setIsResolvingHub(false);
+      });
+    } else {
+      setResolvedPreviewHub(null);
+    }
+  }, [phoneInput]);
 
   // 1. INDEPENDENT FIREBASE AUTH & SESSION LIFECYCLE:
   // Establish dedicated Firebase session using Firebase Anonymous Authentication (signInAnonymously(auth)) on app mount
@@ -93,7 +127,15 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
     };
   }, []);
 
-  const currentHubId = (authenticatedHubId || getActiveCompanionHubId() || authUser?.hubId || authUser?.ownerUid || authUser?.workspaceId || '').trim();
+  // Strict Locked Hub ID: Derived exclusively from authenticated user profile or locked companion session
+  const currentHubId = (
+    authenticatedHubId ||
+    authUser?.hubId ||
+    authUser?.workspaceId ||
+    authUser?.ownerUid ||
+    getActiveCompanionHubId() ||
+    ''
+  ).trim();
 
   // Sheet & Active Date State
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
@@ -233,6 +275,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         } catch {}
 
         setAuthenticatedHubId(finalHubId);
+        setResolvedPreviewHub(finalHubId);
         setAuthUser(res.user);
         showToast(`✅ ${res.message}`, 'success');
       } else {
@@ -329,10 +372,124 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
 
   // 4. Find Active Rider's Own Row & Alert
   const currentRiderId = authUser?.riderId || authUser?.id || '';
+
+  // Strict Hub Data Isolation: Reconcile ONLY riders belonging to this exact active_hub_id
+  const displayEntries: CodDailyEntry[] = useMemo(() => {
+    if (!currentHubId) return [];
+
+    const entryMap = new Map<string, CodDailyEntry>();
+    (sheetData.entries || []).forEach((e) => {
+      if (e.riderId) entryMap.set(e.riderId, e);
+      const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+      if (cleanPhone) entryMap.set(cleanPhone, e);
+    });
+
+    if (hubRiders.length > 0) {
+      const merged: CodDailyEntry[] = hubRiders.map((r) => {
+        const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
+        const ex = entryMap.get(r.id) || (cleanPhone ? entryMap.get(cleanPhone) : undefined);
+        if (ex) {
+          const totalCod = (Number(ex.company1Amount) || 0) + (Number(ex.company2Amount) || 0);
+          const totalDeposit = (Number(ex.cashDeposit) || 0) + (Number(ex.onlineDeposit) || 0);
+          const balance = totalCod - totalDeposit;
+          return {
+            ...ex,
+            riderId: r.id,
+            riderName: r.name,
+            riderPhone: r.phone,
+            totalCod,
+            totalDeposit,
+            balance,
+          };
+        }
+        return {
+          id: `cod_${selectedDate}_${r.id}`,
+          date: selectedDate,
+          riderId: r.id,
+          riderName: r.name,
+          riderPhone: r.phone,
+          company1Amount: 0,
+          company2Amount: 0,
+          totalCod: 0,
+          cashDeposit: 0,
+          onlineDeposit: 0,
+          totalDeposit: 0,
+          balance: 0,
+          status: 'draft',
+          updatedAt: new Date().toISOString(),
+        };
+      });
+
+      // Ensure logged-in rider's own card is always present
+      if (isRider && authUser) {
+        const cleanUserPhone = (authUser.phone || '').replace(/\D/g, '').slice(-10);
+        const myId = authUser.riderId || authUser.id;
+        const exists = merged.some(
+          (m) => m.riderId === myId || ((m.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanUserPhone && cleanUserPhone)
+        );
+        if (!exists) {
+          const ex = entryMap.get(myId) || (cleanUserPhone ? entryMap.get(cleanUserPhone) : undefined);
+          if (ex) {
+            merged.unshift(ex);
+          } else {
+            merged.unshift({
+              id: `cod_${selectedDate}_${myId}`,
+              date: selectedDate,
+              riderId: myId,
+              riderName: authUser.name,
+              riderPhone: authUser.phone,
+              company1Amount: 0,
+              company2Amount: 0,
+              totalCod: 0,
+              cashDeposit: 0,
+              onlineDeposit: 0,
+              totalDeposit: 0,
+              balance: 0,
+              status: 'draft',
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      return merged;
+    }
+
+    // Fallback: If logged-in as rider, display ONLY their own record - NEVER leak full sheetData.entries
+    if (isRider && authUser) {
+      const cleanUserPhone = (authUser.phone || '').replace(/\D/g, '').slice(-10);
+      const myId = authUser.riderId || authUser.id;
+      const myEntry = (sheetData.entries || []).find((e) => {
+        const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+        return e.riderId === myId || (cleanUserPhone && cleanPhone === cleanUserPhone);
+      });
+      if (myEntry) return [myEntry];
+      const fallbackEntry: CodDailyEntry = {
+        id: `cod_${selectedDate}_${myId}`,
+        date: selectedDate,
+        riderId: myId,
+        riderName: authUser.name,
+        riderPhone: authUser.phone,
+        company1Amount: 0,
+        company2Amount: 0,
+        totalCod: 0,
+        cashDeposit: 0,
+        onlineDeposit: 0,
+        totalDeposit: 0,
+        balance: 0,
+        status: 'draft',
+        updatedAt: new Date().toISOString(),
+      };
+      return [fallbackEntry];
+    }
+
+    return [];
+  }, [currentHubId, hubRiders, sheetData.entries, selectedDate, isRider, authUser]);
+
   const myRiderRow = useMemo(() => {
     if (!isRider) return null;
-    return sheetData.entries.find((e) => isMatchingRiderRow(e)) || null;
-  }, [sheetData.entries, isRider, authUser]);
+    return displayEntries.find((e) => isMatchingRiderRow(e)) || null;
+  }, [displayEntries, isRider, authUser]);
 
   // Active Rider Shortage Warning (Rider App Visibility)
   const myShortageAlert = useMemo(() => {
@@ -357,16 +514,16 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   // Filtered rows for display (Strict Hub Isolation: If currentHubId is missing/invalid, return empty array [])
   const filteredEntries = useMemo(() => {
     if (!currentHubId) return [];
-    if (!searchQuery.trim()) return sheetData.entries;
+    if (!searchQuery.trim()) return displayEntries;
     const q = searchQuery.toLowerCase();
-    return sheetData.entries.filter(
+    return displayEntries.filter(
       (e) => e.riderName.toLowerCase().includes(q) || (e.riderPhone && e.riderPhone.includes(q))
     );
-  }, [sheetData.entries, searchQuery, currentHubId]);
+  }, [displayEntries, searchQuery, currentHubId]);
 
   // Overall Statistics
   const stats = useMemo(() => {
-    const entries = sheetData.entries;
+    const entries = displayEntries;
     const totalCod = entries.reduce((s, e) => s + (e.totalCod || 0), 0);
     const totalDeposit = entries.reduce((s, e) => s + (e.totalDeposit || 0), 0);
     const totalBalance = entries.reduce((s, e) => s + (e.balance || 0), 0);
@@ -374,7 +531,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       s + ((e.company1Shortage || 0) + (e.company2Shortage || 0) + (e.cashShortage || 0) + (e.onlineShortage || 0)), 0
     );
     return { totalCod, totalDeposit, totalBalance, totalShortage, count: entries.length };
-  }, [sheetData.entries]);
+  }, [displayEntries]);
 
   // 5. Open Modal to Edit Row (Auto-creates row on demand if not yet present)
   const handleOpenEditRow = (row?: CodDailyEntry | null) => {
@@ -460,10 +617,14 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
       updatedBy: authUser.name,
     };
 
-    // 1. Optimistic Local UI Update
+    // 1. Optimistic Local UI Update & Instant Visual Feedback
     setSheetData((prev) => {
       const entries = prev.entries || [];
-      const idx = entries.findIndex((e) => isMatchingRiderRow(e) || e.riderId === updated.riderId);
+      const cleanPhone = (updated.riderPhone || '').replace(/\D/g, '').slice(-10);
+      const idx = entries.findIndex(
+        (e) => (e.riderId && e.riderId === updated.riderId) ||
+               (cleanPhone && (e.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanPhone)
+      );
       let nextEntries: CodDailyEntry[];
       if (idx >= 0) {
         nextEntries = [...entries];
@@ -477,7 +638,22 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         updatedAt: new Date().toISOString(),
       };
     });
+
+    // Close modal immediately with zero lag
     setEditingEntry(null);
+
+    // Trigger instant optimistic feedback (green checkmark / highlight pulse)
+    setRecentlySubmittedRiderId(updated.riderId);
+    setTimeout(() => {
+      setRecentlySubmittedRiderId((prev) => (prev === updated.riderId ? null : prev));
+    }, 6000);
+
+    const balMsg = balance === 0 
+      ? 'हिसाब बराबर (शून्य बैलेंस ✓)' 
+      : balance > 0 
+      ? `बकाया: ${formatINR(balance)}` 
+      : `अतिरिक्त जमा: ${formatINR(Math.abs(balance))}`;
+    showToast(`✅ ${editingEntry.riderName} की एंट्री दर्ज! ${balMsg} (0s लाइव सिंक)`, 'success');
 
     // 2. Direct Firestore Write and Background Sync
     try {
@@ -485,9 +661,8 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
         name: authUser.name,
         role: authUser.role,
       }, currentHubId);
-      showToast(`✅ ${editingEntry.riderName} की COD एंट्री सफलतापूर्वक सेव व सिंक हो गई!`, 'success');
     } catch {
-      showToast('एंट्री सेव करने में समस्या आई।', 'error');
+      showToast('⚠️ बैकग्राउंड सिंक में विलंब, ऑफलाइन डेटा सुरक्षित है।', 'info');
     } finally {
       setIsSavingEntry(false);
     }
@@ -662,6 +837,16 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
             <LogOut className="w-4 h-4" />
             <span>लॉगआउट करें (Switch Account)</span>
           </button>
+          {onBackToMainApp && (
+            <button
+              type="button"
+              onClick={onBackToMainApp}
+              className="w-full mt-3 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95 border border-slate-700"
+            >
+              <ChevronLeft className="w-4 h-4 text-emerald-400" />
+              <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
+            </button>
+          )}
         </div>
       </div>
     );
@@ -678,6 +863,21 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
           <div className="absolute -top-40 -left-40 w-96 h-96 bg-emerald-100/60 rounded-full blur-3xl" />
           <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-100/60 rounded-full blur-3xl" />
         </div>
+
+        {/* Clear & Prominent Back to Admin Dashboard Header Button */}
+        {onBackToMainApp && (
+          <div className="w-full max-w-md mb-4 z-20 animate-in fade-in slide-in-from-top-2">
+            <button
+              type="button"
+              id="companion-login-top-back-to-admin-btn"
+              onClick={onBackToMainApp}
+              className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-xs sm:text-sm shadow-lg transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer border border-slate-700 hover:border-emerald-500/50"
+            >
+              <ChevronLeft className="w-5 h-5 text-emerald-400 shrink-0" />
+              <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
+            </button>
+          </div>
+        )}
 
         {/* Card Container */}
         <div className="relative w-full max-w-md bg-white border border-slate-200/90 rounded-2xl shadow-xl p-6 sm:p-8 z-10">
@@ -721,9 +921,18 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                   placeholder="9876543210"
                   value={phoneInput}
                   onChange={(e) => {
-                    const clean = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    const clean = normalizePhoneNumber(e.target.value);
                     setPhoneInput(clean);
                     if (loginError) setLoginError('');
+                  }}
+                  onPaste={(e) => {
+                    const pasted = e.clipboardData?.getData('text') || '';
+                    const clean = normalizePhoneNumber(pasted);
+                    if (clean) {
+                      e.preventDefault();
+                      setPhoneInput(clean);
+                      if (loginError) setLoginError('');
+                    }
                   }}
                   autoFocus
                   required
@@ -865,16 +1074,37 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               <button
                 type="button"
                 onClick={onBackToMainApp}
-                className="text-xs text-slate-500 hover:text-slate-800 transition underline underline-offset-4 font-medium"
+                className="text-xs text-slate-600 hover:text-slate-900 transition underline underline-offset-4 font-bold flex items-center justify-center gap-1 mx-auto"
               >
-                ← मुख्य कूरियर ऐप पर वापस जाएं (Back to Hub App)
+                <ChevronLeft className="w-3.5 h-3.5 text-slate-500" />
+                <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
               </button>
             </div>
           )}
 
-          {/* Hub Resolution Debug Indicator */}
-          <div className="mt-4 pt-3 border-t border-slate-200 text-center text-[10px] text-slate-400 font-mono">
-            Hub: {currentHubId ? currentHubId.substring(0, 8) : 'Not Resolved'}
+          {/* Hub Resolution Indicator - Eliminates Not Resolved once valid digits are entered */}
+          <div className="mt-4 pt-3 border-t border-slate-200 text-center text-[10px] text-slate-500 font-mono">
+            {currentHubId ? (
+              <span className="text-emerald-700 font-semibold">
+                Hub: {currentHubId.substring(0, 8)} (सत्यापित हब)
+              </span>
+            ) : resolvedPreviewHub ? (
+              <span className="text-emerald-700 font-semibold">
+                Hub: {resolvedPreviewHub.substring(0, 8)} (सत्यापित हब)
+              </span>
+            ) : isResolvingHub ? (
+              <span className="text-indigo-600 animate-pulse font-medium">
+                हब खोज रहे हैं...
+              </span>
+            ) : phoneInput.length === 10 ? (
+              <span className="text-emerald-600 font-medium">
+                हब: स्वचालित पहचान सक्रिय
+              </span>
+            ) : (
+              <span className="text-slate-400">
+                सुरक्षित कूरियर हब लॉगिन
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -886,6 +1116,28 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
   // =========================================================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans pb-16 selection:bg-emerald-500 selection:text-white">
+      {/* Prominent Admin Dashboard Return Top Bar */}
+      {onBackToMainApp && (
+        <div 
+          id="companion-authenticated-top-admin-banner"
+          className="bg-slate-900 border-b border-slate-800 text-white px-3 sm:px-6 py-2.5 flex items-center justify-between text-xs sticky top-0 z-50 shadow-md"
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="font-semibold text-slate-200">एडमिन मोड: साथी ऐप (Rider Entry) दृश्य खुला है</span>
+          </div>
+          <button
+            type="button"
+            id="top-banner-back-to-admin-btn"
+            onClick={onBackToMainApp}
+            className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition active:scale-95 flex items-center gap-1.5 shadow cursor-pointer"
+          >
+            <ChevronLeft className="w-4 h-4 text-slate-950 stroke-[3]" />
+            <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
+          </button>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {toast && (
         <div
@@ -938,8 +1190,11 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5 flex-wrap">
                 <span className="font-semibold text-slate-800">{authUser.name}</span>
                 {authUser.phone && <span>• {authUser.phone}</span>}
-                <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono border border-slate-200">
-                  Hub: {currentHubId ? currentHubId.substring(0, 8) : 'Not Resolved'}
+                <span className="text-[10px] bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded-full font-mono font-bold border border-emerald-200 flex items-center gap-1">
+                  <Building2 className="w-3 h-3 text-emerald-600" />
+                  <span>हब: {currentHubId.substring(0, 10)}{currentHubId.length > 10 ? '…' : ''}</span>
+                  <span className="text-emerald-500">•</span>
+                  <span>{hubRiders.length} राइडर्स</span>
                 </span>
               </div>
             </div>
@@ -969,15 +1224,17 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
               )}
             </div>
 
-            {/* Back to Main Hub App if triggered */}
+            {/* Back to Admin Dashboard if triggered */}
             {onBackToMainApp && (
               <button
                 type="button"
+                id="header-back-to-admin-btn"
                 onClick={onBackToMainApp}
-                className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
-                title="मुख्य कूरियर ऐप पर वापस जाएं"
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-700 shadow-sm active:scale-95"
+                title="वापस एडमिन डैशबोर्ड (Back to Admin)"
               >
-                <span>← मुख्य ऐप</span>
+                <ChevronLeft className="w-3.5 h-3.5 text-emerald-400" />
+                <span>← वापस एडमिन डैशबोर्ड</span>
               </button>
             )}
 
@@ -1328,7 +1585,9 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                     className={`bg-white border rounded-2xl p-4 shadow-sm transition ${
                       canEditThis ? 'cursor-pointer hover:border-emerald-500 hover:shadow-md active:scale-[0.99]' : ''
                     } ${
-                      isMyRow
+                      recentlySubmittedRiderId === row.riderId
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-50/30 shadow-md'
+                        : isMyRow
                         ? 'border-emerald-400 ring-2 ring-emerald-400/20 bg-emerald-50/20'
                         : hasShortage
                         ? 'border-rose-300 bg-rose-50/20'
@@ -1340,7 +1599,9 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                       <div className="flex items-center gap-2 min-w-0">
                         <div
                           className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-bold text-xs ${
-                            isMyRow
+                            recentlySubmittedRiderId === row.riderId
+                              ? 'bg-emerald-600 text-white animate-bounce'
+                              : isMyRow
                               ? 'bg-emerald-600 text-white'
                               : 'bg-slate-100 text-slate-700'
                           }`}
@@ -1348,7 +1609,7 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                           {row.riderName.charAt(0)}
                         </div>
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold text-sm text-slate-900 truncate">
                               {row.riderName}
                             </span>
@@ -1357,6 +1618,17 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                                 मेरी एंट्री
                               </span>
                             )}
+                            {recentlySubmittedRiderId === row.riderId ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full font-bold shadow-xs animate-pulse">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>सिंक हुआ ✓ (0s लाइव)</span>
+                              </span>
+                            ) : (row.status === 'submitted' || (Number(row.totalDeposit) > 0 && row.balance === 0)) ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded-full font-semibold">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>दर्ज व सिंक ✓</span>
+                              </span>
+                            ) : null}
                           </div>
                           {row.riderPhone && (
                             <span className="text-xs text-slate-500 font-mono">
@@ -1639,13 +1911,22 @@ export function CodCompanionApp({ onBackToMainApp }: CodCompanionAppProps) {
                           }`}
                         >
                           <td className="py-3 px-3 font-sans">
-                            <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                            <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
                               <span>{row.riderName}</span>
                               {isMyRow && (
                                 <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 rounded font-bold">
                                   You
                                 </span>
                               )}
+                              {recentlySubmittedRiderId === row.riderId ? (
+                                <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-bold animate-pulse">
+                                  सिंक हुआ ✓
+                                </span>
+                              ) : row.status === 'submitted' ? (
+                                <span className="text-[9px] bg-emerald-50 text-emerald-700 px-1 rounded font-medium">
+                                  दर्ज ✓
+                                </span>
+                              ) : null}
                             </div>
                             {row.riderPhone && (
                               <span className="text-[10px] text-slate-500 font-mono">

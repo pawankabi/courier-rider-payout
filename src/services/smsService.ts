@@ -5,6 +5,7 @@
  */
 
 import { getCleanPhoneDigits } from '../utils/formatters';
+import { getRiderStatementUrl } from '../utils/shareLink';
 
 export interface SmsDispatchPayload {
   riderPhone: string;
@@ -24,16 +25,13 @@ export interface SmsDispatchResult {
   whatsappUrl?: string;
 }
 
-export const PRODUCTION_DOMAIN = 'https://courier-rider-payout.vercel.app';
+export const PRODUCTION_DOMAIN = typeof window !== 'undefined' && window.location ? window.location.origin : '';
 
 /**
- * Generate canonical public ledger link for a rider.
- * Always enforces the production domain https://courier-rider-payout.vercel.app
- * to avoid leaking internal AI Studio preview origins and prevent "An unknown error occurred".
+ * Generate canonical public ledger link for a rider dynamically.
  */
 export function generateStatementUrl(riderId: string): string {
-  const cleanId = encodeURIComponent((riderId || '').trim());
-  return `${PRODUCTION_DOMAIN}/#/statement/${cleanId}`;
+  return getRiderStatementUrl(riderId);
 }
 
 /**
