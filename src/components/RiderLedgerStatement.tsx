@@ -32,9 +32,10 @@ import { PublicRiderStatement, RiderAdvanceEntry, RiderIncentiveEntry } from '..
 import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
 import { fetchPublicRiderStatement, deleteAdvanceFromFirestore, deleteIncentiveFromFirestore, syncPublicRiderStatement } from '../services/firestoreSync';
 import { generateStatementUrl } from '../services/smsService';
+import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
 
 interface RiderLedgerStatementProps {
-  riderId: string;
+  riderId?: string;
   initialStatement?: PublicRiderStatement | null;
   onBackToApp?: () => void;
   onDeleteAdvance?: (advanceId: string) => Promise<void>;
@@ -67,15 +68,98 @@ export interface UnifiedTransactionItem {
 }
 
 export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
-  riderId,
+  riderId: propRiderId,
   initialStatement = null,
   onBackToApp,
   onDeleteAdvance,
   onDeleteIncentive,
   userId = '',
 }) => {
-  const [statement, setStatement] = useState<PublicRiderStatement | null>(initialStatement);
-  const [loading, setLoading] = useState<boolean>(!initialStatement);
+  // Extract or resolve riderId from prop or window location (hash or search params)
+  const resolvedRiderId = useMemo(() => {
+    if (propRiderId && propRiderId.trim()) return decodeURIComponent(propRiderId).trim();
+    if (typeof window !== 'undefined') {
+      const search = window.location.search || '';
+      const params = new URLSearchParams(search);
+      const queryId = params.get('statement') || params.get('rider') || params.get('riderId') || params.get('ledger') || params.get('riderStatement');
+      if (queryId) return decodeURIComponent(queryId).trim();
+
+      const hash = window.location.hash || '';
+      if (hash.includes('statement')) {
+        const match = hash.match(/statement[\/=]([^\/?#]+)/i);
+        if (match && match[1]) return decodeURIComponent(match[1]).trim();
+        const parts = hash.split(/statement[\/=]/i);
+        if (parts.length > 1 && parts[1]) {
+          const raw = parts[1].split(/[?#&]/)[0];
+          if (raw) return decodeURIComponent(raw).trim();
+        }
+      }
+      if (hash.includes('ledger')) {
+        const match = hash.match(/ledger[\/=]([^\/?#]+)/i);
+        if (match && match[1]) return decodeURIComponent(match[1]).trim();
+      }
+
+      const pathname = window.location.pathname || '';
+      if (pathname.includes('/statement/')) {
+        const part = pathname.split('/statement/')[1]?.split('?')[0]?.split('#')[0];
+        if (part) return decodeURIComponent(part).replace(/\/+$/, '').trim();
+      }
+      if (pathname.includes('/ledger/')) {
+        const part = pathname.split('/ledger/')[1]?.split('?')[0]?.split('#')[0];
+        if (part) return decodeURIComponent(part).replace(/\/+$/, '').trim();
+      }
+    }
+    return '';
+  }, [propRiderId]);
+
+  // Initial local cached statement if available for instant display
+  const [statement, setStatement] = useState<PublicRiderStatement | null>(() => {
+    if (initialStatement) return initialStatement;
+    if (typeof window !== 'undefined' && resolvedRiderId) {
+      try {
+        const cachedRiders = loadRidersFromStorage();
+        const localRider = (cachedRiders || []).find((r) => r && (r.id === resolvedRiderId || r.phone === resolvedRiderId));
+        if (localRider) {
+          const cachedDeliveries = loadDeliveriesFromStorage(cachedRiders);
+          const cachedSettlements = loadSettlementsFromStorage();
+          return {
+            riderId: localRider.id || resolvedRiderId,
+            riderName: localRider.name || 'कूरियर डिलीवरी राइडर',
+            riderPhone: localRider.phone || '',
+            vehicleType: localRider.vehicleType || 'Bike',
+            hubName: 'सरायकेला कूरियर डिलीवरी हब',
+            hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+            totalAdvance: typeof localRider.totalAdvance === 'number' ? localRider.totalAdvance : 0,
+            totalIncentive: typeof localRider.totalIncentive === 'number' ? localRider.totalIncentive : 0,
+            advances: Array.isArray(localRider.advances) ? localRider.advances : [],
+            incentives: Array.isArray(localRider.incentives) ? localRider.incentives : [],
+            salaries: (cachedSettlements || [])
+              .filter((s) => s && s.riderId === localRider.id)
+              .map((s) => ({
+                id: s.id,
+                startDate: s.startDate,
+                endDate: s.endDate,
+                totalParcels: s.totalParcels || 0,
+                baseAmount: s.baseAmount || 0,
+                incentiveAmount: s.incentiveAmount || 0,
+                grossTotal: s.grossTotal || 0,
+                advanceAmount: s.advanceAmount || 0,
+                netTotal: s.netTotal || 0,
+                paidAt: s.paidAt,
+                status: s.status || 'PAID',
+              })),
+            recentDeliveries: (cachedDeliveries || [])
+              .filter((d) => d && d.riderId === localRider.id)
+              .slice(0, 30),
+            updatedAt: new Date().toISOString(),
+          };
+        }
+      } catch {}
+    }
+    return null;
+  });
+
+  const [loading, setLoading] = useState<boolean>(!initialStatement && !statement);
   const [copiedLink, setCopiedLink] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [feedbackToast, setFeedbackToast] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -84,6 +168,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   useEffect(() => {
     if (initialStatement) {
       setStatement(initialStatement);
+      setLoading(false);
     }
   }, [initialStatement]);
 
@@ -115,10 +200,9 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   // Fetch statement data from Firestore if not provided or to refresh live
   useEffect(() => {
     let isMounted = true;
-    if (riderId) {
+    if (resolvedRiderId) {
       if (!statement) setLoading(true);
-      const cleanId = decodeURIComponent(riderId).trim();
-      fetchPublicRiderStatement(cleanId)
+      fetchPublicRiderStatement(resolvedRiderId)
         .then((data) => {
           if (isMounted) {
             if (data) {
@@ -131,13 +215,15 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
           console.error('Failed to load statement from Firestore:', err);
           if (isMounted) setLoading(false);
         });
+    } else {
+      setLoading(false);
     }
     return () => {
       isMounted = false;
     };
-  }, [riderId]);
+  }, [resolvedRiderId]);
 
-  const statementUrl = generateStatementUrl(riderId);
+  const statementUrl = generateStatementUrl(resolvedRiderId || statement?.riderId || '');
 
   const handleCopyLink = () => {
     if (statementUrl) {

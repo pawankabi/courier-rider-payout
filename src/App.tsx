@@ -77,7 +77,6 @@ import {
   PublicRiderStatement
 } from './types';
 import { RiderLedgerStatement } from './components/RiderLedgerStatement';
-import { PublicRiderLedger } from './components/PublicRiderLedger';
 import { StatementErrorBoundary } from './components/StatementErrorBoundary';
 import { 
   loadRidersFromStorage, 
@@ -134,11 +133,7 @@ import { ShareAppModal } from './components/ShareAppModal';
 
 /**
  * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
- * Supports:
- * - VITE_APP_TARGET=cod_companion (Standalone build)
- * - /cod-entry or /cod
- * - #cod-entry or #/cod-entry or #cod or #/cod
- * - ?app=cod-entry or ?app=cod or ?cod=entry or ?cod=true
+ * Strictly matches 'cod-entry' (NEVER generic 'rider' keyword).
  */
 function parseCodCompanionRoute(): boolean {
   if (typeof window === 'undefined') return false;
@@ -148,81 +143,83 @@ function parseCodCompanionRoute(): boolean {
   if (appTarget === 'admin') {
     return false;
   }
-  if (appTarget === 'cod_companion' || appTarget === 'rider' || appTarget === 'companion') {
+  if (appTarget === 'cod_companion' || appTarget === 'companion') {
     return true;
   }
 
   const hash = window.location.hash || '';
   const pathname = window.location.pathname || '';
+  const search = window.location.search || '';
+
+  // 2. Strict cod-entry check ONLY (Do NOT check generic 'rider' keyword)
   const isCodRoute = 
-    hash.includes('/cod-entry') || 
     hash.includes('cod-entry') || 
-    hash.includes('/cod') || 
-    hash.includes('/companion') || 
-    hash.includes('/rider') || 
     pathname.includes('/cod-entry') || 
-    pathname.includes('/cod') || 
-    pathname.includes('/companion') || 
-    pathname.includes('/rider');
+    search.includes('app=cod-entry') || 
+    search.includes('cod=entry');
 
-  if (isCodRoute) return true;
-
-  const params = new URLSearchParams(window.location.search);
-  const appParam = params.get('app');
-  const codParam = params.get('cod');
-  if (
-    appParam === 'cod-entry' || 
-    appParam === 'cod' || 
-    appParam === 'companion' || 
-    appParam === 'rider' || 
-    codParam === 'entry' || 
-    codParam === 'true'
-  ) {
-    return true;
-  }
-
-  return false;
+  return isCodRoute;
 }
 
 /**
  * Robust Route Resolver for Public Read-Only Rider Statement / Ledger:
  * Supports:
- * - /statement/:riderId
- * - /ledger/:riderId
- * - #statement/:riderId or #/statement/:riderId
- * - ?statement=:riderId or ?riderId=:riderId
+ * - /statement/:riderId or /ledger/:riderId
+ * - #statement/:riderId or #/statement/:riderId or #statement=:riderId
+ * - ?statement=:riderId or ?rider=:riderId or ?riderId=:riderId or ?ledger=:riderId
  */
 function parseRiderStatementRoute(): string | null {
   if (typeof window === 'undefined') return null;
 
   const hash = window.location.hash || '';
   const pathname = window.location.pathname || '';
-  const isStatement = hash.includes('/statement/') || pathname.includes('/statement/');
+  const search = window.location.search || '';
 
-  if (isStatement) {
-    const rawRiderId = hash.includes('/statement/')
-      ? hash.split('/statement/')[1]?.split('?')[0]?.split('#')[0]
-      : pathname.split('/statement/')[1]?.split('?')[0]?.split('#')[0];
-    if (rawRiderId) {
-      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
-    }
-  }
-
-  // Also support /ledger/ or #/ledger/ fallback
-  if (hash.includes('/ledger/') || pathname.includes('/ledger/')) {
-    const rawRiderId = hash.includes('/ledger/')
-      ? hash.split('/ledger/')[1]?.split('?')[0]?.split('#')[0]
-      : pathname.split('/ledger/')[1]?.split('?')[0]?.split('#')[0];
-    if (rawRiderId) {
-      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
-    }
-  }
-
-  // Search query parameter check: ?statement=:riderId or ?ledger=:riderId or ?riderId=:riderId
-  const params = new URLSearchParams(window.location.search);
-  const query = params.get('statement') || params.get('ledger') || params.get('riderStatement') || params.get('riderId');
+  // 1. Search Query Parameters: ?statement=... or ?rider=... or ?riderId=... or ?ledger=...
+  const params = new URLSearchParams(search);
+  const query = 
+    params.get('statement') || 
+    params.get('rider') || 
+    params.get('riderId') || 
+    params.get('ledger') || 
+    params.get('riderStatement');
   if (query) {
-    return decodeURIComponent(query).trim();
+    return decodeURIComponent(query).trim() || null;
+  }
+
+  // 2. Hash routing: #/statement/:riderId or #statement/:riderId or #statement=:riderId or #/ledger/:riderId
+  if (hash.includes('statement')) {
+    const match = hash.match(/statement[\/=]([^\/?#]+)/i);
+    if (match && match[1]) {
+      return decodeURIComponent(match[1]).trim() || null;
+    }
+    const parts = hash.split(/statement[\/=]/i);
+    if (parts.length > 1 && parts[1]) {
+      const raw = parts[1].split(/[?#&]/)[0];
+      if (raw) return decodeURIComponent(raw).trim() || null;
+    }
+  }
+
+  if (hash.includes('ledger')) {
+    const match = hash.match(/ledger[\/=]([^\/?#]+)/i);
+    if (match && match[1]) {
+      return decodeURIComponent(match[1]).trim() || null;
+    }
+  }
+
+  // 3. Pathname routing: /statement/:riderId or /ledger/:riderId
+  if (pathname.includes('/statement/')) {
+    const rawRiderId = pathname.split('/statement/')[1]?.split('?')[0]?.split('#')[0];
+    if (rawRiderId) {
+      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
+    }
+  }
+
+  if (pathname.includes('/ledger/')) {
+    const rawRiderId = pathname.split('/ledger/')[1]?.split('?')[0]?.split('#')[0];
+    if (rawRiderId) {
+      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
+    }
   }
 
   return null;
@@ -2875,28 +2872,6 @@ function MainCourierApp() {
  * Do NOT render the main layout, do NOT render the Header (Courier Payout Pro), do NOT show Sign In / Sync, and do NOT show Daily Delivery Entry.
  */
 export default function App() {
-  // 1. Standalone Rider APK Boot & Direct Route Interception:
-  // For the standalone Rider APK build, the app must boot directly into <CodCompanionApp /> on startup without opening any browser or external intent.
-  const initialAppTarget = (import.meta.env.VITE_APP_TARGET || '').trim().toLowerCase();
-  const isCompanionBuild = initialAppTarget === 'cod_companion' || initialAppTarget === 'rider' || initialAppTarget === 'companion';
-  const isCompanionHostname = typeof window !== 'undefined' && (
-    window.location.hostname.includes('cod-entry') || 
-    window.location.hostname === 'cod-entry-rider.firebaseapp.com'
-  );
-  const isCompanionHashOrPath = typeof window !== 'undefined' && (
-    window.location.hash.includes('cod-entry') || 
-    window.location.hash.includes('rider') ||
-    window.location.pathname.includes('/cod-entry') ||
-    window.location.pathname.includes('/cod') ||
-    window.location.pathname.includes('/companion') ||
-    window.location.search.includes('app=cod-entry') ||
-    window.location.search.includes('app=rider')
-  );
-
-  if (isCompanionBuild || isCompanionHostname || isCompanionHashOrPath) {
-    return <CodCompanionApp />;
-  }
-
   const [statementRiderId, setStatementRiderId] = useState<string | null>(() => parseRiderStatementRoute());
   const [isCodCompanionRoute, setIsCodCompanionRoute] = useState<boolean>(() => parseCodCompanionRoute());
   const [isNativeCompanionPackage, setIsNativeCompanionPackage] = useState<boolean>(false);
@@ -2925,37 +2900,53 @@ export default function App() {
     };
   }, []);
 
+  const hash = typeof window !== 'undefined' ? (window.location.hash || '') : '';
+  const search = typeof window !== 'undefined' ? (window.location.search || '') : '';
+  const pathname = typeof window !== 'undefined' ? (window.location.pathname || '') : '';
+
+  // 1. STATEMENT ROUTE MUST COME FIRST:
+  // Check for statement / ledger view before any companion/login route:
+  if (
+    hash.includes('statement') || 
+    search.includes('statement') ||
+    hash.includes('ledger') ||
+    search.includes('ledger') ||
+    pathname.includes('/statement') ||
+    pathname.includes('/ledger') ||
+    (search.includes('rider=') && !hash.includes('cod-entry')) ||
+    Boolean(statementRiderId)
+  ) {
+    const riderId = statementRiderId || parseRiderStatementRoute() || '';
+    return (
+      <StatementErrorBoundary>
+        <RiderLedgerStatement riderId={riderId} />
+      </StatementErrorBoundary>
+    );
+  }
+
+  // 2. RIDER COMPANION / LOGIN ROUTE MUST BE STRICT:
+  // Do NOT check for generic 'rider' keyword! Only match exact cod-entry:
   const companionEnv = (import.meta.env.VITE_APP_TARGET || '').trim().toLowerCase();
   const isExplicitCompanionTarget = 
     companionEnv === 'cod_companion' || 
-    companionEnv === 'rider' || 
     companionEnv === 'companion' || 
     isNativeCompanionPackage;
-  const isExplicitAdminTarget = companionEnv === 'admin';
 
-  // 1. Standalone Companion App APK (assembleRiderRelease): "COD Entry (हिसाब किताब)" for Riders & Staff
-  // Root route '/' strictly loads CodCompanionApp login only without opening any browser or external intent
-  if (isExplicitCompanionTarget || isNativeCompanionPackage) {
-    return <CodCompanionApp />;
-  }
+  const isCompanionHostname = typeof window !== 'undefined' && (
+    window.location.hostname.includes('cod-entry') || 
+    window.location.hostname === 'cod-entry-rider.firebaseapp.com'
+  );
 
-  // 2. Admin App APK (assembleAdminRelease): Full Courier Rider Payout Admin App
-  // Root route '/' strictly loads main dashboard with Owner settings. Never defaults to rider screen.
-  if (isExplicitAdminTarget) {
-    if (statementRiderId) {
-      return (
-        <StatementErrorBoundary>
-          <PublicRiderLedger riderId={statementRiderId} />
-        </StatementErrorBoundary>
-      );
-    }
-    return <MainCourierApp />;
-  }
-
-  // 3. Web / Dev Mode Routing:
-  if (isCodCompanionRoute) {
+  if (
+    hash.includes('cod-entry') || 
+    pathname.includes('/cod-entry') || 
+    search.includes('app=cod-entry') || 
+    isCodCompanionRoute || 
+    isExplicitCompanionTarget || 
+    isCompanionHostname
+  ) {
     return (
-      <CodCompanionApp
+      <CodCompanionApp 
         onBackToMainApp={() => {
           try {
             window.location.hash = '';
@@ -2970,15 +2961,7 @@ export default function App() {
     );
   }
 
-  // Public Read-Only Statement / Ledger Route
-  if (statementRiderId) {
-    return (
-      <StatementErrorBoundary>
-        <PublicRiderLedger riderId={statementRiderId} />
-      </StatementErrorBoundary>
-    );
-  }
-
+  // 3. Default: Full Courier Rider Payout Admin App
   return <MainCourierApp />;
 }
 
