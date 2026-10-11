@@ -5,12 +5,18 @@
 export const getRiderAppUrl = () => 'https://courier-rider-payout.vercel.app/#cod-entry';
 
 export const getBaseUrl = (): string => {
+  if (typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')) {
+    return window.location.origin;
+  }
   return 'https://courier-rider-payout.vercel.app';
 };
 
 export const getRiderStatementUrl = (riderId: string): string => {
   const cleanId = encodeURIComponent((riderId || '').trim());
-  return `https://courier-rider-payout.vercel.app/#/statement/${cleanId}`;
+  const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')
+    ? window.location.origin
+    : 'https://courier-rider-payout.vercel.app';
+  return `${baseUrl}/#/statement/${cleanId}`;
 };
 
 export const getAppShareUrl = (): string => {

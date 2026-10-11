@@ -459,7 +459,17 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     if (!onDeleteAdvance) return;
     const targetAdv = (rider.advances || []).find((a) => a.id === advId);
     if (!targetAdv) return;
-    if (!window.confirm(`क्या आप ₹${targetAdv.amount} (${targetAdv.reason || 'एडवांस'}) की एंट्री हटाना चाहते हैं?`)) return;
+    
+    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (₹${targetAdv.amount} - ${targetAdv.reason || 'एडवांस'})`;
+    let confirmed = true;
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        confirmed = window.confirm(confirmPrompt);
+      }
+    } catch {
+      confirmed = true;
+    }
+    if (!confirmed) return;
 
     try {
       const remainingList = (rider.advances || []).filter((a) => a.id !== advId);
@@ -476,6 +486,8 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       if (editingAdvance?.id === advId) {
         handleCancelEdit();
       }
+      setToastMessage('एडवांस एंट्री सफलतापूर्वक हटाई गई।');
+      setTimeout(() => setToastMessage(null), 3000);
     } catch (err) {
       console.error('Error deleting advance item:', err);
     }

@@ -1,0 +1,353 @@
+import { PublicRiderStatement, RiderAdvanceEntry, RiderIncentiveEntry } from '../types';
+import { formatDateDisplay, formatINR } from './formatters';
+
+export interface LedgerSalaryRecord {
+  id: string;
+  startDate: string;
+  endDate: string;
+  totalParcels: number;
+  baseAmount?: number;
+  incentiveAmount?: number;
+  grossTotal: number;
+  advanceAmount: number;
+  netTotal: number;
+  paidAt?: string;
+  status: string; // 'PAID' | 'UNPAID' | 'PENDING'
+}
+
+export interface UnifiedTransactionItem {
+  id: string;
+  originalId: string;
+  rawDate: string;
+  sortTimestamp: number;
+  formattedDate: string;
+  type: 'advance' | 'incentive' | 'salary' | 'delivery';
+  title: string;
+  subTitle?: string;
+  salaryDetails?: {
+    startDate: string;
+    endDate: string;
+    totalParcels: number;
+    grossTotal: number;
+    advanceDeducted: number;
+    netPaid: number;
+    status: string;
+  };
+  paidToRider: number;     // आपने दिया (YOU GAVE) -> Advances, shortages, cash adjustments (+₹)
+  settledOrEarned: number; // बना / मिला (YOU GOT) -> Salary earnings, incentives, bonuses (-₹)
+  runningBalance: number;  // Running Net Balance after this row
+  runningBalanceLabel: string; // e.g. "लेना: ₹500" or "देना: ₹200" or "₹0"
+}
+
+export interface LedgerCalculationResult {
+  timelineRows: UnifiedTransactionItem[];
+  totalPaidToRider: number;
+  totalSettledOrEarned: number;
+  unsettledAdvances: number;
+  unsettledIncentives: number;
+  unpaidSalary: number;
+  netBalance: number; // Absolute balance value
+  rawDifference: number; // positive = rider owes hub, negative = hub owes rider
+  balanceStatus: 'rider_due' | 'payable' | 'settled';
+  balanceLabel: string;
+}
+
+/**
+ * Clean & bulletproof Khatabook ledger math calculation.
+ * 
+ * Rules:
+ * 1. An advance given adds to rider debt (Paid to Rider / दिया गया +₹).
+ * 2. When a settlement deducts an advance:
+ *    - It clears previously accumulated advance up to `advanceDeducted`.
+ *    - If status is PAID, net payout is already disbursed and advance is cleared.
+ *    - Outstanding balance for this settlement deduction is ZERO.
+ *    - It NEVER adds `advanceDeducted` as money the hub owes to the rider!
+ * 3. Formula for Net Balance:
+ *    - Unsettled Advances = Max(0, Total Advances Given - Total Advances Deducted)
+ *    - Unsettled Incentives = Sum of incentives not yet paid
+ *    - Unpaid Salary = Net salary of settlements marked UNPAID or PENDING
+ *    - Total Rider Due (लेना बाकी) = Unsettled Advances
+ *    - Total Rider Receivable (देना बाकी) = Unsettled Incentives + Unpaid Salary
+ *    - Net Balance = Total Rider Due - Total Rider Receivable
+ */
+export function calculateRiderLedger(
+  statement: PublicRiderStatement | null | undefined,
+  sortOrder: 'asc' | 'desc' = 'desc'
+): LedgerCalculationResult {
+  if (!statement) {
+    return {
+      timelineRows: [],
+      totalPaidToRider: 0,
+      totalSettledOrEarned: 0,
+      unsettledAdvances: 0,
+      unsettledIncentives: 0,
+      unpaidSalary: 0,
+      netBalance: 0,
+      rawDifference: 0,
+      balanceStatus: 'settled',
+      balanceLabel: '⚪ पूरा हिसाब चुकता: ₹0',
+    };
+  }
+
+  // 1. Filter out any internal negative adjustment records created by old settlement routines
+  const validAdvances: RiderAdvanceEntry[] = (statement.advances || []).filter((a) => {
+    const amt = Number(a.amount) || 0;
+    const isNegativeOrAdj = amt < 0 || a.id?.startsWith('settle_adj') || a.reason?.includes('सेटलमेंट समायोजन');
+    return amt > 0 && !isNegativeOrAdj;
+  });
+
+  const sumExplicitAdvances = validAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+
+  // 2. Filter positive incentives
+  const validIncentives: RiderIncentiveEntry[] = (statement.incentives || []).filter((i) => {
+    return (Number(i.amount) || 0) > 0;
+  });
+
+  const sumExplicitIncentives = validIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+
+  // 3. Process settlements / salaries
+  const salaries: LedgerSalaryRecord[] = (statement.salaries || []).map((s) => ({
+    id: s.id,
+    startDate: s.startDate,
+    endDate: s.endDate,
+    totalParcels: Number(s.totalParcels) || 0,
+    baseAmount: Number(s.baseAmount) || 0,
+    incentiveAmount: Number(s.incentiveAmount) || 0,
+    grossTotal: Number(s.grossTotal) || 0,
+    advanceAmount: Number(s.advanceAmount) || 0,
+    netTotal: Number(s.netTotal) || 0,
+    paidAt: s.paidAt,
+    status: s.status || 'PAID',
+  }));
+
+  const totalAdvanceDeducted = salaries.reduce((sum, s) => sum + s.advanceAmount, 0);
+  
+  // Unpaid salaries (status is not PAID)
+  const unpaidSalary = salaries
+    .filter((s) => s.status && s.status.trim().toUpperCase() !== 'PAID')
+    .reduce((sum, s) => sum + s.netTotal, 0);
+
+  // 4. Calculate ACTIVE / UNSETTLED ADVANCES:
+  // Advances that have NOT been deducted in any settled payout.
+  // Net balance of all advance entries (positive advances minus explicit settlement deduction adjustment entries)
+  const netAdvancesFromList = (statement.advances || []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  // Undeducted advances that have no settlementId attached
+  const undeductedAdvances = (statement.advances || []).filter((a) => {
+    const amt = Number(a.amount) || 0;
+    if (amt <= 0) return false;
+    if (a.settlementId) return false;
+    if (a.id?.startsWith('settle_adj') || a.reason?.includes('सेटलमेंट समायोजन')) return false;
+    return true;
+  });
+  const sumUndeductedAdvances = undeductedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const recordedTotalAdvance = typeof statement.totalAdvance === 'number' ? Math.max(0, Number(statement.totalAdvance) || 0) : 0;
+
+  let unsettledAdvances = 0;
+  if (recordedTotalAdvance > 0) {
+    unsettledAdvances = recordedTotalAdvance;
+  } else if (netAdvancesFromList > 0) {
+    unsettledAdvances = netAdvancesFromList;
+  } else if (sumUndeductedAdvances > 0) {
+    unsettledAdvances = sumUndeductedAdvances;
+  } else {
+    unsettledAdvances = 0;
+  }
+
+  // 5. Calculate ACTIVE / UNSETTLED INCENTIVES:
+  // Incentives that have NOT yet been paid out in a settlement
+  const undeductedIncentives = (statement.incentives || []).filter((i) => {
+    if (i.settlementId) return false;
+    return (Number(i.amount) || 0) > 0;
+  });
+  const sumUndeductedIncentives = undeductedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+  const recordedTotalIncentive = typeof statement.totalIncentive === 'number' ? Math.max(0, Number(statement.totalIncentive) || 0) : 0;
+
+  let unsettledIncentives = 0;
+  if (recordedTotalIncentive > 0) {
+    unsettledIncentives = recordedTotalIncentive;
+  } else if (sumUndeductedIncentives > 0) {
+    unsettledIncentives = sumUndeductedIncentives;
+  } else {
+    unsettledIncentives = 0;
+  }
+
+  // 6. Net Balance Formula:
+  // Total Active Advances = unsettledAdvances (Rider Due / लेना बाकी)
+  // Total Active Earnings = unsettledIncentives + unpaidSalary (Payable to Rider / देना बाकी)
+  const totalRiderDue = unsettledAdvances;
+  const totalRiderReceivable = unsettledIncentives + unpaidSalary;
+  const rawDifference = totalRiderDue - totalRiderReceivable;
+  const netBalance = Math.abs(rawDifference);
+
+  let balanceStatus: 'rider_due' | 'payable' | 'settled' = 'settled';
+  let balanceLabel = '⚪ हिसाब चुकता: ₹0';
+
+  if (rawDifference > 0) {
+    balanceStatus = 'rider_due';
+    balanceLabel = `🔴 आपको मिलेगा (लेना बाकी): ₹${formatINR(netBalance)}`;
+  } else if (rawDifference < 0) {
+    balanceStatus = 'payable';
+    balanceLabel = `🟢 आपको देना होगा (देना बाकी): ₹${formatINR(netBalance)}`;
+  } else {
+    balanceStatus = 'settled';
+    balanceLabel = '⚪ हिसाब चुकता: ₹0';
+  }
+
+  // 7. Assemble Unified Transaction Rows
+  type DraftRow = Omit<UnifiedTransactionItem, 'runningBalance' | 'runningBalanceLabel'>;
+  const rawList: DraftRow[] = [];
+
+  // A. Advances Given
+  validAdvances.forEach((adv) => {
+    const advAmt = Number(adv.amount) || 0;
+    const dateVal = adv.date || adv.createdAt || '';
+    const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
+
+    rawList.push({
+      id: `adv-${adv.id}`,
+      originalId: adv.id,
+      rawDate: dateVal,
+      sortTimestamp: timestamp,
+      formattedDate: adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt),
+      type: 'advance',
+      title: adv.reason || 'एडवांस भुगतान (Advance Given)',
+      subTitle: 'नकद / ऑनलाइन भुगतान',
+      paidToRider: advAmt,
+      settledOrEarned: 0,
+    });
+  });
+
+  // If prior advance is needed to account for past deductions or recorded total advance:
+  const priorAdvanceNeeded = Math.max(0, (totalAdvanceDeducted + unsettledAdvances) - sumExplicitAdvances);
+  if (priorAdvanceNeeded > 0) {
+    const firstSettle = salaries[0];
+    const dateVal = firstSettle?.startDate || statement.updatedAt || new Date().toISOString();
+    const timestamp = (firstSettle ? new Date(firstSettle.startDate).getTime() : Date.now()) - 86400000;
+
+    rawList.push({
+      id: 'prior-settled-advance',
+      originalId: 'prior-settled-advance',
+      rawDate: dateVal,
+      sortTimestamp: timestamp,
+      formattedDate: formatDateDisplay(dateVal),
+      type: 'advance',
+      title: sumExplicitAdvances === 0 && totalAdvanceDeducted === 0
+        ? 'ओपनिंग एडवांस बैलेंस (Opening Advance)'
+        : 'स्वीकृत पूर्व एडवांस (Advance Given)',
+      subTitle: sumExplicitAdvances === 0 && totalAdvanceDeducted === 0
+        ? 'स्वीकृत कुल प्रारंभिक एडवांस राशि'
+        : 'सैलरी कटौती से पूर्व दिया गया नकद एडवांस',
+      paidToRider: priorAdvanceNeeded,
+      settledOrEarned: 0,
+    });
+  }
+
+  // B. Incentives Given
+  validIncentives.forEach((inc) => {
+    const incAmt = Number(inc.amount) || 0;
+    const dateVal = inc.date || inc.createdAt || '';
+    const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
+
+    rawList.push({
+      id: `inc-${inc.id}`,
+      originalId: inc.id,
+      rawDate: dateVal,
+      sortTimestamp: timestamp,
+      formattedDate: inc.date ? formatDateDisplay(inc.date) : formatDateDisplay(inc.createdAt),
+      type: 'incentive',
+      title: inc.reason || 'इंसेंटिव / बोनस (Incentive & Bonus)',
+      subTitle: inc.source === 'surplus' ? 'अतिरिक्त सरप्लस जमा' : 'स्वीकृत बोनस',
+      paidToRider: 0,
+      settledOrEarned: incAmt,
+    });
+  });
+
+  // C. Salary Settlements
+  salaries.forEach((sal) => {
+    const dateVal = sal.paidAt ? sal.paidAt.split('T')[0] : sal.endDate;
+    const timestamp = new Date(sal.paidAt || sal.endDate).getTime() || 0;
+    const isPaid = !sal.status || sal.status.trim().toUpperCase() === 'PAID';
+    
+    // In the ledger:
+    // If advance was deducted: that deduction clears advance debt (- बना / मिला)
+    // If salary is unpaid: the unpaid net salary is also owed to the rider (- बना / मिला)
+    // If salary is fully paid with 0 advance: net was paid out, so settledOrEarned for advance is 0
+    const advDeducted = sal.advanceAmount;
+    const unpaidNet = isPaid ? 0 : sal.netTotal;
+    const settledAmount = advDeducted + unpaidNet;
+
+    let subTitle = `${sal.totalParcels} पार्सल • सकल: ₹${formatINR(sal.grossTotal)}`;
+    if (advDeducted > 0) {
+      subTitle += ` | एडवांस कटौती: ₹${formatINR(advDeducted)}`;
+    }
+    subTitle += ` | नेट भुगतान: ₹${formatINR(sal.netTotal)} • ${isPaid ? 'भुगतान पूर्ण (PAID)' : 'लंबित (PENDING)'}`;
+
+    rawList.push({
+      id: `sal-${sal.id}`,
+      originalId: sal.id,
+      rawDate: dateVal,
+      sortTimestamp: timestamp,
+      formattedDate: formatDateDisplay(dateVal),
+      type: 'salary',
+      title: `सैलरी पे-आउट (${sal.startDate} से ${sal.endDate})`,
+      subTitle,
+      salaryDetails: {
+        startDate: sal.startDate,
+        endDate: sal.endDate,
+        totalParcels: sal.totalParcels,
+        grossTotal: sal.grossTotal,
+        advanceDeducted: advDeducted,
+        netPaid: sal.netTotal,
+        status: sal.status,
+      },
+      paidToRider: 0,
+      settledOrEarned: settledAmount,
+    });
+  });
+
+  // Sort strictly oldest first (ascending) to compute chronological running balance
+  rawList.sort((a, b) => a.sortTimestamp - b.sortTimestamp);
+
+  // Compute chronological running balance:
+  // Let balance = 0 at start.
+  // आपने दिया (YOU GAVE: advance / shortage) -> balance += paidToRider
+  // बना / मिला (YOU GOT: salary / incentive / bonus) -> balance -= settledOrEarned
+  let running = 0;
+  const processedRows: UnifiedTransactionItem[] = rawList.map((row) => {
+    running = running + row.paidToRider - row.settledOrEarned;
+    const absBal = Math.abs(running);
+    let label = 'Bal. ₹0';
+    if (running > 0) {
+      label = `लेना: ₹${formatINR(absBal)}`;
+    } else if (running < 0) {
+      label = `देना: ₹${formatINR(absBal)}`;
+    }
+    return {
+      ...row,
+      runningBalance: running,
+      runningBalanceLabel: label,
+    };
+  });
+
+  // If user requested descending order, reverse the rows after running balance is computed
+  if (sortOrder === 'desc') {
+    processedRows.reverse();
+  }
+
+  // Calculate Table Column Totals
+  const totalPaidToRider = processedRows.reduce((acc, row) => acc + row.paidToRider, 0);
+  const totalSettledOrEarned = processedRows.reduce((acc, row) => acc + row.settledOrEarned, 0);
+
+  return {
+    timelineRows: processedRows,
+    totalPaidToRider,
+    totalSettledOrEarned,
+    unsettledAdvances,
+    unsettledIncentives,
+    unpaidSalary,
+    netBalance,
+    rawDifference,
+    balanceStatus,
+    balanceLabel,
+  };
+}

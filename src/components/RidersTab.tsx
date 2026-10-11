@@ -31,7 +31,8 @@ import {
   Table,
   Share2,
   Gift,
-  Receipt
+  Receipt,
+  RotateCcw
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings } from '../types';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
@@ -93,6 +94,7 @@ interface Props {
     }
   ) => Promise<void>;
   onDeleteIncentive?: (riderId: string, incentiveId: string) => Promise<void>;
+  onResetRiderAccount?: (riderId: string) => Promise<void>;
   onViewLedger?: (riderId: string) => void;
   settlements?: SettlementRecord[];
   canAccessFestivalGreetings?: boolean;
@@ -120,6 +122,7 @@ export const RidersTab: React.FC<Props> = ({
   onDeleteAdvance,
   onSaveIncentive,
   onDeleteIncentive,
+  onResetRiderAccount,
   onViewLedger,
   canAccessFestivalGreetings = false,
   hubSignature,
@@ -1211,7 +1214,76 @@ export const RidersTab: React.FC<Props> = ({
             const stats = getRiderStats(rider.id);
             const rangeStats = getRiderRangeStats(rider.id);
             const isExpanded = !!expandedRiderIds[rider.id];
-            const hasAdvance = Number(rider.totalAdvance || 0) > 0;
+
+            // Paid settlements for this rider to auto-zero cleared advances & incentives
+            const riderPaidSettlements = (settlements || []).filter(
+              (s) => s.riderId === rider.id && (!s.status || s.status.trim().toUpperCase() === 'PAID')
+            );
+            const hasPaidSettlements = riderPaidSettlements.length > 0;
+            const latestPaidSettlementTimestamp = riderPaidSettlements.reduce((max, s) => {
+              const t = new Date(s.paidAt || s.endDate || 0).getTime();
+              return t > max ? t : max;
+            }, 0);
+
+            // Active Advance:
+            // Filter advances that are un-deducted (no settlementId, not an adjustment, and created after latest paid settlement)
+            const undeductedAdvances = (rider.advances || []).filter((a) => {
+              const amt = Number(a.amount) || 0;
+              if (amt <= 0) return false;
+              if (a.settlementId) return false;
+              if (a.id?.startsWith('settle_adj') || a.reason?.includes('सेटलमेंट समायोजन')) return false;
+              if (latestPaidSettlementTimestamp > 0) {
+                const advTime = new Date(a.date || a.createdAt || 0).getTime();
+                if (advTime > 0 && advTime <= latestPaidSettlementTimestamp) return false;
+              }
+              return true;
+            });
+            const sumNewlyAddedAdvances = undeductedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+
+            let activeAdvanceBalance = 0;
+            if (hasPaidSettlements) {
+              if (sumNewlyAddedAdvances > 0) {
+                activeAdvanceBalance = sumNewlyAddedAdvances;
+              } else {
+                const totalDeductedInSettlements = riderPaidSettlements.reduce(
+                  (sum, s) => sum + (Number(s.advanceAmount) || 0),
+                  0
+                );
+                const rawTotal = Number(rider.totalAdvance) || 0;
+                activeAdvanceBalance = Math.max(0, rawTotal - totalDeductedInSettlements);
+              }
+            } else {
+              activeAdvanceBalance = Number(rider.totalAdvance) || 0;
+            }
+
+            // Active Incentive:
+            const undeductedIncentives = (rider.incentives || []).filter((i) => {
+              const amt = Number(i.amount) || 0;
+              if (amt <= 0) return false;
+              if (i.settlementId) return false;
+              if (latestPaidSettlementTimestamp > 0) {
+                const incTime = new Date(i.date || i.createdAt || 0).getTime();
+                if (incTime > 0 && incTime <= latestPaidSettlementTimestamp) return false;
+              }
+              return true;
+            });
+            const sumNewlyAddedIncentives = undeductedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+
+            let activeIncentiveBalance = 0;
+            if (hasPaidSettlements) {
+              if (sumNewlyAddedIncentives > 0) {
+                activeIncentiveBalance = sumNewlyAddedIncentives;
+              } else {
+                const totalPaidIncentivesInSettlements = riderPaidSettlements.reduce(
+                  (sum, s) => sum + (Number(s.incentiveAmount) || 0),
+                  0
+                );
+                const rawTotal = Number(rider.totalIncentive) || 0;
+                activeIncentiveBalance = Math.max(0, rawTotal - totalPaidIncentivesInSettlements);
+              }
+            } else {
+              activeIncentiveBalance = Number(rider.totalIncentive) || 0;
+            }
 
             return (
               <div
@@ -1315,20 +1387,22 @@ export const RidersTab: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    {hasAdvance && (
+                    {/* Advance Balance Badge - Auto-zeros on post-payout */}
+                    {(activeAdvanceBalance > 0 || hasPaidSettlements || Number(rider.totalAdvance || 0) > 0) && (
                       <div className="text-right">
-                        <div className="text-xs text-rose-400">Advance Balance</div>
-                        <div className="text-sm font-bold text-rose-400 font-mono">
-                          {formatINR(Number(rider.totalAdvance) || 0)}
+                        <div className={`text-xs ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-400'}`}>Advance Balance</div>
+                        <div className={`text-sm font-bold font-mono ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                          {activeAdvanceBalance > 0 ? formatINR(activeAdvanceBalance) : '₹0'}
                         </div>
                       </div>
                     )}
 
-                    {Number(rider.totalIncentive) > 0 && (
+                    {/* Incentive Total Badge - Auto-zeros on post-payout */}
+                    {(activeIncentiveBalance > 0 || hasPaidSettlements || Number(rider.totalIncentive || 0) > 0) && (
                       <div className="text-right">
-                        <div className="text-xs text-emerald-400">Incentive Total</div>
-                        <div className="text-sm font-bold text-emerald-400 font-mono">
-                          +{formatINR(Number(rider.totalIncentive) || 0)}
+                        <div className={`text-xs ${activeIncentiveBalance > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>Incentive Total</div>
+                        <div className={`text-sm font-bold font-mono ${activeIncentiveBalance > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                          {activeIncentiveBalance > 0 ? `+${formatINR(activeIncentiveBalance)}` : '₹0'}
                         </div>
                       </div>
                     )}
@@ -1367,6 +1441,23 @@ export const RidersTab: React.FC<Props> = ({
                         >
                           <Receipt className="w-3.5 h-3.5 text-blue-400" />
                           <span className="hidden sm:inline">खाता</span>
+                        </button>
+                      )}
+
+                      {/* Explicit Admin Action: खाता रीसेट (Clear Test Data) */}
+                      {onResetRiderAccount && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`क्या आप ${rider.name} का पूरा खाता रीसेट (Clear Test Data) करना चाहते हैं?\n\nसभी टेस्ट एडवांस और इंसेंटिव डेटा हमेशा के लिए हटा दिया जाएगा और बकाया ₹0 हो जाएगा।`)) {
+                              onResetRiderAccount(rider.id);
+                            }
+                          }}
+                          className="px-2 py-1.5 bg-rose-950/30 hover:bg-rose-900/60 text-rose-300 hover:text-rose-100 border border-rose-800/40 hover:border-rose-600 rounded-xl text-xs font-medium flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                          title="खाता रीसेट (Clear Test Data & Set to ₹0)"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                          <span className="hidden lg:inline">रीसेट</span>
                         </button>
                       )}
 

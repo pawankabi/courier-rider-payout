@@ -160,9 +160,16 @@ export const IncentivesTab: React.FC<Props> = ({
 
   const handleDelete = async (riderId: string, incentiveId: string, incAmount: number) => {
     if (!onDeleteIncentive) return;
-    if (!window.confirm(`क्या आप ₹${incAmount} का यह इंसेंटिव रिकॉर्ड हटाना चाहते हैं?`)) {
-      return;
+    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (₹${incAmount} - इंसेंटिव)`;
+    let confirmed = true;
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        confirmed = window.confirm(confirmPrompt);
+      }
+    } catch {
+      confirmed = true;
     }
+    if (!confirmed) return;
     try {
       await onDeleteIncentive(riderId, incentiveId);
       showToast('इंसेंटिव रिकॉर्ड सफलतापूर्वक हटा दिया गया।');

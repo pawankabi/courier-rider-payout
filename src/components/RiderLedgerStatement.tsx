@@ -2,78 +2,48 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   FileSpreadsheet, 
   Printer, 
-  Share2, 
   ArrowLeft, 
-  Calendar, 
-  IndianRupee, 
-  Bike, 
   Phone, 
-  CheckCircle2, 
-  Clock, 
-  TrendingUp, 
   Download, 
   Copy, 
   Check, 
   MessageCircle, 
-  ShieldCheck, 
-  Building2,
   RefreshCw, 
-  ExternalLink, 
-  Receipt, 
-  ArrowDownLeft, 
-  ArrowUpRight, 
-  X, 
-  Gift,
+  Receipt,
+  ArrowUpDown,
   Trash2,
-  AlertCircle,
-  AlertTriangle
+  RotateCcw,
+  ShieldCheck
 } from 'lucide-react';
-import { PublicRiderStatement, RiderAdvanceEntry, RiderIncentiveEntry } from '../types';
+import { PublicRiderStatement } from '../types';
 import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
-import { fetchPublicRiderStatement, deleteAdvanceFromFirestore, deleteIncentiveFromFirestore, syncPublicRiderStatement } from '../services/firestoreSync';
+import { fetchPublicRiderStatement } from '../services/firestoreSync';
 import { generateStatementUrl } from '../services/smsService';
 import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
+import { calculateRiderLedger } from '../utils/ledgerCalculation';
+import type { UnifiedTransactionItem } from '../utils/ledgerCalculation';
 
-interface RiderLedgerStatementProps {
+export type { UnifiedTransactionItem };
+
+export interface RiderLedgerStatementProps {
   riderId?: string;
   initialStatement?: PublicRiderStatement | null;
   onBackToApp?: () => void;
-  onDeleteAdvance?: (advanceId: string) => Promise<void>;
-  onDeleteIncentive?: (incentiveId: string) => Promise<void>;
   userId?: string;
-}
-
-export interface UnifiedTransactionItem {
-  id: string;
-  rawDate: string;
-  sortTimestamp: number;
-  formattedDate: string;
-  type: 'advance' | 'incentive' | 'salary' | 'delivery';
-  title: string;
-  subTitle?: string;
-  salaryDetails?: {
-    startDate: string;
-    endDate: string;
-    totalParcels: number;
-    grossTotal: number;
-    advanceDeducted: number;
-    netPaid: number;
-  };
-  debit: number;    // Amount Given / Dr (Red)
-  credit: number;   // Amount Earned / Cr (Green)
-  runningBalance: number;
-  balanceType: 'Dr' | 'Cr' | 'Zero';
-  canDelete: boolean;
-  deleteId?: string;
+  isAdmin?: boolean;
+  onDeleteAdvance?: (advId: string) => Promise<void>;
+  onDeleteIncentive?: (incId: string) => Promise<void>;
+  onResetAccount?: () => Promise<void>;
 }
 
 export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   riderId: propRiderId,
   initialStatement = null,
   onBackToApp,
+  isAdmin = false,
   onDeleteAdvance,
   onDeleteIncentive,
-  userId = '',
+  onResetAccount,
 }) => {
   // Extract or resolve riderId from prop or window location (hash or search params)
   const resolvedRiderId = useMemo(() => {
@@ -161,8 +131,14 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const [loading, setLoading] = useState<boolean>(!initialStatement && !statement);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [feedbackToast, setFeedbackToast] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // Default: 'desc' = Current to Oldest (Newest at top)
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3000);
+  };
 
   // Sync state if initialStatement updates from parent
   useEffect(() => {
@@ -223,7 +199,11 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     };
   }, [resolvedRiderId]);
 
-  const statementUrl = generateStatementUrl(resolvedRiderId || statement?.riderId || '');
+  // Statement URL strictly resolved to production Vercel domain or current vercel.app origin
+  const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')
+    ? window.location.origin
+    : 'https://courier-rider-payout.vercel.app';
+  const statementUrl = `${baseUrl}/#/statement/${encodeURIComponent((resolvedRiderId || statement?.riderId || '').trim())}`;
 
   const handleCopyLink = () => {
     if (statementUrl) {
@@ -237,336 +217,143 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     window.print();
   };
 
-  // Compile Unified Single-Timeline Transactions & Running Balance
+  // Compile Transactions & Simple Khatabook Math via calculateRiderLedger
   const { 
     timelineRows, 
-    totalDebit, 
-    totalCredit, 
+    totalPaidToRider, 
+    totalSettledOrEarned, 
     netBalance, 
     balanceStatus,
-    totalAdvancesGiven,
-    totalIncentivesGiven,
-    totalAdvanceRecovered,
-    outstandingAdvance
+    balanceLabel,
   } = useMemo(() => {
-    if (!statement) {
-      return { 
-        timelineRows: [], 
-        totalDebit: 0, 
-        totalCredit: 0, 
-        netBalance: 0, 
-        balanceStatus: 'settled' as const,
-        totalAdvancesGiven: 0,
-        totalIncentivesGiven: 0,
-        totalAdvanceRecovered: 0,
-        outstandingAdvance: 0,
-      };
+    return calculateRiderLedger(statement, sortOrder);
+  }, [statement, sortOrder]);
+
+  // Admin Actions: Delete Row
+  const handleDeleteRow = async (row: UnifiedTransactionItem) => {
+    if (!isAdmin) return;
+    const itemAmount = row.paidToRider || row.settledOrEarned;
+    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (${row.title} - ₹${itemAmount})`;
+
+    let confirmed = true;
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        confirmed = window.confirm(confirmPrompt);
+      }
+    } catch {
+      confirmed = true;
     }
+    if (!confirmed) return;
 
-    const rawList: Omit<UnifiedTransactionItem, 'runningBalance' | 'balanceType'>[] = [];
-
-    // 1. ADVANCES GIVEN (Dr - Rider owes Hub)
-    let advancesSum = 0;
-    (statement.advances || []).forEach((adv) => {
-      const advAmt = Number(adv.amount) || 0;
-      advancesSum += advAmt;
-      const dateVal = adv.date || adv.createdAt || '';
-      const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
-
-      rawList.push({
-        id: `adv-${adv.id}`,
-        rawDate: dateVal,
-        sortTimestamp: timestamp,
-        formattedDate: adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt),
-        type: 'advance',
-        title: adv.reason || 'एडवांस भुगतान (Advance Given)',
-        subTitle: 'नकद / ऑनलाइन ट्रांसफर',
-        debit: advAmt,
-        credit: 0,
-        canDelete: true,
-        deleteId: adv.id,
-      });
-    });
-
-    // Fallback opening advance if advances array is empty but totalAdvance > 0
-    if ((!statement.advances || statement.advances.length === 0) && (statement.totalAdvance || 0) > 0) {
-      const opAmt = Number(statement.totalAdvance) || 0;
-      advancesSum += opAmt;
-      rawList.push({
-        id: 'opening-advance',
-        rawDate: statement.updatedAt || new Date().toISOString(),
-        sortTimestamp: new Date(statement.updatedAt || Date.now()).getTime() - 86400000,
-        formattedDate: formatDateDisplay(statement.updatedAt || new Date().toISOString()),
-        type: 'advance',
-        title: 'ओपनिंग एडवांस बैलेंस (Opening Advance)',
-        subTitle: 'स्वीकृत कुल प्रारंभिक एडवांस राशि',
-        debit: opAmt,
-        credit: 0,
-        canDelete: false,
-      });
-    }
-
-    // 2. INCENTIVES GIVEN (Cr - Hub awards Bonus / Surplus to Rider)
-    let incentivesSum = 0;
-    (statement.incentives || []).forEach((inc) => {
-      const incAmt = Number(inc.amount) || 0;
-      incentivesSum += incAmt;
-      const dateVal = inc.date || inc.createdAt || '';
-      const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
-
-      rawList.push({
-        id: `inc-${inc.id}`,
-        rawDate: dateVal,
-        sortTimestamp: timestamp,
-        formattedDate: inc.date ? formatDateDisplay(inc.date) : formatDateDisplay(inc.createdAt),
-        type: 'incentive',
-        title: inc.reason || 'इंसेंटिव / बोनस (Incentive & Bonus)',
-        subTitle: inc.source === 'surplus' ? 'अतिरिक्त सरप्लस जमा (Excess Cash Credit)' : 'स्वीकृत बोनस',
-        debit: 0,
-        credit: incAmt,
-        canDelete: true,
-        deleteId: inc.id,
-      });
-    });
-
-    // 3. SALARY / PAYOUT CALCULATED (Settlement Payouts)
-    let recoveredAdvanceSum = 0;
-    (statement.salaries || []).forEach((sal) => {
-      const dateVal = sal.paidAt ? sal.paidAt.split('T')[0] : sal.endDate;
-      const timestamp = new Date(sal.paidAt || sal.endDate).getTime() || 0;
-      const advDeducted = Number(sal.advanceAmount) || 0;
-      recoveredAdvanceSum += advDeducted;
-
-      // Settlement clears advance debt by advDeducted, and rider received netTotal
-      rawList.push({
-        id: `sal-${sal.id}`,
-        rawDate: dateVal,
-        sortTimestamp: timestamp,
-        formattedDate: formatDateDisplay(dateVal),
-        type: 'salary',
-        title: `सैलरी पे-आउट (${sal.startDate} से ${sal.endDate})`,
-        subTitle: `${sal.totalParcels} पार्सल • सकल: ₹${sal.grossTotal} | एडवांस कटौती: ₹${advDeducted} | नेट भुगतान: ₹${sal.netTotal}`,
-        salaryDetails: {
-          startDate: sal.startDate,
-          endDate: sal.endDate,
-          totalParcels: sal.totalParcels,
-          grossTotal: Number(sal.grossTotal) || 0,
-          advanceDeducted: advDeducted,
-          netPaid: Number(sal.netTotal) || 0,
-        },
-        debit: 0,
-        // The credit to rider's advance ledger is the advance amount recovered
-        credit: advDeducted,
-        canDelete: false,
-      });
-    });
-
-    // 4. UNSETTLED DELIVERIES (If no settlement yet, rider has accrued delivery credits)
-    if (statement.recentDeliveries && statement.recentDeliveries.length > 0) {
-      statement.recentDeliveries.forEach((del) => {
-        if (del.settlementId) return;
-        const isCoveredBySalary = (statement.salaries || []).some(
-          (sal) => del.date >= sal.startDate && del.date <= sal.endDate
-        );
-        if (isCoveredBySalary && (statement.salaries || []).length > 0) return;
-
-        const dateVal = del.date;
-        const timestamp = new Date(dateVal).getTime() || 0;
-        const earnings = Number(del.totalEarnings) || 0;
-
-        rawList.push({
-          id: `del-${del.id}`,
-          rawDate: dateVal,
-          sortTimestamp: timestamp,
-          formattedDate: formatDateDisplay(dateVal),
-          type: 'delivery',
-          title: `दैनिक डिलीवरी (${del.parcels} पार्सल)`,
-          subTitle: del.status === 'Paid' ? `सकल आय: ₹${earnings} • भुगतान संपन्न` : `उपार्जित पार्सल आय: ₹${earnings}`,
-          debit: 0,
-          credit: 0, // Informative row
-          canDelete: false,
+    setActionInProgress(row.id);
+    try {
+      if (row.type === 'advance' && onDeleteAdvance) {
+        await onDeleteAdvance(row.originalId);
+        // Optimistic state update
+        setStatement((prev) => {
+          if (!prev) return null;
+          const updatedAdvances = (prev.advances || []).filter(
+            (a) => a.id !== row.originalId && `adv-${a.id}` !== row.id
+          );
+          const newTotal = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+          return {
+            ...prev,
+            advances: updatedAdvances,
+            totalAdvance: newTotal,
+          };
         });
-      });
-    }
-
-    // Sort chronologically (oldest first) to compute running net balance
-    rawList.sort((a, b) => a.sortTimestamp - b.sortTimestamp);
-
-    let cumulativeBalance = 0; // Positive = Rider owes Hub (Dr), Negative = Hub owes Rider (Cr)
-    let sumDebit = 0;
-    let sumCredit = 0;
-
-    const compiledRows: UnifiedTransactionItem[] = rawList.map((row) => {
-      sumDebit += row.debit;
-      sumCredit += row.credit;
-
-      cumulativeBalance = cumulativeBalance + row.debit - row.credit;
-
-      const balanceType: 'Dr' | 'Cr' | 'Zero' = 
-        cumulativeBalance > 0 ? 'Dr' : cumulativeBalance < 0 ? 'Cr' : 'Zero';
-
-      return {
-        ...row,
-        runningBalance: Math.abs(cumulativeBalance),
-        balanceType,
-      };
-    });
-
-    // Authoritative Outstanding Advance
-    const currentOutstandingAdvance = typeof statement.totalAdvance === 'number'
-      ? statement.totalAdvance
-      : Math.max(0, advancesSum - recoveredAdvanceSum);
-
-    // Final Net Balance:
-    // Net = outstanding advance (debt) - total active incentives (credits)
-    const netDue = currentOutstandingAdvance - incentivesSum;
-
-    let balanceStatus: 'rider_due' | 'payable' | 'settled' = 'settled';
-    if (netDue > 0) {
-      balanceStatus = 'rider_due';
-    } else if (netDue < 0) {
-      balanceStatus = 'payable';
-    } else {
-      balanceStatus = 'settled';
-    }
-
-    return {
-      // Reverse so newest transactions are right at the top for immediate visibility
-      timelineRows: compiledRows.reverse(),
-      totalDebit: sumDebit,
-      totalCredit: sumCredit,
-      netBalance: Math.abs(netDue),
-      balanceStatus,
-      totalAdvancesGiven: advancesSum,
-      totalIncentivesGiven: incentivesSum,
-      totalAdvanceRecovered: recoveredAdvanceSum,
-      outstandingAdvance: currentOutstandingAdvance,
-    };
-  }, [statement]);
-
-  // Handle Delete Advance with instant Firestore removal & recalculation
-  const handleDeleteAdvanceItem = async (advId: string) => {
-    if (!statement) return;
-    const target = (statement.advances || []).find((a) => a.id === advId);
-    const amtStr = target ? `₹${target.amount}` : '';
-    const reasonStr = target?.reason || 'एडवांस';
-
-    if (!window.confirm(`क्या आप ${amtStr} (${reasonStr}) की एडवांस एंट्री हटाना चाहते हैं? यह डेटाबेस से तुरंत हट जाएगी और बैलेंस दोबारा कैलकुलेट हो जाएगा।`)) {
-      return;
-    }
-
-    setDeletingId(`adv-${advId}`);
-    try {
-      // 1. Delete Firestore document
-      const currentUserId = userId || (statement as any).userId || (statement as any).workspaceId || '';
-      await deleteAdvanceFromFirestore(currentUserId, advId);
-
-      // 2. Call parent callback if available
-      if (onDeleteAdvance) {
-        await onDeleteAdvance(advId);
+        showToast('एडवांस एंट्री सफलतापूर्वक हटाई गई।');
+      } else if (row.type === 'incentive' && onDeleteIncentive) {
+        await onDeleteIncentive(row.originalId);
+        // Optimistic state update
+        setStatement((prev) => {
+          if (!prev) return null;
+          const updatedIncentives = (prev.incentives || []).filter(
+            (i) => i.id !== row.originalId && `inc-${i.id}` !== row.id
+          );
+          const newTotal = updatedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+          return {
+            ...prev,
+            incentives: updatedIncentives,
+            totalIncentive: newTotal,
+          };
+        });
+        showToast('इंसेंटिव एंट्री सफलतापूर्वक हटाई गई।');
       }
-
-      // 3. Immediately update local statement state so UI recalculates in 0 seconds
-      const updatedAdvances = (statement.advances || []).filter((a) => a.id !== advId);
-      const newTotalAdv = updatedAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0);
-      setStatement({
-        ...statement,
-        advances: updatedAdvances,
-        totalAdvance: newTotalAdv,
-      });
-
-      setFeedbackToast({
-        text: `एडवांस एंट्री सफलतापूर्वक हटाई गई एवं बैलेंस अपडेट हो गया।`,
-        type: 'success',
-      });
-      setTimeout(() => setFeedbackToast(null), 3000);
     } catch (err) {
-      console.error('Error deleting advance item:', err);
-      setFeedbackToast({
-        text: 'एडवांस हटाने में समस्या आई। कृपया पुनः प्रयास करें।',
-        type: 'error',
-      });
-      setTimeout(() => setFeedbackToast(null), 3000);
+      console.error('Error deleting ledger row:', err);
+      showToast('एंट्री हटाने में त्रुटि हुई।');
     } finally {
-      setDeletingId(null);
+      setActionInProgress(null);
     }
   };
 
-  // Handle Delete Incentive with instant Firestore removal & recalculation
-  const handleDeleteIncentiveItem = async (incId: string) => {
-    if (!statement) return;
-    const target = (statement.incentives || []).find((i) => i.id === incId);
-    const amtStr = target ? `₹${target.amount}` : '';
-    const reasonStr = target?.reason || 'इंसेंटिव';
+  // Admin Action: Reset Entire Rider Account (Clear Test Data)
+  const handleResetEntireAccount = async () => {
+    if (!isAdmin || !statement) return;
+    const confirmPrompt = `क्या आप ${statement.riderName} का पूरा खाता रीसेट (Clear Test Data) करना चाहते हैं?\n\nसभी टेस्ट एडवांस और इंसेंटिव डेटा स्थायी रूप से मिटा दिए जाएंगे और बकाया राशि ₹0 हो जाएगी।`;
+    if (!window.confirm(confirmPrompt)) return;
 
-    if (!window.confirm(`क्या आप ${amtStr} (${reasonStr}) का इंसेंटिव रिकॉर्ड हटाना चाहते हैं? यह डेटाबेस से तुरंत हट जाएगा और बैलेंस दोबारा कैलकुलेट हो जाएगा।`)) {
-      return;
-    }
-
-    setDeletingId(`inc-${incId}`);
+    setActionInProgress('reset-all');
     try {
-      // 1. Delete Firestore document
-      const currentUserId = userId || (statement as any).userId || (statement as any).workspaceId || '';
-      await deleteIncentiveFromFirestore(currentUserId, incId);
-
-      // 2. Call parent callback if available
-      if (onDeleteIncentive) {
-        await onDeleteIncentive(incId);
+      if (onResetAccount) {
+        await onResetAccount();
       }
-
-      // 3. Immediately update local statement state
-      const updatedIncentives = (statement.incentives || []).filter((i) => i.id !== incId);
-      const newTotalInc = updatedIncentives.reduce((s, i) => s + (Number(i.amount) || 0), 0);
-      setStatement({
-        ...statement,
-        incentives: updatedIncentives,
-        totalIncentive: newTotalInc,
+      setStatement((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          advances: [],
+          incentives: [],
+          totalAdvance: 0,
+          totalIncentive: 0,
+        };
       });
-
-      setFeedbackToast({
-        text: `इंसेंटिव रिकॉर्ड सफलतापूर्वक हटाया गया एवं बैलेंस अपडेट हो गया।`,
-        type: 'success',
-      });
-      setTimeout(() => setFeedbackToast(null), 3000);
+      showToast('खाता सफलतापूर्वक रीसेट (₹0) कर दिया गया!');
     } catch (err) {
-      console.error('Error deleting incentive item:', err);
-      setFeedbackToast({
-        text: 'इंसेंटिव हटाने में समस्या आई। कृपया पुनः प्रयास करें।',
-        type: 'error',
-      });
-      setTimeout(() => setFeedbackToast(null), 3000);
+      console.error('Error resetting account:', err);
+      showToast('खाता रीसेट करने में त्रुटि हुई।');
     } finally {
-      setDeletingId(null);
+      setActionInProgress(null);
     }
   };
 
-  // CSV Export
+  // Clean CSV Export
   const handleExportCSV = () => {
     if (!statement) return;
     let csvContent = 'data:text/csv;charset=utf-8,';
 
-    csvContent += `KHATABOOK UNIFIED STATEMENT - ${statement.riderName}\n`;
-    csvContent += `Hub: ${statement.hubName || 'Courier Hub'}\n`;
+    csvContent += `KHATABOOK STATEMENT - ${statement.riderName}\n`;
+    csvContent += `Hub: ${statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}\n`;
     csvContent += `Phone: +91 ${statement.riderPhone}\n`;
-    csvContent += `Balance Status: ${balanceStatus === 'rider_due' ? 'Rider Due' : balanceStatus === 'payable' ? 'Payable' : 'All Settled'} - Rs. ${netBalance}\n`;
+    csvContent += `Net Balance: ${
+      balanceStatus === 'rider_due' ? 'Rider Due: Rs. ' + netBalance : balanceStatus === 'payable' ? 'Payable to Rider: Rs. ' + netBalance : 'All Settled: Rs. 0'
+    }\n`;
     csvContent += `Generated At: ${new Date().toLocaleDateString('en-IN')}\n\n`;
 
-    csvContent += 'Date,Type,Details,Amount Given / Dr,Amount Earned / Cr,Running Balance\n';
+    csvContent += 'तारीख (Date),विवरण (Details),दिया गया / एडवांस (₹),काटा गया / चुकता (₹)\n';
 
     timelineRows.forEach((row) => {
       const dateClean = `"${row.formattedDate}"`;
-      const typeClean = `"${row.type.toUpperCase()}"`;
-      const detailsClean = `"${row.title.replace(/"/g, '""')} ${row.subTitle ? row.subTitle.replace(/"/g, '""') : ''}"`;
-      const debitStr = row.debit > 0 ? `${row.debit}` : '0';
-      const creditStr = row.credit > 0 ? `${row.credit}` : '0';
-      const balanceStr = `"${row.runningBalance} ${row.balanceType}"`;
-      csvContent += `${dateClean},${typeClean},${detailsClean},${debitStr},${creditStr},${balanceStr}\n`;
+      const detailsClean = `"${row.title.replace(/"/g, '""')}${row.subTitle ? ' - ' + row.subTitle.replace(/"/g, '""') : ''}"`;
+      const paidStr = row.paidToRider > 0 ? `${row.paidToRider}` : '0';
+      const settledStr = row.settledOrEarned > 0 ? `${row.settledOrEarned}` : '0';
+      csvContent += `${dateClean},${detailsClean},${paidStr},${settledStr}\n`;
     });
+
+    csvContent += `\n"कुल योग (TOTALS)","","${totalPaidToRider}","${totalSettledOrEarned}"\n`;
+    csvContent += `"अंतिम शेष (FINAL NET BALANCE)","","${
+      balanceStatus === 'rider_due' 
+        ? 'लेना बाकी: Rs ' + netBalance 
+        : balanceStatus === 'payable' 
+        ? 'देना बाकी: Rs ' + netBalance 
+        : 'पूरा हिसाब चुकता: Rs 0'
+    }",""\n`;
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `${statement.riderName.replace(/\s+/g, '_')}_Khatabook_Statement.csv`);
+    link.setAttribute('download', `${statement.riderName.replace(/\s+/g, '_')}_Ledger_Statement.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -574,13 +361,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const cleanDigits = statement ? getCleanPhoneDigits(statement.riderPhone).slice(-10) : '';
   const shareText = statement 
-    ? `नमस्ते ${statement.riderName}, आपका कूरियर खाता स्टेटमेंट यहाँ देखें:\n${
-        balanceStatus === 'rider_due' 
-          ? `एडमिन को लेना बाकी है: ₹${formatINR(netBalance)}`
-          : balanceStatus === 'payable'
-          ? `राइडर को देना बाकी है: ₹${formatINR(netBalance)}`
-          : `हिसाब चुकता: ₹0`
-      }\nलिंक: ${statementUrl}` 
+    ? `नमस्ते ${statement.riderName}, आपका कूरियर खाता स्टेटमेंट यहाँ देखें:\n${balanceLabel}\nलिंक: ${statementUrl}` 
     : '';
   const waShareUrl = cleanDigits
     ? `https://wa.me/91${cleanDigits}?text=${encodeURIComponent(shareText)}` 
@@ -609,7 +390,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         {onBackToApp && (
           <button
             onClick={onBackToApp}
-            className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition"
+            className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>ऐप पर वापस जाएं</span>
@@ -621,7 +402,15 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col print:bg-white print:text-black">
-      {/* Top Application Bar / Action Ribbon */}
+      {/* Toast Notification */}
+      {toastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top duration-200">
+          <Check className="w-4 h-4" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      {/* Top Application Ribbon (Actions & Navigation) */}
       <header className="border-b border-slate-800 bg-slate-900/95 backdrop-blur sticky top-0 z-30 px-3 sm:px-4 py-3 print:hidden">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2.5">
@@ -640,10 +429,17 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               </div>
               <div>
                 <h1 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
-                  <span>एकल-पृष्ठ खाता लेजर (Unified Ledger)</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono font-medium">
-                    Live Khatabook
-                  </span>
+                  <span>खाता लेजर (Khatabook)</span>
+                  {isAdmin ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-medium flex items-center gap-1">
+                      <ShieldCheck className="w-3 h-3 text-blue-400" />
+                      <span>Admin View</span>
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-medium">
+                      Read-Only
+                    </span>
+                  )}
                 </h1>
                 <p className="text-xs text-slate-400">
                   {statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}
@@ -654,6 +450,20 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
           {/* Action Ribbon Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Admin-Only Reset Account Button */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleResetEntireAccount}
+                disabled={actionInProgress === 'reset-all'}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-950/50 hover:bg-rose-900/80 text-rose-300 hover:text-rose-100 border border-rose-800/60 transition active:scale-95 cursor-pointer text-xs font-bold disabled:opacity-50"
+                title="खाता रीसेट करें (Clear Test Data & Set Balance to ₹0)"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 text-rose-400 ${actionInProgress === 'reset-all' ? 'animate-spin' : ''}`} />
+                <span>खाता रीसेट (Clear Test Data)</span>
+              </button>
+            )}
+
             <button
               onClick={handlePrint}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-600/30 transition active:scale-95 cursor-pointer"
@@ -695,226 +505,79 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         </div>
       </header>
 
-      {/* Floating Feedback Toast */}
-      {feedbackToast && (
-        <div className={`fixed top-16 right-4 z-50 px-4 py-2.5 rounded-xl border shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top-2 ${
-          feedbackToast.type === 'success'
-            ? 'bg-emerald-950 border-emerald-500/50 text-emerald-200'
-            : feedbackToast.type === 'error'
-            ? 'bg-rose-950 border-rose-500/50 text-rose-200'
-            : 'bg-slate-900 border-slate-700 text-white'
-        }`}>
-          {feedbackToast.type === 'success' ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          ) : (
-            <AlertCircle className="w-4 h-4 text-rose-400" />
-          )}
-          <span>{feedbackToast.text}</span>
-        </div>
-      )}
-
       {/* Main Single-Page Container */}
-      <main className="max-w-5xl w-full mx-auto p-3.5 sm:p-6 flex-1 space-y-4 sm:space-y-5 print:p-0 print:max-w-none">
+      <main className="max-w-5xl w-full mx-auto p-3.5 sm:p-6 flex-1 space-y-4 print:p-4 print:max-w-none print:space-y-3">
         
-        {/* Printable Official Header (Only in Print / PDF Mode) */}
-        <div className="hidden print:block border-b-2 border-slate-800 pb-3 mb-4">
-          <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-2xl font-black text-slate-900">{statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}</h1>
-              <p className="text-xs text-slate-600 mt-0.5">{statement.hubSignature || 'Official Courier Payout & Rider Advance Ledger'}</p>
-              <p className="text-xs text-slate-700 mt-1 font-mono">
-                Rider: <strong>{statement.riderName}</strong> • Phone: +91 {formatPhoneNumber(statement.riderPhone)}
-              </p>
+        {/* 2. ONE SIMPLE, CLEAN HEADER BAR */}
+        {/* Rider Name & Phone + Simple Net Balance in Plain Text (Prints identically) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4 print:border print:border-slate-300 print:bg-white print:shadow-none print:p-4">
+          {/* Left: Rider Name & Phone */}
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex items-center justify-center text-xl font-black shadow-md shrink-0 print:border print:border-indigo-300">
+              {statement.riderName.charAt(0).toUpperCase()}
             </div>
-            <div className="text-right">
-              <span className="text-xs font-mono bg-slate-100 px-2.5 py-1 rounded border border-slate-300 block">
-                DATE: {new Date().toLocaleDateString('en-IN')}
-              </span>
-              <span className="text-sm font-bold mt-1 block">
-                Status: {balanceStatus === 'rider_due' ? 'Rider Due' : balanceStatus === 'payable' ? 'Payable' : 'All Settled'}
-              </span>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg sm:text-xl font-black text-white print:text-black">
+                  {statement.riderName}
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 print:bg-slate-100 print:text-slate-800 print:border-slate-300">
+                  {statement.hubName || 'सरायकेला कूरियर हब'}
+                </span>
+              </div>
+              <div className="text-xs text-slate-400 mt-1 flex items-center gap-2 flex-wrap print:text-slate-600">
+                <a
+                  href={`tel:${cleanDigits}`}
+                  className="inline-flex items-center gap-1 font-mono text-slate-300 hover:text-white print:text-slate-800"
+                >
+                  <Phone className="w-3 h-3 text-blue-400 print:text-slate-600" />
+                  <span>+91 {formatPhoneNumber(statement.riderPhone)}</span>
+                </a>
+                <span>•</span>
+                <span className="text-slate-400 print:text-slate-600">
+                  {statement.vehicleType || 'Bike'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Simple Net Balance in Plain Hindi/English */}
+          <div className="flex items-center">
+            <div className={`w-full sm:w-auto px-4 py-3 rounded-xl border text-sm sm:text-base font-black flex items-center gap-2 shadow-sm ${
+              balanceStatus === 'rider_due'
+                ? 'bg-rose-950/40 border-rose-500/40 text-rose-300 print:bg-rose-50 print:border-rose-300 print:text-rose-800'
+                : balanceStatus === 'payable'
+                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 print:bg-emerald-50 print:border-emerald-300 print:text-emerald-800'
+                : 'bg-slate-800/80 border-slate-700 text-slate-200 print:bg-slate-100 print:border-slate-300 print:text-slate-800'
+            }`}>
+              <span>{balanceLabel}</span>
             </div>
           </div>
         </div>
 
-        {/* Rider Profile Card & Overview */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl relative overflow-hidden print:border print:border-slate-300 print:bg-white print:shadow-none">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            
-            {/* Left: Rider Info, Hub Name, Contact */}
-            <div className="flex items-start sm:items-center gap-3.5">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex items-center justify-center text-2xl font-black shadow-lg shadow-blue-900/40 shrink-0">
-                {statement.riderName.charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-lg sm:text-xl font-black text-white print:text-black">
-                    {statement.riderName}
-                  </h2>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 print:border-emerald-600 print:text-emerald-800">
-                    सक्रिय खाता (Active)
-                  </span>
-                </div>
-
-                <div className="text-xs text-slate-300 font-medium mt-0.5">
-                  हब / कंपनी: <strong className="text-white print:text-black">{statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}</strong>
-                </div>
-
-                <div className="mt-1.5 flex items-center gap-2 text-xs text-slate-400 print:text-slate-700 flex-wrap">
-                  <a
-                    href={`tel:${cleanDigits}`}
-                    className="inline-flex items-center gap-1 font-mono text-slate-300 hover:text-white bg-slate-800/80 px-2 py-0.5 rounded-lg border border-slate-700/60 print:bg-transparent print:border-none"
-                  >
-                    <Phone className="w-3 h-3 text-blue-400" />
-                    <span>+91 {formatPhoneNumber(statement.riderPhone)}</span>
-                  </a>
-                  <span>•</span>
-                  <span className="flex items-center gap-1">
-                    <Bike className="w-3 h-3 text-teal-400" />
-                    <span>{statement.vehicleType || 'Bike'}</span>
-                  </span>
-                  <span>•</span>
-                  <span className="font-mono text-[11px] text-slate-500">
-                    ID: {statement.riderId}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Financial Summary Pills */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-              <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 print:bg-slate-100">
-                <span className="text-[10px] text-slate-400 block">कुल एडवांस दिया:</span>
-                <span className="font-bold text-rose-400 font-mono text-sm">
-                  {formatINR(totalAdvancesGiven)}
-                </span>
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 print:bg-slate-100">
-                <span className="text-[10px] text-slate-400 block">कुल इंसेंटिव / बोनस:</span>
-                <span className="font-bold text-emerald-400 font-mono text-sm">
-                  {formatINR(totalIncentivesGiven)}
-                </span>
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 print:bg-slate-100 col-span-2 sm:col-span-1">
-                <span className="text-[10px] text-slate-400 block">सैलरी से काटा गया:</span>
-                <span className="font-bold text-blue-400 font-mono text-sm">
-                  {formatINR(totalAdvanceRecovered)}
-                </span>
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        {/* 1. TOP HERO CARD: Net balance clearly stating who owes whom (Prompt Requirement) */}
-        {balanceStatus === 'rider_due' ? (
-          // RED CARD: Rider owes Hub
-          <div className="rounded-2xl p-5 sm:p-6 bg-gradient-to-r from-rose-950/70 via-rose-900/30 to-slate-900 border-2 border-rose-500/50 shadow-xl shadow-rose-950/30 print:bg-rose-50 print:border-rose-400">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1.5">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold uppercase tracking-wider">
-                  <AlertTriangle className="w-4 h-4 text-rose-400" />
-                  <span>एडमिन को राइडर से लेना बाकी है (Rider Due)</span>
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black text-rose-200 print:text-rose-900">
-                  एडमिन को राइडर से लेना बाकी है (Rider Due): ₹{formatINR(netBalance)}
-                </h3>
-                <p className="text-xs text-rose-300/80 print:text-rose-700">
-                  राइडर के पास कुल एडवांस में से इंसेंटिव व वेतन कटौती के बाद ₹{formatINR(netBalance)} बकाया शेष है।
-                </p>
-              </div>
-
-              <div className="text-left sm:text-right bg-rose-950/50 sm:bg-transparent p-3 sm:p-0 rounded-xl border border-rose-800/40 sm:border-none">
-                <span className="text-[10px] uppercase font-bold text-rose-300 block">
-                  कुल बकाया राशि (Due Balance)
-                </span>
-                <div className="text-3xl sm:text-4xl font-black text-rose-400 font-mono tracking-tight print:text-rose-700">
-                  ₹{formatINR(netBalance)}
-                </div>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 inline-block mt-1 font-mono">
-                  Dr (देना बाकी)
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : balanceStatus === 'payable' ? (
-          // GREEN CARD: Hub owes Rider
-          <div className="rounded-2xl p-5 sm:p-6 bg-gradient-to-r from-emerald-950/70 via-emerald-900/30 to-slate-900 border-2 border-emerald-500/50 shadow-xl shadow-emerald-950/30 print:bg-emerald-50 print:border-emerald-400">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1.5">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold uppercase tracking-wider">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>राइडर को देना बाकी है (Payable)</span>
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black text-emerald-200 print:text-emerald-900">
-                  राइडर को देना बाकी है (Payable): ₹{formatINR(netBalance)}
-                </h3>
-                <p className="text-xs text-emerald-300/80 print:text-emerald-700">
-                  राइडर का अतिरिक्त इंसेंटिव / जमा राशि हब द्वारा भुगतान योग्य (Payable) है।
-                </p>
-              </div>
-
-              <div className="text-left sm:text-right bg-emerald-950/50 sm:bg-transparent p-3 sm:p-0 rounded-xl border border-emerald-800/40 sm:border-none">
-                <span className="text-[10px] uppercase font-bold text-emerald-300 block">
-                  कुल देय राशि (Payable to Rider)
-                </span>
-                <div className="text-3xl sm:text-4xl font-black text-emerald-400 font-mono tracking-tight print:text-emerald-700">
-                  ₹{formatINR(netBalance)}
-                </div>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-block mt-1 font-mono">
-                  Cr (जमा / देय)
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          // GRAY CARD: Zero All Settled
-          <div className="rounded-2xl p-5 sm:p-6 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 border-2 border-slate-700 shadow-xl print:bg-slate-50 print:border-slate-400">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1.5">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold uppercase tracking-wider">
-                  <Check className="w-4 h-4 text-slate-400" />
-                  <span>हिसाब चुकता (All Settled)</span>
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black text-white print:text-black">
-                  हिसाब चुकता (All Settled): ₹0
-                </h3>
-                <p className="text-xs text-slate-400 print:text-slate-600">
-                  राइडर एवं हब के मध्य सभी एडवांस, इंसेंटिव व वेतन पे-आउट पूरी तरह से चुकता हैं। कोई बकाया शेष नहीं है।
-                </p>
-              </div>
-
-              <div className="text-left sm:text-right bg-slate-950/50 sm:bg-transparent p-3 sm:p-0 rounded-xl border border-slate-800 sm:border-none">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                  वर्तमान शेष (Current Net Balance)
-                </span>
-                <div className="text-3xl sm:text-4xl font-black text-slate-300 font-mono tracking-tight print:text-black">
-                  ₹0
-                </div>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 inline-block mt-1 font-mono">
-                  Settled (समतुल्य)
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 2. UNIFIED TRANSACTION TIMELINE (Single Sorted List) */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl print:border print:border-slate-300 print:bg-white print:shadow-none">
-          <div className="p-4 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <h3 className="text-sm font-black text-white print:text-black flex items-center gap-2">
-                <Clock className="w-4 h-4 text-amber-400" />
-                <span>संयुक्त खाता लेनदेन विवरण (Unified Transaction Timeline)</span>
+        {/* 3. CLEAN KHATABOOK TABLE (EXACT 4 COLUMNS) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg print:border print:border-slate-300 print:bg-white print:shadow-none">
+          <div className="p-3.5 sm:p-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2 print:bg-slate-100 print:border-slate-300">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <h3 className="text-sm font-bold text-white print:text-black">
+                खाता लेजर तालिका (Rider Ledger Sheet)
               </h3>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                एडवांस, इंसेंटिव, वेतन व रनिंग बैलेंस का सम्पूर्ण कालानुक्रमिक लेजर
-              </p>
             </div>
-            <div className="text-xs text-slate-400 font-mono">
-              कुल लेनदेन: <strong className="text-white">{timelineRows.length}</strong>
+            
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer print:hidden"
+                title="तारीख के अनुसार क्रम बदलें"
+              >
+                <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                <span>{sortOrder === 'asc' ? 'क्रम: पुराना से नया (Ascending)' : 'क्रम: नया से पुराना (Descending)'}</span>
+              </button>
+              <span className="text-xs text-slate-400 font-mono">
+                कुल एंट्री: <strong className="text-white print:text-black">{timelineRows.length}</strong>
+              </span>
             </div>
           </div>
 
@@ -926,173 +589,140 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="border-b border-slate-800 bg-slate-950/80 text-slate-300 font-bold sticky top-0 print:bg-slate-100 print:text-black print:border-slate-400">
-                    <th className="py-3 px-3 sm:px-4 min-w-[240px]">
-                      तारीख व प्रकार (Date &amp; Details)
+                  <tr className="border-b border-slate-800 bg-slate-950 text-slate-300 font-bold sticky top-0 print:bg-slate-200 print:text-black print:border-slate-400">
+                    {/* Column 1: तारीख व विवरण (Date & Details) */}
+                    <th className="py-3 px-3 sm:px-4 min-w-[280px]">
+                      तारीख व विवरण (Date & Details)
                     </th>
-                    <th className="py-3 px-3 sm:px-4 text-right min-w-[130px] text-rose-400 print:text-rose-800 bg-rose-950/10 print:bg-transparent">
-                      दिया गया (Debit / Dr)
+                    {/* Column 2: आपने दिया (YOU GAVE ₹) [Red] */}
+                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-rose-400 print:text-rose-800 bg-rose-950/10 print:bg-transparent">
+                      आपने दिया (YOU GAVE ₹)
                     </th>
-                    <th className="py-3 px-3 sm:px-4 text-right min-w-[130px] text-emerald-400 print:text-emerald-800 bg-emerald-950/10 print:bg-transparent">
-                      क्रेडिट / कटौती (Credit / Cr)
+                    {/* Column 3: बना / मिला (YOU GOT ₹) [Green] */}
+                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-emerald-400 print:text-emerald-800 bg-emerald-950/10 print:bg-transparent">
+                      बना / मिला (YOU GOT ₹)
                     </th>
-                    <th className="py-3 px-3 sm:px-4 text-right min-w-[150px] text-amber-300 print:text-black bg-amber-950/10 print:bg-transparent">
-                      रनिंग बैलेंस (Running Balance)
-                    </th>
-                    <th className="py-3 px-3 text-center min-w-[70px] print:hidden">
-                      Action
-                    </th>
+                    {/* Column 4: एडमिन (Admin delete action - only visible to admin) */}
+                    {isAdmin && (
+                      <th className="py-3 px-3 sm:px-4 text-center w-[80px] whitespace-nowrap text-slate-400 print:hidden">
+                        एडमिन
+                      </th>
+                    )}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/70 font-mono print:divide-slate-300">
+                <tbody className="divide-y divide-slate-800/80 font-sans print:divide-slate-300">
                   {timelineRows.map((row) => (
                     <tr 
                       key={row.id} 
-                      className="hover:bg-slate-850/50 transition print:hover:bg-transparent"
+                      className="hover:bg-slate-850/40 transition print:hover:bg-transparent"
                     >
-                      {/* Column 1: Date, Type Badge, Details */}
-                      <td className="py-3 px-3 sm:px-4 font-sans">
+                      {/* 1. तारीख व विवरण (Date & Details) */}
+                      <td className="py-3 px-3 sm:px-4 align-top">
                         <div className="flex items-start gap-2.5">
-                          {/* Type Pill */}
-                          <div className="mt-0.5 shrink-0">
-                            {row.type === 'advance' ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30">
-                                एडवांस
-                              </span>
-                            ) : row.type === 'incentive' ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                इंसेंटिव
-                              </span>
-                            ) : row.type === 'salary' ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30">
-                                पे-आउट
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                                डिलीवरी
-                              </span>
-                            )}
-                          </div>
-
-                          <div>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${
+                            row.type === 'advance'
+                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                              : row.type === 'incentive'
+                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                              : row.type === 'salary'
+                              ? 'bg-blue-500/15 text-blue-300 border border-blue-500/30'
+                              : 'bg-slate-800 text-slate-300 border border-slate-700'
+                          }`}>
+                            {row.type === 'advance' ? 'एडवांस' : row.type === 'incentive' ? 'इंसेंटिव' : row.type === 'salary' ? 'पे-आउट' : 'डिलीवरी'}
+                          </span>
+                          <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono text-[11px] text-slate-400 print:text-slate-600">
+                              <span className="font-mono text-[11px] font-semibold text-slate-400 print:text-slate-600">
                                 {row.formattedDate}
                               </span>
+                              <span className="text-slate-600 print:text-slate-400">•</span>
                               <span className="font-bold text-white print:text-black text-xs">
                                 {row.title}
                               </span>
                             </div>
-
                             {row.subTitle && (
-                              <div className="text-[11px] text-slate-400 print:text-slate-600 mt-0.5 font-sans">
+                              <div className="text-[11px] text-slate-400 print:text-slate-600 mt-0.5">
                                 {row.subTitle}
-                              </div>
-                            )}
-
-                            {/* Detailed breakdown for Salary payouts */}
-                            {row.salaryDetails && (
-                              <div className="mt-1 flex items-center gap-2 flex-wrap text-[10px] text-slate-400 font-mono bg-slate-950/60 px-2 py-1 rounded border border-slate-800/80 print:bg-slate-50 print:border-slate-300">
-                                <span>सकल आय: <strong>₹{row.salaryDetails.grossTotal}</strong></span>
-                                <span>•</span>
-                                <span className="text-rose-400 font-bold">एडवांस कटौती: ₹{row.salaryDetails.advanceDeducted}</span>
-                                <span>•</span>
-                                <span className="text-emerald-400 font-bold">नेट पेड: ₹{row.salaryDetails.netPaid}</span>
                               </div>
                             )}
                           </div>
                         </div>
                       </td>
 
-                      {/* Column 2: Debit / Dr in Red */}
-                      <td className="py-3 px-3 sm:px-4 text-right font-bold bg-rose-950/10 print:bg-transparent">
-                        {row.debit > 0 ? (
+                      {/* 2. आपने दिया (YOU GAVE ₹) [Red] */}
+                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-rose-950/10 print:bg-transparent align-top whitespace-nowrap">
+                        {row.paidToRider > 0 ? (
                           <span className="text-rose-400 print:text-rose-700">
-                            + {formatINR(row.debit)}
+                            +₹{formatINR(row.paidToRider)}
                           </span>
                         ) : (
                           <span className="text-slate-600 print:text-slate-400 font-normal">-</span>
                         )}
                       </td>
 
-                      {/* Column 3: Credit / Cr in Green */}
-                      <td className="py-3 px-3 sm:px-4 text-right font-bold bg-emerald-950/10 print:bg-transparent">
-                        {row.credit > 0 ? (
+                      {/* 3. बना / मिला (YOU GOT ₹) [Green] */}
+                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-emerald-950/10 print:bg-transparent align-top whitespace-nowrap">
+                        {row.settledOrEarned > 0 ? (
                           <span className="text-emerald-400 print:text-emerald-700">
-                            - {formatINR(row.credit)}
+                            -₹{formatINR(row.settledOrEarned)}
                           </span>
                         ) : (
                           <span className="text-slate-600 print:text-slate-400 font-normal">-</span>
                         )}
                       </td>
 
-                      {/* Column 4: Running Net Balance */}
-                      <td className="py-3 px-3 sm:px-4 text-right font-bold bg-amber-950/10 print:bg-transparent">
-                        {row.balanceType === 'Dr' ? (
-                          <span className="text-rose-400 print:text-rose-700 inline-flex items-center gap-1 justify-end">
-                            <span>{formatINR(row.runningBalance)}</span>
-                            <span className="text-[10px] font-black px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 print:border print:border-rose-400">
-                              Dr
-                            </span>
-                          </span>
-                        ) : row.balanceType === 'Cr' ? (
-                          <span className="text-emerald-400 print:text-emerald-700 inline-flex items-center gap-1 justify-end">
-                            <span>{formatINR(row.runningBalance)}</span>
-                            <span className="text-[10px] font-black px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 print:border print:border-emerald-400">
-                              Cr
-                            </span>
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-mono">₹0 Settled</span>
-                        )}
-                      </td>
-
-                      {/* Column 5: Action (Delete for Advance & Incentive) */}
-                      <td className="py-3 px-3 text-center print:hidden">
-                        {row.canDelete && row.deleteId && (
-                          <button
-                            type="button"
-                            disabled={deletingId === row.id}
-                            onClick={() => {
-                              if (row.type === 'advance') {
-                                handleDeleteAdvanceItem(row.deleteId!);
-                              } else if (row.type === 'incentive') {
-                                handleDeleteIncentiveItem(row.deleteId!);
-                              }
-                            }}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition disabled:opacity-50 cursor-pointer"
-                            title={`${row.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'} हटाएं (Delete Entry)`}
-                          >
-                            {deletingId === row.id ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                            ) : (
-                              <Trash2 className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                        )}
-                      </td>
+                      {/* 4. एडमिन (Admin Delete Button 🗑️ - Strictly visible ONLY inside Admin login) */}
+                      {isAdmin && (
+                        <td className="py-3 px-3 sm:px-4 text-center align-top whitespace-nowrap print:hidden">
+                          {(row.type === 'advance' || row.type === 'incentive') && row.originalId !== 'opening-advance' ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteRow(row)}
+                              disabled={actionInProgress === row.id}
+                              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                              title={`${row.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'} एंट्री हटाएं (Delete Document)`}
+                            >
+                              <Trash2 className={`w-4 h-4 ${actionInProgress === row.id ? 'animate-pulse text-rose-500' : ''}`} />
+                            </button>
+                          ) : (
+                            <span className="text-slate-600 text-xs">-</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
 
-                {/* Summary Totals Row */}
+                {/* Bottom TOTALS Row & Net Status */}
                 <tfoot>
-                  <tr className="border-t-2 border-slate-700 bg-slate-950 text-xs font-bold font-mono print:bg-slate-100 print:border-slate-400">
-                    <td className="py-3 px-3 sm:px-4 font-sans font-black text-white print:text-black">
+                  <tr className="border-t-2 border-slate-700 bg-slate-950 text-xs font-bold font-mono print:bg-slate-200 print:border-slate-400">
+                    <td className="py-3.5 px-3 sm:px-4 font-sans font-black text-white print:text-black">
                       कुल योग (Grand Totals)
                     </td>
-                    <td className="py-3 px-3 sm:px-4 text-right font-black text-rose-400 print:text-rose-700 bg-rose-950/20 print:bg-transparent">
-                      {formatINR(totalDebit)} Dr
+                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-rose-400 print:text-rose-700 bg-rose-950/20 print:bg-transparent whitespace-nowrap">
+                      ₹{formatINR(totalPaidToRider)}
                     </td>
-                    <td className="py-3 px-3 sm:px-4 text-right font-black text-emerald-400 print:text-emerald-700 bg-emerald-950/20 print:bg-transparent">
-                      {formatINR(totalCredit)} Cr
+                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-emerald-400 print:text-emerald-700 bg-emerald-950/20 print:bg-transparent whitespace-nowrap">
+                      ₹{formatINR(totalSettledOrEarned)}
                     </td>
-                    <td className={`py-3 px-3 sm:px-4 text-right font-black bg-amber-950/20 print:bg-transparent ${
-                      balanceStatus === 'rider_due' ? 'text-rose-400 print:text-rose-700' : balanceStatus === 'payable' ? 'text-emerald-400 print:text-emerald-700' : 'text-white print:text-black'
-                    }`}>
-                      {formatINR(netBalance)} {balanceStatus === 'rider_due' ? 'Dr' : balanceStatus === 'payable' ? 'Cr' : 'Settled'}
+                    {isAdmin && <td className="print:hidden" />}
+                  </tr>
+                  <tr className="border-t border-slate-800 bg-slate-900/90 text-xs font-bold print:bg-slate-100 print:border-slate-300">
+                    <td className="py-3 px-3 sm:px-4 font-sans text-slate-300 print:text-black">
+                      अंतिम हिसाब स्थिति (Net Status)
                     </td>
-                    <td className="print:hidden"></td>
+                    <td 
+                      colSpan={isAdmin ? 3 : 2} 
+                      className={`py-3 px-3 sm:px-4 text-right font-black font-sans text-sm ${
+                        balanceStatus === 'rider_due'
+                          ? 'text-rose-400 print:text-rose-800'
+                          : balanceStatus === 'payable'
+                          ? 'text-emerald-400 print:text-emerald-800'
+                          : 'text-slate-300 print:text-black'
+                      }`}
+                    >
+                      {balanceLabel}
+                    </td>
                   </tr>
                 </tfoot>
               </table>
@@ -1124,7 +754,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       <footer className="border-t border-slate-800/80 bg-slate-900/60 py-4 px-4 text-center text-xs text-slate-500 print:hidden mt-auto">
         <div className="max-w-5xl mx-auto flex items-center justify-between flex-wrap gap-2">
           <span>
-            {statement.hubName || 'सरायकेला कूरियर हब'} • सुरक्षित ऑनलाइन खाता
+            {statement.hubName || 'सरायकेला कूरियर हब'} • सुरक्षित खाता
           </span>
           <span className="font-mono text-[11px] text-slate-600">
             {statementUrl}

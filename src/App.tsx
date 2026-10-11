@@ -51,9 +51,11 @@ import {
   normalizeUserSubscription,
   isEntityOwnedByUser,
   syncPublicRiderStatement,
+  writeAdvanceEntryToFirestore,
   writeIncentiveEntryToFirestore,
   deleteAdvanceFromFirestore,
-  deleteIncentiveFromFirestore
+  deleteIncentiveFromFirestore,
+  resetRiderAccountInFirestore
 } from './services/firestoreSync';
 import { 
   formatIncentiveSmsText, 
@@ -363,6 +365,8 @@ function MainCourierApp() {
       hubSignature: userRateConfig.hubSignature || '',
       totalAdvance: typeof r.totalAdvance === 'number' ? r.totalAdvance : 0,
       advances: r.advances || [],
+      totalIncentive: typeof r.totalIncentive === 'number' ? r.totalIncentive : 0,
+      incentives: r.incentives || [],
       salaries: settlements
         .filter((s) => s.riderId === r.id)
         .map((s) => ({
@@ -1459,13 +1463,14 @@ function MainCourierApp() {
       saveSettlementsToStorage(updatedSettlements, targetUid);
 
       // Auto-deduct advance from rider running total if advance was deducted in settlement
-      if (advanceAmount > 0) {
-        const targetRider = riders.find((r) => r.id === settlementDetails.riderId);
-        if (targetRider) {
+      const targetRider = riders.find((r) => r.id === settlementDetails.riderId);
+      if (targetRider) {
+        let updatedRider: Rider = { ...targetRider };
+
+        // Handle advance deduction if advanceAmount was deducted
+        if (advanceAmount > 0) {
           const currentAdv = Number(targetRider.totalAdvance) || 0;
           const gross = Number(settlementDetails.grossTotal) || 0;
-          // If gross >= advanceAmount: entire advance deducted, remaining is Math.max(0, currentAdv - advanceAmount)
-          // If gross < advanceAmount: advance exceeds gross, recovery due remains (advanceAmount - gross)
           const remainingAdv = gross >= advanceAmount
             ? Math.max(0, currentAdv - advanceAmount)
             : Math.max(0, advanceAmount - gross);
@@ -1487,18 +1492,28 @@ function MainCourierApp() {
               settlementId: settlementId,
             });
           }
+          updatedRider.totalAdvance = remainingAdv;
+          updatedRider.advances = advanceLogs;
+        }
 
-          const updatedRider: Rider = {
-            ...targetRider,
-            totalAdvance: remainingAdv,
-            advances: advanceLogs,
-          };
-          const updatedRiders = riders.map((r) => (r.id === targetRider.id ? updatedRider : r));
-          setRiders(updatedRiders);
-          saveRidersToStorage(updatedRiders, targetUid);
-          if (isProUser && targetUid) {
-            saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch(() => {});
+        // Handle incentive deduction and tag settled incentives
+        const paidInc = Number(settlementDetails.incentiveAmount) || 0;
+        const currentInc = Number(targetRider.totalIncentive) || 0;
+        const remainingInc = Math.max(0, currentInc - paidInc);
+        const updatedIncentives = (targetRider.incentives || []).map((inc) => {
+          if (!inc.settlementId) {
+            return { ...inc, settlementId };
           }
+          return inc;
+        });
+        updatedRider.totalIncentive = remainingInc;
+        updatedRider.incentives = updatedIncentives;
+
+        const updatedRiders = riders.map((r) => (r.id === targetRider.id ? updatedRider : r));
+        setRiders(updatedRiders);
+        saveRidersToStorage(updatedRiders, targetUid);
+        if (isProUser && targetUid) {
+          saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch(() => {});
         }
       }
 
@@ -1537,6 +1552,22 @@ function MainCourierApp() {
     const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
     setRiders(updatedRiders);
     saveRidersToStorage(updatedRiders, targetUid);
+
+    // 1. Write or update advance directly in Firestore root and workspace 'advances' collection
+    try {
+      await writeAdvanceEntryToFirestore(targetUid || '', {
+        id: newAdvance.id,
+        riderId: updatedRider.id,
+        riderName: updatedRider.name,
+        riderPhone: updatedRider.phone,
+        amount: newAdvance.amount,
+        date: newAdvance.date || new Date().toISOString().split('T')[0],
+        reason: newAdvance.reason,
+        runningBalance: newAdvance.runningBalance,
+      });
+    } catch (err) {
+      console.warn('Error saving advance document to Firestore:', err);
+    }
 
     if (isProUser && targetUid) {
       try {
@@ -1757,6 +1788,56 @@ function MainCourierApp() {
     setToastMessage({
       text: 'इंसेंटिव रिकॉर्ड सफलतापूर्वक हटा दिया गया।',
       type: 'info',
+    });
+  };
+
+  // Reset Rider Account (Clear all advances, incentives, and set balance to ₹0)
+  const handleResetRiderAccount = async (riderId: string) => {
+    const targetRider = riders.find((r) => r.id === riderId);
+    if (!targetRider) return;
+
+    const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+
+    // Reset rider in local state
+    const updatedRider: Rider = {
+      ...targetRider,
+      totalAdvance: 0,
+      totalIncentive: 0,
+      advances: [],
+      incentives: [],
+    };
+
+    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+    setRiders(updatedRiders);
+    saveRidersToStorage(updatedRiders, targetUid);
+
+    // Delete docs and reset in Firestore
+    try {
+      await resetRiderAccountInFirestore(targetUid || '', riderId);
+      if (isProUser && targetUid) {
+        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+      }
+    } catch (err) {
+      console.warn('Error resetting rider account in Firestore:', err);
+    }
+
+    try {
+      await syncPublicRiderStatement(
+        updatedRider,
+        [],
+        settlements,
+        entries,
+        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature
+      );
+    } catch (err) {
+      console.warn('Error syncing reset statement:', err);
+    }
+
+    setToastMessage({
+      text: `${targetRider.name} का खाता सफलतापूर्वक रीसेट (₹0) कर दिया गया!`,
+      type: 'success',
     });
   };
 
@@ -2506,6 +2587,7 @@ function MainCourierApp() {
                 onDeleteAdvance={handleDeleteRiderAdvance}
                 onSaveIncentive={handleSaveRiderIncentive}
                 onDeleteIncentive={handleDeleteRiderIncentive}
+                onResetRiderAccount={handleResetRiderAccount}
                 onViewLedger={handleViewLedger}
                 canAccessFestivalGreetings={canAccessFestivalGreetings}
                 hubSignature={userRateConfig?.hubSignature}
@@ -2828,30 +2910,28 @@ function MainCourierApp() {
             riderId={viewingLedgerRiderId}
             initialStatement={inAppLedgerInitialStatement}
             onBackToApp={() => setViewingLedgerRiderId(null)}
+            userId={targetUid}
+            isAdmin={true}
             onDeleteAdvance={async (advId) => {
               const rider = riders.find((r) => r.id === viewingLedgerRiderId);
               if (rider) {
-                const rem = (rider.advances || []).filter((a) => a.id !== advId);
-                const sorted = [...rem].sort(
-                  (a, b) => new Date(a.date || a.createdAt).getTime() - new Date(b.date || b.createdAt).getTime()
-                );
-                let running = 0;
-                const updatedAdvances = sorted
-                  .map((item) => {
-                    running += Number(item.amount) || 0;
-                    return { ...item, runningBalance: running };
-                  })
-                  .reverse();
-                await handleDeleteRiderAdvance(
-                  { ...rider, totalAdvance: running, advances: updatedAdvances },
-                  advId
-                );
+                const cleanId = advId.replace(/^adv-/, '');
+                const sourceList = rider.advances && rider.advances.length > 0
+                  ? rider.advances
+                  : (inAppLedgerInitialStatement?.advances || []);
+                const rem = sourceList.filter((a) => a.id !== cleanId && a.id !== advId);
+                const total = rem.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+                const updated: Rider = { ...rider, totalAdvance: total, advances: rem };
+                await handleDeleteRiderAdvance(updated, cleanId);
               }
             }}
             onDeleteIncentive={async (incId) => {
-              await handleDeleteRiderIncentive(viewingLedgerRiderId, incId);
+              const cleanId = incId.replace(/^inc-/, '');
+              await handleDeleteRiderIncentive(viewingLedgerRiderId, cleanId);
             }}
-            userId={targetUid}
+            onResetAccount={async () => {
+              await handleResetRiderAccount(viewingLedgerRiderId);
+            }}
           />
         </div>
       )}
@@ -2872,25 +2952,11 @@ function MainCourierApp() {
  * Do NOT render the main layout, do NOT render the Header (Courier Payout Pro), do NOT show Sign In / Sync, and do NOT show Daily Delivery Entry.
  */
 export default function App() {
-  const [statementRiderId, setStatementRiderId] = useState<string | null>(() => parseRiderStatementRoute());
-  const [isCodCompanionRoute, setIsCodCompanionRoute] = useState<boolean>(() => parseCodCompanionRoute());
-  const [isNativeCompanionPackage, setIsNativeCompanionPackage] = useState<boolean>(false);
-
-  useEffect(() => {
-    // Detect native companion package ID when running on Android
-    CapacitorApp.getInfo()
-      .then((info) => {
-        if (info && info.id === 'com.courierpayout.codentry') {
-          setIsNativeCompanionPackage(true);
-        }
-      })
-      .catch(() => {});
-  }, []);
+  const [, setUrlTick] = useState<number>(0);
 
   useEffect(() => {
     const handleUrlChange = () => {
-      setStatementRiderId(parseRiderStatementRoute());
-      setIsCodCompanionRoute(parseCodCompanionRoute());
+      setUrlTick((t) => t + 1);
     };
     window.addEventListener('hashchange', handleUrlChange);
     window.addEventListener('popstate', handleUrlChange);
@@ -2903,48 +2969,31 @@ export default function App() {
   const hash = typeof window !== 'undefined' ? (window.location.hash || '') : '';
   const search = typeof window !== 'undefined' ? (window.location.search || '') : '';
   const pathname = typeof window !== 'undefined' ? (window.location.pathname || '') : '';
+  const href = typeof window !== 'undefined' ? (window.location.href || '') : '';
 
-  // 1. STATEMENT ROUTE MUST COME FIRST:
-  // Check for statement / ledger view before any companion/login route:
+  // 1. If it's an SMS Statement Link (Rider Ledger):
   if (
     hash.includes('statement') || 
-    search.includes('statement') ||
-    hash.includes('ledger') ||
-    search.includes('ledger') ||
-    pathname.includes('/statement') ||
-    pathname.includes('/ledger') ||
-    (search.includes('rider=') && !hash.includes('cod-entry')) ||
-    Boolean(statementRiderId)
+    search.includes('statement') || 
+    search.includes('rider=') || 
+    search.includes('riderId=') || 
+    hash.includes('ledger') || 
+    pathname.includes('/statement') || 
+    pathname.includes('/ledger')
   ) {
-    const riderId = statementRiderId || parseRiderStatementRoute() || '';
+    const riderId = parseRiderStatementRoute() || '';
+
     return (
-      <StatementErrorBoundary>
-        <RiderLedgerStatement riderId={riderId} />
-      </StatementErrorBoundary>
+      <div className="min-h-screen bg-slate-950 text-white">
+        <StatementErrorBoundary>
+          <RiderLedgerStatement riderId={riderId} isAdmin={false} />
+        </StatementErrorBoundary>
+      </div>
     );
   }
 
-  // 2. RIDER COMPANION / LOGIN ROUTE MUST BE STRICT:
-  // Do NOT check for generic 'rider' keyword! Only match exact cod-entry:
-  const companionEnv = (import.meta.env.VITE_APP_TARGET || '').trim().toLowerCase();
-  const isExplicitCompanionTarget = 
-    companionEnv === 'cod_companion' || 
-    companionEnv === 'companion' || 
-    isNativeCompanionPackage;
-
-  const isCompanionHostname = typeof window !== 'undefined' && (
-    window.location.hostname.includes('cod-entry') || 
-    window.location.hostname === 'cod-entry-rider.firebaseapp.com'
-  );
-
-  if (
-    hash.includes('cod-entry') || 
-    pathname.includes('/cod-entry') || 
-    search.includes('app=cod-entry') || 
-    isCodCompanionRoute || 
-    isExplicitCompanionTarget || 
-    isCompanionHostname
-  ) {
+  // 2. ONLY render CodCompanionApp if explicitly requested:
+  if (hash === '#cod-entry' || hash.startsWith('#cod-entry') || search.includes('app=cod-entry')) {
     return (
       <CodCompanionApp 
         onBackToMainApp={() => {
@@ -2955,13 +3004,13 @@ export default function App() {
             url.searchParams.delete('cod');
             window.history.pushState({}, '', url.pathname.includes('/cod') ? '/' : url.toString());
           } catch {}
-          setIsCodCompanionRoute(false);
+          setUrlTick((t) => t + 1);
         }}
       />
     );
   }
 
-  // 3. Default: Full Courier Rider Payout Admin App
+  // 3. Otherwise, render normal Admin App / Dashboard
   return <MainCourierApp />;
 }
 

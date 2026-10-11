@@ -178,9 +178,16 @@ export const AdvancesTab: React.FC<Props> = ({
 
   const handleDelete = async (rider: Rider, advId: string, advAmount: number) => {
     if (!onDeleteAdvance) return;
-    if (!window.confirm(`क्या आप ₹${advAmount} का यह एडवांस रिकॉर्ड हटाना चाहते हैं?`)) {
-      return;
+    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (₹${advAmount} - एडवांस)`;
+    let confirmed = true;
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        confirmed = window.confirm(confirmPrompt);
+      }
+    } catch {
+      confirmed = true;
     }
+    if (!confirmed) return;
 
     try {
       const remainingAdvances = (rider.advances || []).filter((a) => a.id !== advId);

@@ -143,9 +143,16 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
     const targetInc = (rider.incentives || []).find((i) => i.id === incId);
     if (!targetInc) return;
 
-    if (!window.confirm(`क्या आप ₹${targetInc.amount} (${targetInc.reason || 'इंसेंटिव'}) का रिकॉर्ड हटाना चाहते हैं? यह डेटाबेस से स्थाई रूप से हट जाएगा।`)) {
-      return;
+    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (₹${targetInc.amount} - ${targetInc.reason || 'इंसेंटिव'})`;
+    let confirmed = true;
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        confirmed = window.confirm(confirmPrompt);
+      }
+    } catch {
+      confirmed = true;
     }
+    if (!confirmed) return;
 
     try {
       await onDeleteIncentive(rider.id, incId);
