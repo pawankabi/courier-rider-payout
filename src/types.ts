@@ -6,6 +6,7 @@ export interface RiderAdvanceEntry {
   reason?: string; // e.g. "Bike repair", "Fuel", "Festival emergency"
   runningBalance: number; // previousAdvanceTotal + newAdvanceAmount = currentTotalAdvance
   createdAt: string; // ISO string
+  updatedAt?: string; // Optional update timestamp
   createdBy?: string;
   settlementId?: string;
 }

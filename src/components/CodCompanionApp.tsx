@@ -189,6 +189,10 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     notes: '',
   });
 
+  // In-App Confirm Day-End Lock (Android WebView safe, zero window.confirm)
+  const [dayEndLockConfirmOpen, setDayEndLockConfirmOpen] = useState(false);
+  const [isTogglingDayEndLock, setIsTogglingDayEndLock] = useState(false);
+
   // UI Toasts
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
@@ -718,15 +722,16 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
   };
 
-  // 7. Toggle Day-End Lock
-  const handleToggleDayEndLock = async () => {
+  // 7. Toggle Day-End Lock (Android WebView safe, zero window.confirm)
+  const handleToggleDayEndLock = () => {
+    if (!isHubIncharge || !authUser) return;
+    setDayEndLockConfirmOpen(true);
+  };
+
+  const handleConfirmToggleDayEndLock = async () => {
     if (!isHubIncharge || !authUser) return;
     const nextLocked = !isDayEndLocked;
-    const confirmMsg = nextLocked
-      ? `क्या आप ${selectedDate} के पूरे दिन के COD हिसाब को लॉक करना चाहते हैं? इसके बाद कोई भी राइडर बदलाव नहीं कर सकेगा।`
-      : `क्या आप ${selectedDate} के दिन के हिसाब को दोबारा अनलॉक करना चाहते हैं?`;
-
-    if (!window.confirm(confirmMsg)) return;
+    setIsTogglingDayEndLock(true);
 
     try {
       await toggleDayEndLockForSheet(selectedDate, nextLocked, authUser.name, currentHubId);
@@ -736,8 +741,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           : '🔓 आज का हिसाब अनलॉक कर दिया गया।',
         'success'
       );
+      setDayEndLockConfirmOpen(false);
     } catch {
       showToast('लॉक स्थिति बदलने में त्रुटि हुई।', 'error');
+    } finally {
+      setIsTogglingDayEndLock(false);
     }
   };
 
@@ -2268,6 +2276,69 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer"
               >
                 कन्फर्म शॉर्टेज
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirm Day-End Lock Modal (Android WebView safe, zero window.confirm) */}
+      {dayEndLockConfirmOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div 
+            className="w-full max-w-sm bg-white rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 animate-in zoom-in-95 text-slate-800"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className={`p-2.5 rounded-xl ${isDayEndLocked ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
+                {isDayEndLocked ? <Unlock className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">
+                  {isDayEndLocked ? 'दिन का हिसाब अनलॉक करें?' : 'दिन का हिसाब लॉक करें?'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {isDayEndLocked ? 'राइडर दोबारा एडिट कर सकेंगे' : 'इसके बाद कोई राइडर एडिट नहीं कर सकेगा'}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-200">
+              {isDayEndLocked
+                ? `क्या आप ${selectedDate} के दिन के हिसाब को दोबारा अनलॉक करना चाहते हैं?`
+                : `क्या आप ${selectedDate} के पूरे दिन के COD हिसाब को लॉक करना चाहते हैं? इसके बाद केवल हब इंचार्ज ही बदलाव कर सकेंगे।`}
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDayEndLockConfirmOpen(false)}
+                disabled={isTogglingDayEndLock}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmToggleDayEndLock}
+                disabled={isTogglingDayEndLock}
+                className={`px-4 py-2 rounded-xl text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md ${
+                  isDayEndLocked
+                    ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                    : 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                }`}
+              >
+                {isTogglingDayEndLock ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>अपडेट हो रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    {isDayEndLocked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                    <span>{isDayEndLocked ? 'हाँ, अनलॉक करें' : 'हाँ, लॉक करें'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

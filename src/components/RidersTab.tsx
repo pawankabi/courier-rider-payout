@@ -32,7 +32,8 @@ import {
   Share2,
   Gift,
   Receipt,
-  RotateCcw
+  RotateCcw,
+  RefreshCw
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings } from '../types';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
@@ -208,6 +209,23 @@ export const RidersTab: React.FC<Props> = ({
   // Incentive Management Modal state
   const [incentiveModalRider, setIncentiveModalRider] = useState<Rider | null>(null);
 
+  // In-App Confirm Reset Rider Account State (Android WebView safe, zero window.confirm)
+  const [resettingRiderAccount, setResettingRiderAccount] = useState<Rider | null>(null);
+  const [isResettingRider, setIsResettingRider] = useState<boolean>(false);
+
+  const handleConfirmResetRiderAccount = async () => {
+    if (!resettingRiderAccount || !onResetRiderAccount) return;
+    setIsResettingRider(true);
+    try {
+      await onResetRiderAccount(resettingRiderAccount.id);
+      setResettingRiderAccount(null);
+    } catch (err) {
+      console.error('Error resetting rider account:', err);
+    } finally {
+      setIsResettingRider(false);
+    }
+  };
+
   // Expanded entry lists per rider ID
   const [expandedRiderIds, setExpandedRiderIds] = useState<Record<string, boolean>>({});
 
@@ -226,6 +244,7 @@ export const RidersTab: React.FC<Props> = ({
   const [vehicleType, setVehicleType] = useState('Hero Splendor');
   const [searchQuery, setSearchQuery] = useState('');
   const [phoneError, setPhoneError] = useState('');
+  const [editPhoneError, setEditPhoneError] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
 
   // Edit Rider Modal
@@ -346,7 +365,7 @@ export const RidersTab: React.FC<Props> = ({
           }
         }
       } else {
-        alert('फ़ोनबुक पिकर आपके इस डिवाइस में सीधे उपलब्ध नहीं है या अनुमति बंद है।');
+        setPhoneError('फ़ोनबुक पिकर आपके इस डिवाइस में सीधे उपलब्ध नहीं है या अनुमति बंद है।');
       }
     } catch (err) {
       console.log('Contact pick cancelled or error:', err);
@@ -403,10 +422,11 @@ export const RidersTab: React.FC<Props> = ({
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingRider) return;
+    setEditPhoneError('');
 
     const cleanPhone = cleanPhoneNumber(editingRider.phone);
     if (!isValidIndianPhone(cleanPhone)) {
-      alert('Please enter a valid 10-digit Indian phone number.');
+      setEditPhoneError('Please enter a valid 10-digit Indian phone number.');
       return;
     }
 
@@ -1448,11 +1468,7 @@ export const RidersTab: React.FC<Props> = ({
                       {onResetRiderAccount && (
                         <button
                           type="button"
-                          onClick={() => {
-                            if (window.confirm(`क्या आप ${rider.name} का पूरा खाता रीसेट (Clear Test Data) करना चाहते हैं?\n\nसभी टेस्ट एडवांस और इंसेंटिव डेटा हमेशा के लिए हटा दिया जाएगा और बकाया ₹0 हो जाएगा।`)) {
-                              onResetRiderAccount(rider.id);
-                            }
-                          }}
+                          onClick={() => setResettingRiderAccount(rider)}
                           className="px-2 py-1.5 bg-rose-950/30 hover:bg-rose-900/60 text-rose-300 hover:text-rose-100 border border-rose-800/40 hover:border-rose-600 rounded-xl text-xs font-medium flex items-center gap-1 transition active:scale-95 cursor-pointer"
                           title="खाता रीसेट (Clear Test Data & Set to ₹0)"
                         >
@@ -1760,9 +1776,15 @@ export const RidersTab: React.FC<Props> = ({
                 <input
                   type="tel"
                   value={editingRider.phone}
-                  onChange={(e) => setEditingRider({ ...editingRider, phone: e.target.value })}
+                  onChange={(e) => {
+                    setEditingRider({ ...editingRider, phone: e.target.value });
+                    if (editPhoneError) setEditPhoneError('');
+                  }}
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-blue-500"
                 />
+                {editPhoneError && (
+                  <p className="text-xs text-rose-400 mt-1 font-medium">{editPhoneError}</p>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -1932,6 +1954,60 @@ export const RidersTab: React.FC<Props> = ({
           isSuperAdmin={Boolean(isSuperAdmin)}
           hubName={hubName}
         />
+      )}
+
+      {/* In-App Confirm Reset Entire Account Modal (Android WebView safe, zero window.confirm) */}
+      {resettingRiderAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in">
+          <div 
+            className="w-full max-w-sm bg-slate-900 border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <RotateCcw className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">राइडर खाता रीसेट करें?</h3>
+                <p className="text-xs text-rose-300">Clear Test Data • सेट बकाया ₹0</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              क्या आप <strong>{resettingRiderAccount.name}</strong> का पूरा खाता रीसेट (Clear Test Data) करना चाहते हैं?
+              सभी टेस्ट एडवांस और इंसेंटिव डेटा हमेशा के लिए हटा दिया जाएगा और बकाया ₹0 हो जाएगा।
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setResettingRiderAccount(null)}
+                disabled={isResettingRider}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetRiderAccount}
+                disabled={isResettingRider}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+              >
+                {isResettingRider ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>रीसेट हो रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>हाँ, रीसेट करें (Confirm Reset)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

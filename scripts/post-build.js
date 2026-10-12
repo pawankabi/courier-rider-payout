@@ -33,6 +33,19 @@ for (const targetDir of androidPublicDirs) {
       fs.rmSync(targetDir, { recursive: true, force: true });
       fs.cpSync(distDir, targetDir, { recursive: true });
       console.log(`   - Synced fresh web assets to ${path.relative(process.cwd(), targetDir)}`);
+
+      // Ensure capacitor.config.json in asset folder points to 'public'
+      const capConfigPath = path.join(parentDir, 'capacitor.config.json');
+      if (fs.existsSync(capConfigPath)) {
+        try {
+          const cfg = JSON.parse(fs.readFileSync(capConfigPath, 'utf-8'));
+          if (cfg.webDir !== 'public') {
+            cfg.webDir = 'public';
+            fs.writeFileSync(capConfigPath, JSON.stringify(cfg, null, 2));
+            console.log(`   - Updated webDir to 'public' in ${path.relative(process.cwd(), capConfigPath)}`);
+          }
+        } catch {}
+      }
     }
   } catch (err) {
     console.warn('Android asset sync notice:', err);

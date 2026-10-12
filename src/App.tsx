@@ -185,42 +185,50 @@ function parseRiderStatementRoute(): string | null {
     params.get('riderId') || 
     params.get('ledger') || 
     params.get('riderStatement');
-  if (query) {
+  if (query && query !== ':riderId') {
     return decodeURIComponent(query).trim() || null;
   }
 
-  // 2. Hash routing: #/statement/:riderId or #statement/:riderId or #statement=:riderId or #/ledger/:riderId
-  if (hash.includes('statement')) {
-    const match = hash.match(/statement[\/=]([^\/?#]+)/i);
-    if (match && match[1]) {
-      return decodeURIComponent(match[1]).trim() || null;
-    }
-    const parts = hash.split(/statement[\/=]/i);
-    if (parts.length > 1 && parts[1]) {
-      const raw = parts[1].split(/[?#&]/)[0];
-      if (raw) return decodeURIComponent(raw).trim() || null;
-    }
+  // 1b. Check query parameters embedded in hash: #/statement?riderId=...
+  if (hash.includes('?')) {
+    try {
+      const hashQuery = hash.split('?')[1];
+      const hashParams = new URLSearchParams(hashQuery);
+      const hashVal = 
+        hashParams.get('statement') || 
+        hashParams.get('rider') || 
+        hashParams.get('riderId') || 
+        hashParams.get('ledger') || 
+        hashParams.get('riderStatement');
+      if (hashVal && hashVal !== ':riderId') {
+        return decodeURIComponent(hashVal).trim() || null;
+      }
+    } catch {}
   }
 
-  if (hash.includes('ledger')) {
-    const match = hash.match(/ledger[\/=]([^\/?#]+)/i);
+  // 2. Hash routing: #/statement/:riderId or #statement/:riderId or #statement=:riderId or #/ledger/:riderId
+  if (hash.includes('statement') || hash.includes('ledger')) {
+    const match = hash.match(/(?:statement|ledger)[\/=]([^\/?#]+)/i);
     if (match && match[1]) {
-      return decodeURIComponent(match[1]).trim() || null;
+      const val = decodeURIComponent(match[1]).replace(/\/+$/, '').trim();
+      if (val && val !== ':riderId') return val;
+    }
+    const parts = hash.split(/(?:statement|ledger)[\/=]/i);
+    if (parts.length > 1 && parts[1]) {
+      const raw = parts[1].split(/[?#&]/)[0];
+      if (raw) {
+        const val = decodeURIComponent(raw).replace(/\/+$/, '').trim();
+        if (val && val !== ':riderId') return val;
+      }
     }
   }
 
   // 3. Pathname routing: /statement/:riderId or /ledger/:riderId
-  if (pathname.includes('/statement/')) {
-    const rawRiderId = pathname.split('/statement/')[1]?.split('?')[0]?.split('#')[0];
-    if (rawRiderId) {
-      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
-    }
-  }
-
-  if (pathname.includes('/ledger/')) {
-    const rawRiderId = pathname.split('/ledger/')[1]?.split('?')[0]?.split('#')[0];
-    if (rawRiderId) {
-      return decodeURIComponent(rawRiderId).replace(/\/+$/, '').trim() || null;
+  if (pathname.includes('/statement/') || pathname.includes('/ledger/')) {
+    const match = pathname.match(/\/(?:statement|ledger)\/([^\/?#]+)/i);
+    if (match && match[1]) {
+      const val = decodeURIComponent(match[1]).replace(/\/+$/, '').trim();
+      if (val && val !== ':riderId') return val;
     }
   }
 
@@ -1515,19 +1523,29 @@ function MainCourierApp() {
         if (isProUser && targetUid) {
           saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch(() => {});
         }
-      }
 
-      // Sync public statement ledger for this rider
-      const currentRider = riders.find((r) => r.id === settlementDetails.riderId);
-      if (currentRider) {
+        // Sync public statement ledger for this rider with zeroed settled balance
         syncPublicRiderStatement(
-          currentRider,
-          currentRider.advances || [],
+          updatedRider,
+          updatedRider.advances || [],
           updatedSettlements,
           updated,
           userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
           userRateConfig.hubSignature
         ).catch(() => {});
+      } else {
+        // Fallback sync if rider not in local list
+        const currentRider = riders.find((r) => r.id === settlementDetails.riderId);
+        if (currentRider) {
+          syncPublicRiderStatement(
+            currentRider,
+            currentRider.advances || [],
+            updatedSettlements,
+            updated,
+            userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+            userRateConfig.hubSignature
+          ).catch(() => {});
+        }
       }
     }
 
@@ -1545,28 +1563,32 @@ function MainCourierApp() {
   };
 
   // Save Rider Advance Entry and sync public ledger sheet
-  const handleSaveRiderAdvance = async (updatedRider: Rider, newAdvance: RiderAdvanceEntry) => {
+  const handleSaveRiderAdvance = async (updatedRider: Rider, newAdvance?: RiderAdvanceEntry) => {
     const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
-    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
-    setRiders(updatedRiders);
-    saveRidersToStorage(updatedRiders, targetUid);
+    setRiders((prev) => {
+      const next = prev.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+      saveRidersToStorage(next, targetUid);
+      return next;
+    });
 
     // 1. Write or update advance directly in Firestore root and workspace 'advances' collection
-    try {
-      await writeAdvanceEntryToFirestore(targetUid || '', {
-        id: newAdvance.id,
-        riderId: updatedRider.id,
-        riderName: updatedRider.name,
-        riderPhone: updatedRider.phone,
-        amount: newAdvance.amount,
-        date: newAdvance.date || new Date().toISOString().split('T')[0],
-        reason: newAdvance.reason,
-        runningBalance: newAdvance.runningBalance,
-      });
-    } catch (err) {
-      console.warn('Error saving advance document to Firestore:', err);
+    if (newAdvance) {
+      try {
+        await writeAdvanceEntryToFirestore(targetUid || '', {
+          id: newAdvance.id,
+          riderId: updatedRider.id,
+          riderName: updatedRider.name,
+          riderPhone: updatedRider.phone,
+          amount: newAdvance.amount,
+          date: newAdvance.date || new Date().toISOString().split('T')[0],
+          reason: newAdvance.reason || 'सामान्य एडवांस',
+          runningBalance: newAdvance.runningBalance,
+        });
+      } catch (err) {
+        console.warn('Error saving advance document to Firestore:', err);
+      }
     }
 
     if (isProUser && targetUid) {
@@ -1592,8 +1614,9 @@ function MainCourierApp() {
       console.warn('Error syncing public statement:', err);
     }
 
+    const amt = newAdvance?.amount !== undefined ? `₹${newAdvance.amount} का ` : '';
     setToastMessage({
-      text: `₹${newAdvance.amount} का एडवांस सुरक्षित किया गया एवं SMS डिस्पैच सक्रिय!`,
+      text: `${amt}एडवांस सुरक्षित किया गया एवं SMS डिस्पैच सक्रिय!`,
       type: 'success',
     });
   };
@@ -1603,9 +1626,11 @@ function MainCourierApp() {
     const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
-    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
-    setRiders(updatedRiders);
-    saveRidersToStorage(updatedRiders, targetUid);
+    setRiders((prev) => {
+      const next = prev.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+      saveRidersToStorage(next, targetUid);
+      return next;
+    });
 
     // 1. Remove advance document from Firestore
     try {
@@ -1646,7 +1671,7 @@ function MainCourierApp() {
   // Save Rider Incentive / Bonus Entry, dispatch background SMS, and sync public statement
   const handleSaveRiderIncentive = async (
     riderId: string,
-    incentiveData: { amount: number; reason: string; date: string }
+    incentiveData: { id?: string; amount: number; reason: string; date: string }
   ) => {
     const targetRider = riders.find((r) => r.id === riderId);
     if (!targetRider) return;
@@ -1654,33 +1679,55 @@ function MainCourierApp() {
     const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
-    const prevTotal = Number(targetRider.totalIncentive) || 0;
-    const newTotal = prevTotal + incentiveData.amount;
-    const incId = `inc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const existingList = targetRider.incentives || [];
+    const isEditing = Boolean(incentiveData.id && existingList.some((i) => i.id === incentiveData.id));
 
-    const newIncEntry: RiderIncentiveEntry = {
-      id: incId,
-      riderId: targetRider.id,
-      riderName: targetRider.name,
-      riderPhone: targetRider.phone,
-      amount: incentiveData.amount,
-      date: incentiveData.date,
-      reason: incentiveData.reason,
-      source: 'manual',
-      createdAt: new Date().toISOString(),
-      createdBy: currentOwnerEmail || currentOwnerId,
-    };
+    let updatedIncentives: RiderIncentiveEntry[];
+    let incId: string;
 
-    const updatedIncentives = [newIncEntry, ...(targetRider.incentives || [])];
+    if (isEditing && incentiveData.id) {
+      incId = incentiveData.id;
+      updatedIncentives = existingList.map((inc) => {
+        if (inc.id === incentiveData.id) {
+          return {
+            ...inc,
+            amount: incentiveData.amount,
+            reason: incentiveData.reason,
+            date: incentiveData.date,
+          };
+        }
+        return inc;
+      });
+    } else {
+      incId = incentiveData.id || `inc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const newIncEntry: RiderIncentiveEntry = {
+        id: incId,
+        riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
+        amount: incentiveData.amount,
+        date: incentiveData.date,
+        reason: incentiveData.reason,
+        source: 'manual',
+        createdAt: new Date().toISOString(),
+        createdBy: currentOwnerEmail || currentOwnerId,
+      };
+      updatedIncentives = [newIncEntry, ...existingList];
+    }
+
+    const newTotal = updatedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+
     const updatedRider: Rider = {
       ...targetRider,
       totalIncentive: newTotal,
       incentives: updatedIncentives,
     };
 
-    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
-    setRiders(updatedRiders);
-    saveRidersToStorage(updatedRiders, targetUid);
+    setRiders((prev) => {
+      const next = prev.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+      saveRidersToStorage(next, targetUid);
+      return next;
+    });
 
     try {
       await writeIncentiveEntryToFirestore(targetUid || '', {
@@ -1715,26 +1762,30 @@ function MainCourierApp() {
       console.warn('Error syncing statement for incentive:', err);
     }
 
-    const statementUrl = getRiderStatementUrl(targetRider.id);
-    const smsText = formatIncentiveSmsText({
-      riderName: targetRider.name,
-      amount: incentiveData.amount,
-      reason: incentiveData.reason,
-      totalIncentive: newTotal,
-      statementUrl,
-    });
+    if (!isEditing) {
+      const statementUrl = getRiderStatementUrl(targetRider.id);
+      const smsText = formatIncentiveSmsText({
+        riderName: targetRider.name,
+        amount: incentiveData.amount,
+        reason: incentiveData.reason,
+        totalIncentive: newTotal,
+        statementUrl,
+      });
 
-    dispatchAutomatedSms({
-      riderName: targetRider.name,
-      riderPhone: targetRider.phone,
-      amount: incentiveData.amount,
-      message: smsText,
-      type: 'general',
-      statementUrl,
-    }).catch((e) => console.warn('Incentive background SMS notice:', e));
+      dispatchAutomatedSms({
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
+        amount: incentiveData.amount,
+        message: smsText,
+        type: 'general',
+        statementUrl,
+      }).catch((e) => console.warn('Incentive background SMS notice:', e));
+    }
 
     setToastMessage({
-      text: `🎉 ₹${incentiveData.amount} का इंसेंटिव सुरक्षित हुआ एवं SMS भेजा गया!`,
+      text: isEditing
+        ? `✅ ₹${incentiveData.amount} का इंसेंटिव/बोनस सफलतापूर्वक अपडेट किया गया!`
+        : `🎉 ₹${incentiveData.amount} का इंसेंटिव सुरक्षित हुआ एवं SMS भेजा गया!`,
       type: 'success',
     });
   };
@@ -1753,9 +1804,11 @@ function MainCourierApp() {
       incentives: remainingIncentives,
     };
 
-    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
-    setRiders(updatedRiders);
-    saveRidersToStorage(updatedRiders, targetUid);
+    setRiders((prev) => {
+      const next = prev.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+      saveRidersToStorage(next, targetUid);
+      return next;
+    });
 
     // Remove document from Firestore incentives collection
     try {
@@ -2912,22 +2965,84 @@ function MainCourierApp() {
             onBackToApp={() => setViewingLedgerRiderId(null)}
             userId={targetUid}
             isAdmin={true}
+            onEditAdvance={async (advId, updatedData) => {
+              const rider = riders.find((r) => r.id === viewingLedgerRiderId);
+              if (!rider) return;
+
+              const cleanId = advId.replace(/^adv-/, '');
+              const sourceList = rider.advances && rider.advances.length > 0
+                ? [...rider.advances]
+                : (inAppLedgerInitialStatement?.advances ? [...inAppLedgerInitialStatement.advances] : []);
+
+              const matchIndex = sourceList.findIndex(
+                (a) => a.id === cleanId || a.id === advId || `adv-${a.id}` === advId
+              );
+
+              let updatedAdv: RiderAdvanceEntry;
+              let updatedAdvances: RiderAdvanceEntry[];
+
+              if (matchIndex !== -1) {
+                const existing = sourceList[matchIndex];
+                updatedAdv = {
+                  ...existing,
+                  amount: updatedData.amount,
+                  reason: updatedData.reason || existing.reason || 'सामान्य एडवांस',
+                  date: updatedData.date || existing.date || new Date().toISOString().split('T')[0],
+                  updatedAt: new Date().toISOString(),
+                };
+                updatedAdvances = sourceList.map((a, idx) => (idx === matchIndex ? updatedAdv : a));
+              } else {
+                // If editing a synthetic or prior advance without existing individual doc
+                const newId = cleanId && cleanId !== 'prior-settled-advance'
+                  ? cleanId
+                  : `adv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                updatedAdv = {
+                  id: newId,
+                  riderId: rider.id,
+                  amount: updatedData.amount,
+                  reason: updatedData.reason || 'ओपनिंग एडवांस',
+                  date: updatedData.date || new Date().toISOString().split('T')[0],
+                  runningBalance: updatedData.amount,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                };
+                updatedAdvances = [updatedAdv, ...sourceList];
+              }
+
+              const total = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+              const updatedRider: Rider = { ...rider, totalAdvance: total, advances: updatedAdvances };
+              await handleSaveRiderAdvance(updatedRider, updatedAdv);
+            }}
             onDeleteAdvance={async (advId) => {
               const rider = riders.find((r) => r.id === viewingLedgerRiderId);
-              if (rider) {
-                const cleanId = advId.replace(/^adv-/, '');
-                const sourceList = rider.advances && rider.advances.length > 0
-                  ? rider.advances
-                  : (inAppLedgerInitialStatement?.advances || []);
-                const rem = sourceList.filter((a) => a.id !== cleanId && a.id !== advId);
-                const total = rem.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-                const updated: Rider = { ...rider, totalAdvance: total, advances: rem };
-                await handleDeleteRiderAdvance(updated, cleanId);
-              }
+              if (!rider) return;
+
+              const cleanId = advId.replace(/^adv-/, '');
+              const sourceList = rider.advances && rider.advances.length > 0
+                ? rider.advances
+                : (inAppLedgerInitialStatement?.advances || []);
+
+              const rem = sourceList.filter(
+                (a) => a.id !== cleanId && a.id !== advId && `adv-${a.id}` !== advId
+              );
+              const total = cleanId === 'prior-settled-advance' && rem.length === 0
+                ? 0
+                : rem.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+              const updated: Rider = { ...rider, totalAdvance: total, advances: rem };
+              await handleDeleteRiderAdvance(updated, cleanId);
             }}
             onDeleteIncentive={async (incId) => {
               const cleanId = incId.replace(/^inc-/, '');
               await handleDeleteRiderIncentive(viewingLedgerRiderId, cleanId);
+            }}
+            onEditIncentive={async (incId, updatedData) => {
+              const cleanId = incId.replace(/^inc-/, '');
+              await handleSaveRiderIncentive(viewingLedgerRiderId, {
+                id: cleanId,
+                amount: updatedData.amount,
+                reason: updatedData.reason,
+                date: updatedData.date,
+              });
             }}
             onResetAccount={async () => {
               await handleResetRiderAccount(viewingLedgerRiderId);

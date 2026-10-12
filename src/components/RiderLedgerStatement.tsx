@@ -13,9 +13,11 @@ import {
   ArrowUpDown,
   Trash2,
   RotateCcw,
-  ShieldCheck
+  ShieldCheck,
+  Pencil,
+  X
 } from 'lucide-react';
-import { PublicRiderStatement } from '../types';
+import { PublicRiderStatement, RiderAdvanceEntry } from '../types';
 import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
 import { fetchPublicRiderStatement } from '../services/firestoreSync';
 import { generateStatementUrl } from '../services/smsService';
@@ -32,7 +34,9 @@ export interface RiderLedgerStatementProps {
   userId?: string;
   isAdmin?: boolean;
   onDeleteAdvance?: (advId: string) => Promise<void>;
+  onEditAdvance?: (advId: string, updated: { amount: number; reason: string; date: string }) => Promise<void>;
   onDeleteIncentive?: (incId: string) => Promise<void>;
+  onEditIncentive?: (incId: string, updated: { amount: number; reason: string; date: string }) => Promise<void>;
   onResetAccount?: () => Promise<void>;
 }
 
@@ -42,7 +46,9 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   onBackToApp,
   isAdmin = false,
   onDeleteAdvance,
+  onEditAdvance,
   onDeleteIncentive,
+  onEditIncentive,
   onResetAccount,
 }) => {
   // Extract or resolve riderId from prop or window location (hash or search params)
@@ -134,6 +140,28 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // Default: 'desc' = Current to Oldest (Newest at top)
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Admin Edit Advance State
+  const [editingAdvanceRow, setEditingAdvanceRow] = useState<UnifiedTransactionItem | null>(null);
+  const [editAmount, setEditAmount] = useState<string>('');
+  const [editDate, setEditDate] = useState<string>('');
+  const [editReason, setEditReason] = useState<string>('');
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+
+  // Admin Edit Incentive State
+  const [editingIncentiveRow, setEditingIncentiveRow] = useState<UnifiedTransactionItem | null>(null);
+  const [editIncAmount, setEditIncAmount] = useState<string>('');
+  const [editIncDate, setEditIncDate] = useState<string>('');
+  const [editIncReason, setEditIncReason] = useState<string>('');
+  const [isSavingIncEdit, setIsSavingIncEdit] = useState<boolean>(false);
+
+  // In-App Confirm Delete Row State (Android WebView safe, zero window.confirm)
+  const [deletingRow, setDeletingRow] = useState<UnifiedTransactionItem | null>(null);
+  const [isDeletingRow, setIsDeletingRow] = useState<boolean>(false);
+
+  // In-App Confirm Reset Account State (Android WebView safe, zero window.confirm)
+  const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
+  const [isResetting, setIsResetting] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -229,23 +257,13 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     return calculateRiderLedger(statement, sortOrder);
   }, [statement, sortOrder]);
 
-  // Admin Actions: Delete Row
-  const handleDeleteRow = async (row: UnifiedTransactionItem) => {
-    if (!isAdmin) return;
-    const itemAmount = row.paidToRider || row.settledOrEarned;
-    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (${row.title} - ₹${itemAmount})`;
-
-    let confirmed = true;
-    try {
-      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-        confirmed = window.confirm(confirmPrompt);
-      }
-    } catch {
-      confirmed = true;
-    }
-    if (!confirmed) return;
-
+  // Admin Actions: Delete Row (Android WebView safe, zero window.confirm)
+  const handleConfirmDeleteRow = async () => {
+    if (!isAdmin || !deletingRow) return;
+    const row = deletingRow;
+    setIsDeletingRow(true);
     setActionInProgress(row.id);
+
     try {
       if (row.type === 'advance' && onDeleteAdvance) {
         await onDeleteAdvance(row.originalId);
@@ -280,21 +298,175 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         });
         showToast('इंसेंटिव एंट्री सफलतापूर्वक हटाई गई।');
       }
+      setDeletingRow(null);
     } catch (err) {
       console.error('Error deleting ledger row:', err);
       showToast('एंट्री हटाने में त्रुटि हुई।');
     } finally {
+      setIsDeletingRow(false);
       setActionInProgress(null);
     }
   };
 
-  // Admin Action: Reset Entire Rider Account (Clear Test Data)
-  const handleResetEntireAccount = async () => {
-    if (!isAdmin || !statement) return;
-    const confirmPrompt = `क्या आप ${statement.riderName} का पूरा खाता रीसेट (Clear Test Data) करना चाहते हैं?\n\nसभी टेस्ट एडवांस और इंसेंटिव डेटा स्थायी रूप से मिटा दिए जाएंगे और बकाया राशि ₹0 हो जाएगी।`;
-    if (!window.confirm(confirmPrompt)) return;
+  // Admin Actions: Edit Advance Row
+  const handleStartEditAdvance = (row: UnifiedTransactionItem) => {
+    if (!isAdmin) return;
+    setEditingAdvanceRow(row);
+    setEditAmount(String(row.paidToRider));
+    setEditDate(row.rawDate ? row.rawDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
+    setEditReason(row.title || '');
+  };
 
+  const handleCancelEditAdvance = () => {
+    setEditingAdvanceRow(null);
+    setEditAmount('');
+    setEditDate('');
+    setEditReason('');
+  };
+
+  const handleSaveEditAdvance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAdvanceRow || !onEditAdvance) return;
+
+    const num = Math.max(0, parseFloat(editAmount) || 0);
+    if (num <= 0) {
+      showToast('कृपया मान्य एडवांस राशि दर्ज करें।');
+      return;
+    }
+
+    setIsSavingEdit(true);
+    setActionInProgress(editingAdvanceRow.id);
+    try {
+      await onEditAdvance(editingAdvanceRow.originalId, {
+        amount: num,
+        reason: editReason.trim() || 'सामान्य एडवांस',
+        date: editDate || new Date().toISOString().slice(0, 10),
+      });
+
+      // Optimistic update
+      setStatement((prev) => {
+        if (!prev) return null;
+        const exists = (prev.advances || []).some(
+          (a) => a.id === editingAdvanceRow.originalId || `adv-${a.id}` === editingAdvanceRow.id
+        );
+        let updatedAdvances: RiderAdvanceEntry[];
+        if (exists) {
+          updatedAdvances = (prev.advances || []).map((a) => {
+            if (a.id === editingAdvanceRow.originalId || `adv-${a.id}` === editingAdvanceRow.id) {
+              return {
+                ...a,
+                amount: num,
+                reason: editReason.trim() || 'सामान्य एडवांस',
+                date: editDate || a.date,
+              };
+            }
+            return a;
+          });
+        } else {
+          const newAdv: RiderAdvanceEntry = {
+            id: editingAdvanceRow.originalId !== 'prior-settled-advance' ? editingAdvanceRow.originalId : `adv_${Date.now()}`,
+            riderId: prev.riderId,
+            amount: num,
+            reason: editReason.trim() || 'सामान्य एडवांस',
+            date: editDate || new Date().toISOString().slice(0, 10),
+            runningBalance: num,
+            createdAt: new Date().toISOString(),
+          };
+          updatedAdvances = [newAdv, ...(prev.advances || [])];
+        }
+        const newTotal = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+        return {
+          ...prev,
+          advances: updatedAdvances,
+          totalAdvance: newTotal,
+        };
+      });
+
+      showToast('एडवांस एंट्री सफलतापूर्वक अपडेट की गई।');
+      handleCancelEditAdvance();
+    } catch (err) {
+      console.error('Error updating advance in ledger:', err);
+      showToast('एडवांस अपडेट करने में त्रुटि हुई।');
+    } finally {
+      setIsSavingEdit(false);
+      setActionInProgress(null);
+    }
+  };
+
+  // Admin Actions: Edit Incentive Row
+  const handleStartEditIncentive = (row: UnifiedTransactionItem) => {
+    if (!isAdmin) return;
+    setEditingIncentiveRow(row);
+    setEditIncAmount(String(row.settledOrEarned));
+    setEditIncDate(row.rawDate ? row.rawDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
+    setEditIncReason(row.title || '');
+  };
+
+  const handleCancelEditIncentive = () => {
+    setEditingIncentiveRow(null);
+    setEditIncAmount('');
+    setEditIncDate('');
+    setEditIncReason('');
+  };
+
+  const handleSaveEditIncentive = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingIncentiveRow || !onEditIncentive) return;
+
+    const num = Math.max(0, parseFloat(editIncAmount) || 0);
+    if (num <= 0) {
+      showToast('कृपया मान्य इंसेंटिव राशि दर्ज करें।');
+      return;
+    }
+
+    setIsSavingIncEdit(true);
+    setActionInProgress(editingIncentiveRow.id);
+    try {
+      await onEditIncentive(editingIncentiveRow.originalId, {
+        amount: num,
+        reason: editIncReason.trim() || 'इंसेंटिव / बोनस',
+        date: editIncDate || new Date().toISOString().slice(0, 10),
+      });
+
+      // Optimistic update
+      setStatement((prev) => {
+        if (!prev) return null;
+        const updatedIncentives = (prev.incentives || []).map((i) => {
+          if (i.id === editingIncentiveRow.originalId || `inc-${i.id}` === editingIncentiveRow.id) {
+            return {
+              ...i,
+              amount: num,
+              reason: editIncReason.trim() || 'इंसेंटिव / बोनस',
+              date: editIncDate || i.date,
+            };
+          }
+          return i;
+        });
+        const newTotal = updatedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+        return {
+          ...prev,
+          incentives: updatedIncentives,
+          totalIncentive: newTotal,
+        };
+      });
+
+      showToast('इंसेंटिव एंट्री सफलतापूर्वक अपडेट की गई।');
+      handleCancelEditIncentive();
+    } catch (err) {
+      console.error('Error updating incentive in ledger:', err);
+      showToast('इंसेंटिव अपडेट करने में त्रुटि हुई।');
+    } finally {
+      setIsSavingIncEdit(false);
+      setActionInProgress(null);
+    }
+  };
+
+  // Admin Action: Reset Entire Rider Account (In-App Confirm, zero window.confirm)
+  const handleConfirmResetAccount = async () => {
+    if (!isAdmin || !statement) return;
+    setIsResetting(true);
     setActionInProgress('reset-all');
+
     try {
       if (onResetAccount) {
         await onResetAccount();
@@ -310,10 +482,12 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         };
       });
       showToast('खाता सफलतापूर्वक रीसेट (₹0) कर दिया गया!');
+      setShowResetConfirm(false);
     } catch (err) {
       console.error('Error resetting account:', err);
       showToast('खाता रीसेट करने में त्रुटि हुई।');
     } finally {
+      setIsResetting(false);
       setActionInProgress(null);
     }
   };
@@ -454,7 +628,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             {isAdmin && (
               <button
                 type="button"
-                onClick={handleResetEntireAccount}
+                onClick={() => setShowResetConfirm(true)}
                 disabled={actionInProgress === 'reset-all'}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-950/50 hover:bg-rose-900/80 text-rose-300 hover:text-rose-100 border border-rose-800/60 transition active:scale-95 cursor-pointer text-xs font-bold disabled:opacity-50"
                 title="खाता रीसेट करें (Clear Test Data & Set Balance to ₹0)"
@@ -671,19 +845,43 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                         )}
                       </td>
 
-                      {/* 4. एडमिन (Admin Delete Button 🗑️ - Strictly visible ONLY inside Admin login) */}
+                      {/* 4. एडमिन (Admin Actions - Strictly visible ONLY inside Admin login) */}
                       {isAdmin && (
                         <td className="py-3 px-3 sm:px-4 text-center align-top whitespace-nowrap print:hidden">
                           {(row.type === 'advance' || row.type === 'incentive') && row.originalId !== 'opening-advance' ? (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteRow(row)}
-                              disabled={actionInProgress === row.id}
-                              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
-                              title={`${row.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'} एंट्री हटाएं (Delete Document)`}
-                            >
-                              <Trash2 className={`w-4 h-4 ${actionInProgress === row.id ? 'animate-pulse text-rose-500' : ''}`} />
-                            </button>
+                            <div className="flex items-center justify-center gap-1">
+                              {row.type === 'advance' && onEditAdvance && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditAdvance(row)}
+                                  disabled={actionInProgress === row.id}
+                                  className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                  title="एडवांस एडिट करें (Edit Advance)"
+                                >
+                                  <Pencil className="w-3.5 h-3.5 text-amber-400" />
+                                </button>
+                              )}
+                              {row.type === 'incentive' && onEditIncentive && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditIncentive(row)}
+                                  disabled={actionInProgress === row.id}
+                                  className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                  title="इंसेंटिव एडिट करें (Edit Incentive)"
+                                >
+                                  <Pencil className="w-3.5 h-3.5 text-emerald-400" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setDeletingRow(row)}
+                                disabled={actionInProgress === row.id}
+                                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                title={`${row.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'} एंट्री हटाएं (Delete Document)`}
+                              >
+                                <Trash2 className={`w-3.5 h-3.5 ${actionInProgress === row.id ? 'animate-pulse text-rose-500' : ''}`} />
+                              </button>
+                            </div>
                           ) : (
                             <span className="text-slate-600 text-xs">-</span>
                           )}
@@ -761,6 +959,326 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
           </span>
         </div>
       </footer>
+
+      {/* Admin Edit Advance Modal */}
+      {editingAdvanceRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150 print:hidden">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-white">
+                    एडवांस संपादित करें (Edit Advance)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {statement.riderName} • {statement.riderPhone ? `+91 ${statement.riderPhone}` : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelEditAdvance}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditAdvance} className="space-y-4">
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  एडवांस राशि (Amount in ₹) <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    required
+                    placeholder="1000"
+                    className="w-full pl-7 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-500 transition"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  दिनांक (Date) <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-amber-500 transition cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  कारण / विवरण (Reason / Purpose)
+                </label>
+                <input
+                  type="text"
+                  value={editReason}
+                  onChange={(e) => setEditReason(e.target.value)}
+                  placeholder="उदा. बाइक मरम्मत, फ्यूल, त्यौहार खर्च"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 transition"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleCancelEditAdvance}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white text-xs font-bold shadow-lg shadow-amber-950/50 flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{isSavingEdit ? 'अपडेट हो रहा है...' : 'सुरक्षित करें (Save Changes)'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Edit Incentive Modal */}
+      {editingIncentiveRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150 print:hidden">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-white">
+                    इंसेंटिव संपादित करें (Edit Incentive)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {statement.riderName} • {statement.riderPhone ? `+91 ${statement.riderPhone}` : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelEditIncentive}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditIncentive} className="space-y-4">
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  इंसेंटिव राशि (Amount in ₹) <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    value={editIncAmount}
+                    onChange={(e) => setEditIncAmount(e.target.value)}
+                    required
+                    placeholder="500"
+                    className="w-full pl-7 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-emerald-300 font-mono font-bold focus:outline-none focus:border-emerald-500 transition"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  दिनांक (Date) <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={editIncDate}
+                  onChange={(e) => setEditIncDate(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500 transition cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  कारण / विवरण (Reason / Purpose)
+                </label>
+                <input
+                  type="text"
+                  value={editIncReason}
+                  onChange={(e) => setEditIncReason(e.target.value)}
+                  placeholder="उदा. त्यौहार बोनस, परफॉर्मेंस इंसेंटिव"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 transition"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleCancelEditIncentive}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingIncEdit}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-950/50 flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{isSavingIncEdit ? 'अपडेट हो रहा है...' : 'सुरक्षित करें (Save Changes)'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirm Delete Row Modal (Android WebView safe, zero window.confirm) */}
+      {deletingRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in print:hidden">
+          <div 
+            className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">
+                  {deletingRow.type === 'advance' ? 'एडवांस एंट्री हटाएं?' : 'इंसेंटिव एंट्री हटाएं?'}
+                </h3>
+                <p className="text-xs text-slate-400">यह रिकॉर्ड डेटाबेस से हमेशा के लिए हटा दिया जाएगा।</p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between text-slate-300 font-sans">
+                <span>राइडर:</span>
+                <span className="font-bold text-white">{statement.riderName}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>प्रकार:</span>
+                <span className="font-semibold text-amber-300">{deletingRow.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>राशि:</span>
+                <span className="font-bold text-rose-400">
+                  ₹{deletingRow.paidToRider || deletingRow.settledOrEarned}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-400 font-sans">
+                <span>विवरण:</span>
+                <span className="text-slate-300 truncate max-w-[180px]">{deletingRow.title}</span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>दिनांक:</span>
+                <span className="text-slate-300">{deletingRow.formattedDate}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeletingRow(null)}
+                disabled={isDeletingRow}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteRow}
+                disabled={isDeletingRow}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+              >
+                {isDeletingRow ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>हटा रहे हैं...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>हाँ, हटाएं (Confirm Delete)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirm Reset Entire Account Modal (Android WebView safe, zero window.confirm) */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in print:hidden">
+          <div 
+            className="w-full max-w-sm bg-slate-900 border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <RotateCcw className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">खाता पूरा रीसेट करें?</h3>
+                <p className="text-xs text-rose-300">Clear Test Data • सेट बकाया ₹0</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              क्या आप <strong>{statement.riderName}</strong> का पूरा खाता रीसेट करना चाहते हैं?
+              सभी टेस्ट एडवांस और इंसेंटिव डेटा स्थायी रूप से हटा दिए जाएंगे और कुल बकाया ₹0 हो जाएगा।
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                disabled={isResetting}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetAccount}
+                disabled={isResetting}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+              >
+                {isResetting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>रीसेट हो रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>हाँ, रीसेट करें (Confirm Reset)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

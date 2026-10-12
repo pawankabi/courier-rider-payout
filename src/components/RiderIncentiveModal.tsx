@@ -15,7 +15,8 @@ import {
   Trash2,
   IndianRupee,
   Phone,
-  Bike
+  Bike,
+  Pencil
 } from 'lucide-react';
 import { Rider, RiderIncentiveEntry } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
@@ -35,7 +36,7 @@ interface RiderIncentiveModalProps {
   onClose: () => void;
   onSaveIncentive: (
     riderId: string, 
-    incentiveData: { amount: number; reason: string; date: string }
+    incentiveData: { id?: string; amount: number; reason: string; date: string }
   ) => Promise<void>;
   onDeleteIncentive?: (riderId: string, incentiveId: string) => Promise<void>;
   onViewLedger?: (riderId: string) => void;
@@ -64,6 +65,7 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
   const [reason, setReason] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [instantShareData, setInstantShareData] = useState<{
     riderName: string;
@@ -73,16 +75,33 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
     message: string;
   } | null>(null);
 
+  // Edit Incentive Modal State
+  const [editingIncentive, setEditingIncentive] = useState<RiderIncentiveEntry | null>(null);
+  const [editAmount, setEditAmount] = useState<string>('');
+  const [editDate, setEditDate] = useState<string>('');
+  const [editReason, setEditReason] = useState<string>('');
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+
+  // In-App Confirm Delete State (Android WebView safe, no window.confirm)
+  const [deletingIncentiveEntry, setDeletingIncentiveEntry] = useState<RiderIncentiveEntry | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
   // Smooth Escape key handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        if (editingIncentive) {
+          setEditingIncentive(null);
+        } else if (deletingIncentiveEntry) {
+          setDeletingIncentiveEntry(null);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [onClose, editingIncentive, deletingIncentiveEntry]);
 
   const numericAmount = Math.max(0, Number(amount) || parseFloat(amount) || 0);
   const currentTotalIncentive = Number(rider.totalIncentive) || 0;
@@ -138,26 +157,65 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
     }
   };
 
-  const handleDeleteItem = async (incId: string) => {
-    if (!onDeleteIncentive) return;
-    const targetInc = (rider.incentives || []).find((i) => i.id === incId);
-    if (!targetInc) return;
+  const handleStartEdit = (inc: RiderIncentiveEntry) => {
+    setEditingIncentive(inc);
+    setEditAmount(String(inc.amount));
+    setEditDate(inc.date ? inc.date.slice(0, 10) : inc.createdAt ? inc.createdAt.slice(0, 10) : getTodayDateString());
+    setEditReason(inc.reason || '');
+  };
 
-    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (₹${targetInc.amount} - ${targetInc.reason || 'इंसेंटिव'})`;
-    let confirmed = true;
-    try {
-      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-        confirmed = window.confirm(confirmPrompt);
-      }
-    } catch {
-      confirmed = true;
+  const handleCancelEdit = () => {
+    setEditingIncentive(null);
+    setEditAmount('');
+    setEditDate('');
+    setEditReason('');
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingIncentive) return;
+
+    const num = Math.max(0, parseFloat(editAmount) || 0);
+    if (num <= 0) {
+      setErrorMessage('कृपया मान्य इंसेंटिव राशि दर्ज करें।');
+      return;
     }
-    if (!confirmed) return;
+
+    setIsSavingEdit(true);
+    try {
+      await onSaveIncentive(rider.id, {
+        id: editingIncentive.id,
+        amount: num,
+        date: editDate || getTodayDateString(),
+        reason: editReason.trim() || 'इंसेंटिव / बोनस',
+      });
+
+      setToastMessage('✅ इंसेंटिव सफलतापूर्वक अपडेट किया गया!');
+      setTimeout(() => setToastMessage(null), 3000);
+      handleCancelEdit();
+    } catch (err: any) {
+      console.error('Error updating incentive:', err);
+      setErrorMessage(err?.message || 'इंसेंटिव अपडेट करने में त्रुटि हुई।');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingIncentiveEntry || !onDeleteIncentive) return;
+    const incId = deletingIncentiveEntry.id;
+    setIsDeleting(true);
 
     try {
       await onDeleteIncentive(rider.id, incId);
-    } catch (err) {
+      setToastMessage('इंसेंटिव रिकॉर्ड सफलतापूर्वक हटा दिया गया।');
+      setTimeout(() => setToastMessage(null), 3000);
+      setDeletingIncentiveEntry(null);
+    } catch (err: any) {
       console.error('Error deleting incentive item:', err);
+      setErrorMessage(err?.message || 'इंसेंटिव हटाने में त्रुटि हुई।');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -454,16 +512,26 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
                           + {formatINR(inc.amount)}
                         </td>
                         <td className="py-2 px-3 text-center">
-                          {onDeleteIncentive && (
+                          <div className="flex items-center justify-center gap-1">
                             <button
                               type="button"
-                              onClick={() => handleDeleteItem(inc.id)}
-                              className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition"
-                              title="इंसेंटिव हटाएं (Delete from Database)"
+                              onClick={() => handleStartEdit(inc)}
+                              className="p-1 rounded text-slate-400 hover:text-amber-400 hover:bg-slate-800 transition cursor-pointer"
+                              title="इंसेंटिव एडिट करें (Edit Incentive)"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Pencil className="w-3.5 h-3.5" />
                             </button>
-                          )}
+                            {onDeleteIncentive && (
+                              <button
+                                type="button"
+                                onClick={() => setDeletingIncentiveEntry(inc)}
+                                className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
+                                title="इंसेंटिव हटाएं (Delete from Database)"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -474,6 +542,187 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Edit Incentive Modal */}
+      {editingIncentive && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in">
+          <div 
+            className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">इंसेंटिव संपादित करें (Edit Incentive)</h3>
+                  <p className="text-xs text-slate-400">{rider.name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">
+                  इंसेंटिव राशि (₹) <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    required
+                    placeholder="500"
+                    className="w-full pl-7 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-emerald-300 font-mono font-bold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">
+                  तारीख (Date)
+                </label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">
+                  विवरण / कारण (Description / Reason)
+                </label>
+                <input
+                  type="text"
+                  value={editReason}
+                  onChange={(e) => setEditReason(e.target.value)}
+                  placeholder="त्यौहार बोनस / परफॉर्मेंस इंसेंटिव"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  disabled={isSavingEdit}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-900/40"
+                >
+                  {isSavingEdit ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>सेव हो रहा है...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>अपडेट सुरक्षित करें</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirm Delete Incentive Modal (Android WebView safe, zero window.confirm) */}
+      {deletingIncentiveEntry && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in">
+          <div 
+            className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">इंसेंटिव हटाएं?</h3>
+                <p className="text-xs text-slate-400">यह रिकॉर्ड डेटाबेस से हटा दिया जाएगा।</p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between text-slate-300 font-sans">
+                <span>राइडर:</span>
+                <span className="font-bold text-white">{rider.name}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>इंसेंटिव राशि:</span>
+                <span className="font-bold text-emerald-400">₹{deletingIncentiveEntry.amount}</span>
+              </div>
+              <div className="flex justify-between text-slate-400 font-sans">
+                <span>कारण:</span>
+                <span className="text-slate-300 truncate max-w-[180px]">{deletingIncentiveEntry.reason || 'इंसेंटिव'}</span>
+              </div>
+              {deletingIncentiveEntry.date && (
+                <div className="flex justify-between text-slate-400">
+                  <span>तारीख:</span>
+                  <span className="text-slate-300">{formatDateDisplay(deletingIncentiveEntry.date)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeletingIncentiveEntry(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>हटा रहे हैं...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>हाँ, हटाएं (Confirm Delete)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* On-screen Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[80] bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-in slide-in-from-top duration-200">
+          <Check className="w-4 h-4 text-emerald-200 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
 
       {/* Instant Share Success Modal */}
       {instantShareData && (

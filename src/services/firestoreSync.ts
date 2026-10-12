@@ -2589,7 +2589,7 @@ export async function writeAdvanceEntryToFirestore(
     riderPhone?: string;
     amount: number;
     date: string;
-    reason: string;
+    reason?: string;
     runningBalance?: number;
   }
 ): Promise<string> {
@@ -2625,6 +2625,55 @@ export async function writeAdvanceEntryToFirestore(
   }
 
   return advId;
+}
+
+/**
+ * Update advance entry directly in Firestore 'advances' collection via updateDoc
+ */
+export async function updateAdvanceInFirestore(
+  userId: string,
+  advanceId: string,
+  updates: {
+    amount: number;
+    date: string;
+    reason?: string;
+  }
+): Promise<void> {
+  if (!advanceId) return;
+  const cleanId = advanceId.replace(/^adv-/, '');
+  const data = cleanForFirestore({
+    amount: updates.amount,
+    date: updates.date,
+    reason: updates.reason || 'सामान्य एडवांस',
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Direct doc update
+  try {
+    const advRef = doc(db, 'advances', cleanId);
+    await updateDoc(advRef, data);
+  } catch {
+    try {
+      const advRef = doc(db, 'advances', cleanId);
+      await setDoc(advRef, data, { merge: true });
+    } catch (err) {
+      console.warn('Direct /advances update error:', err);
+    }
+  }
+
+  if (userId) {
+    try {
+      const wsAdvRef = doc(db, 'workspaces', userId, 'advances', cleanId);
+      await updateDoc(wsAdvRef, data);
+    } catch {
+      try {
+        const wsAdvRef = doc(db, 'workspaces', userId, 'advances', cleanId);
+        await setDoc(wsAdvRef, data, { merge: true });
+      } catch (err) {
+        console.warn('Workspace /advances update error:', err);
+      }
+    }
+  }
 }
 
 /**
@@ -2677,6 +2726,54 @@ export async function writeIncentiveEntryToFirestore(
   }
 
   return incId;
+}
+
+/**
+ * Update incentive entry directly in Firestore 'incentives' collection via updateDoc
+ */
+export async function updateIncentiveInFirestore(
+  userId: string,
+  incentiveId: string,
+  updates: {
+    amount: number;
+    date: string;
+    reason?: string;
+  }
+): Promise<void> {
+  if (!incentiveId) return;
+  const cleanId = incentiveId.replace(/^inc-/, '');
+  const data = cleanForFirestore({
+    amount: updates.amount,
+    date: updates.date,
+    reason: updates.reason || 'इंसेंटिव / बोनस',
+    updatedAt: new Date().toISOString(),
+  });
+
+  try {
+    const incRef = doc(db, 'incentives', cleanId);
+    await updateDoc(incRef, data);
+  } catch {
+    try {
+      const incRef = doc(db, 'incentives', cleanId);
+      await setDoc(incRef, data, { merge: true });
+    } catch (err) {
+      console.warn('Direct /incentives update error:', err);
+    }
+  }
+
+  if (userId) {
+    try {
+      const wsIncRef = doc(db, 'workspaces', userId, 'incentives', cleanId);
+      await updateDoc(wsIncRef, data);
+    } catch {
+      try {
+        const wsIncRef = doc(db, 'workspaces', userId, 'incentives', cleanId);
+        await setDoc(wsIncRef, data, { merge: true });
+      } catch (err) {
+        console.warn('Workspace /incentives update error:', err);
+      }
+    }
+  }
 }
 
 /**

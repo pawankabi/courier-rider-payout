@@ -193,6 +193,9 @@ export const DailyEntryTab: React.FC<Props> = ({
 
   // Edit Modal State
   const [editingEntry, setEditingEntry] = useState<DeliveryEntry | null>(null);
+  // In-App Confirm Delete Entry State (Android WebView safe, zero window.confirm)
+  const [deletingDailyEntry, setDeletingDailyEntry] = useState<DeliveryEntry | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Instant 1-Tap SMS / WhatsApp popup state on save
   const [instantShareData, setInstantShareData] = useState<{
@@ -238,14 +241,15 @@ export const DailyEntryTab: React.FC<Props> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
 
     if (!selectedRiderId) {
-      alert('Please select or add a rider first.');
+      setFormError('कृपया पहले एक राइडर चुनें या जोड़ें।');
       return;
     }
 
     if (parcelCount <= 0) {
-      alert('Please enter a valid number of delivered parcels (> 0).');
+      setFormError('कृपया डिलीवरी पार्सल की मान्य संख्या दर्ज करें (> 0)।');
       return;
     }
 
@@ -402,6 +406,14 @@ export const DailyEntryTab: React.FC<Props> = ({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Validation Error Banner */}
+            {formError && (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-300 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{formError}</span>
+              </div>
+            )}
+
             {/* Restored Draft Alert */}
             {isDraftRestored && (
               <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-blue-500/15 border border-blue-500/30 text-xs text-blue-200 animate-in fade-in">
@@ -799,12 +811,8 @@ export const DailyEntryTab: React.FC<Props> = ({
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => {
-                              if (window.confirm(`Delete entry for ${entry.riderName} on ${entry.date}?`)) {
-                                onDeleteEntry(entry.id);
-                              }
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition"
+                            onClick={() => setDeletingDailyEntry(entry)}
+                            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition cursor-pointer"
                             title="Delete entry"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -829,6 +837,66 @@ export const DailyEntryTab: React.FC<Props> = ({
           onClose={() => setEditingEntry(null)}
           canAccessIncentives={canAccessIncentives}
         />
+      )}
+
+      {/* In-App Confirm Delete Daily Entry Modal (Android WebView safe, zero window.confirm) */}
+      {deletingDailyEntry && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in">
+          <div 
+            className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">डिलीवरी एंट्री हटाएं?</h3>
+                <p className="text-xs text-slate-400">यह रिकॉर्ड डेटाबेस से हटा दिया जाएगा।</p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between text-slate-300 font-sans">
+                <span>राइडर:</span>
+                <span className="font-bold text-white">{deletingDailyEntry.riderName}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>दिनांक:</span>
+                <span className="text-slate-200">{formatDateDisplay(deletingDailyEntry.date)}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>पार्सल:</span>
+                <span className="font-bold text-amber-300">{deletingDailyEntry.parcels} pkts</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>कमाई:</span>
+                <span className="font-bold text-emerald-400">₹{deletingDailyEntry.totalEarnings}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeletingDailyEntry(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteEntry(deletingDailyEntry.id);
+                  setDeletingDailyEntry(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>हाँ, हटाएं (Confirm Delete)</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Festival Greetings Modal */}

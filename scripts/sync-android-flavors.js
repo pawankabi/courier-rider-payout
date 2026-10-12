@@ -24,10 +24,12 @@ execSync('npx vite build --outDir dist', {
   env: { ...process.env, VITE_APP_TARGET: 'admin' } 
 });
 
-// 3. Copy Admin Web Assets strictly to android/app/src/admin/assets/public
-console.log('📂 [2/4] Syncing Admin web assets strictly to android/app/src/admin/assets/public...');
+// 3. Copy Admin Web Assets strictly to android/app/src/admin/assets/public and main assets
+console.log('📂 [2/4] Syncing Admin web assets strictly to android/app/src/admin/assets/public & main assets...');
 fs.mkdirSync(adminAssetsDir, { recursive: true });
 fs.cpSync('dist', adminAssetsDir, { recursive: true });
+fs.mkdirSync(mainAssetsDir, { recursive: true });
+fs.cpSync('dist', mainAssetsDir, { recursive: true });
 
 // Write flavor-specific capacitor.config.json for Admin
 const adminCapConfig = {

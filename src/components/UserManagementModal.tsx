@@ -192,8 +192,7 @@ export const UserManagementModal: React.FC<Props> = ({
       showToast('Subscription updated successfully!', 'success');
     } catch (err: any) {
       console.error('Failed to update subscription:', err);
-      alert('Failed to update user subscription in Firestore: ' + (err?.message || err));
-      showToast('Failed to update user subscription.', 'error');
+      showToast('Failed to update user subscription in Firestore: ' + (err?.message || err), 'error');
     } finally {
       setSavingSubscription(false);
     }

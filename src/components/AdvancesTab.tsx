@@ -11,6 +11,8 @@ import {
   Search,
   PlusCircle,
   FileSpreadsheet,
+  Pencil,
+  X,
 } from 'lucide-react';
 import { Rider, RiderAdvanceEntry } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString } from '../utils/formatters';
@@ -47,6 +49,23 @@ export const AdvancesTab: React.FC<Props> = ({
   const [reason, setReason] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Edit Advance Modal State
+  const [editingAdvance, setEditingAdvance] = useState<{
+    entry: RiderAdvanceEntry;
+    rider: Rider;
+  } | null>(null);
+  const [editAmount, setEditAmount] = useState<string>('');
+  const [editDate, setEditDate] = useState<string>('');
+  const [editReason, setEditReason] = useState<string>('');
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+
+  // In-App Confirm Delete Advance State (Android WebView safe, no window.confirm)
+  const [deletingAdvance, setDeletingAdvance] = useState<{
+    entry: RiderAdvanceEntry;
+    rider: Rider;
+  } | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
   // Search & Filters
   const [filterRiderId, setFilterRiderId] = useState<string>('all');
@@ -176,21 +195,74 @@ export const AdvancesTab: React.FC<Props> = ({
     }
   };
 
-  const handleDelete = async (rider: Rider, advId: string, advAmount: number) => {
-    if (!onDeleteAdvance) return;
-    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (₹${advAmount} - एडवांस)`;
-    let confirmed = true;
-    try {
-      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-        confirmed = window.confirm(confirmPrompt);
-      }
-    } catch {
-      confirmed = true;
+  const handleStartEdit = (rider: Rider, entry: RiderAdvanceEntry) => {
+    setEditingAdvance({ rider, entry });
+    setEditAmount(String(entry.amount));
+    setEditDate(entry.date || entry.createdAt.slice(0, 10));
+    setEditReason(entry.reason || '');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingAdvance(null);
+    setEditAmount('');
+    setEditDate('');
+    setEditReason('');
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAdvance) return;
+
+    const num = Math.max(0, parseFloat(editAmount) || 0);
+    if (num <= 0) {
+      showToast('⚠️ कृपया मान्य एडवांस राशि दर्ज करें!');
+      return;
     }
-    if (!confirmed) return;
+
+    const { rider, entry } = editingAdvance;
+    setIsSavingEdit(true);
 
     try {
-      const remainingAdvances = (rider.advances || []).filter((a) => a.id !== advId);
+      const nowIso = new Date().toISOString();
+      const updatedAdvances = (rider.advances || []).map((a) => {
+        if (a.id === entry.id) {
+          return {
+            ...a,
+            amount: num,
+            date: editDate || a.date,
+            reason: editReason.trim() || 'सामान्य एडवांस',
+            updatedAt: nowIso,
+          };
+        }
+        return a;
+      });
+
+      const newTotal = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+      const updatedEntry = updatedAdvances.find((a) => a.id === entry.id)!;
+
+      const updatedRider: Rider = {
+        ...rider,
+        totalAdvance: newTotal,
+        advances: updatedAdvances,
+      };
+
+      await onSaveAdvance(updatedRider, updatedEntry);
+      showToast(`✅ ₹${num} का एडवांस (${rider.name}) सफलतापूर्वक अपडेट किया गया!`);
+      handleCancelEdit();
+    } catch (err) {
+      console.error('Error updating advance:', err);
+      showToast('एडवांस अपडेट करने में त्रुटि हुई।');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingAdvance || !onDeleteAdvance) return;
+    const { rider, entry } = deletingAdvance;
+    setIsDeleting(true);
+    try {
+      const remainingAdvances = (rider.advances || []).filter((a) => a.id !== entry.id);
       const newTotal = remainingAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
       const updatedRider: Rider = {
         ...rider,
@@ -198,11 +270,14 @@ export const AdvancesTab: React.FC<Props> = ({
         advances: remainingAdvances,
       };
 
-      await onDeleteAdvance(updatedRider, advId);
+      await onDeleteAdvance(updatedRider, entry.id);
       showToast('एडवांस एंट्री सफलतापूर्वक हटाई गई।');
+      setDeletingAdvance(null);
     } catch (err) {
       console.error('Error deleting advance:', err);
       showToast('एडवांस हटाने में त्रुटि हुई।');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -524,10 +599,19 @@ export const AdvancesTab: React.FC<Props> = ({
                             <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
                           </button>
 
+                          <button
+                            type="button"
+                            onClick={() => handleStartEdit(rider, entry)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-amber-400 transition cursor-pointer"
+                            title="एडवांस एडिट करें (Edit Advance)"
+                          >
+                            <Pencil className="w-3.5 h-3.5 text-amber-400" />
+                          </button>
+
                           {onDeleteAdvance && (
                             <button
                               type="button"
-                              onClick={() => handleDelete(rider, entry.id, entry.amount)}
+                              onClick={() => setDeletingAdvance({ rider, entry })}
                               className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-rose-400 transition cursor-pointer"
                               title="हटाएं (Delete)"
                             >
@@ -544,6 +628,179 @@ export const AdvancesTab: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* Edit Advance Modal (Admin View) */}
+      {editingAdvance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-white">
+                    एडवांस संपादित करें (Edit Advance)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {editingAdvance.rider.name} • {editingAdvance.rider.phone || 'No phone'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              {/* Amount */}
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  एडवांस राशि (Amount in ₹) <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    required
+                    placeholder="1000"
+                    className="w-full pl-7 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-500 transition"
+                  />
+                </div>
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  दिनांक (Date) <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-amber-500 transition cursor-pointer"
+                />
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="text-xs text-slate-300 font-bold block mb-1">
+                  कारण / विवरण (Reason / Purpose)
+                </label>
+                <input
+                  type="text"
+                  value={editReason}
+                  onChange={(e) => setEditReason(e.target.value)}
+                  placeholder="उदा. बाइक मरम्मत, फ्यूल, त्यौहार"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 transition"
+                />
+
+                {/* Preset chips */}
+                <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                  <span className="text-[10px] text-slate-400 font-medium">त्वरित कारण:</span>
+                  {ADVANCE_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setEditReason(p)}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
+                        editReason === p
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                          : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white text-xs font-bold shadow-lg shadow-amber-950/50 flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{isSavingEdit ? 'अपडेट हो रहा है...' : 'सुरक्षित करें (Save Changes)'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirm Delete Advance Modal (WebView Safe) */}
+      {deletingAdvance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">एडवांस एंट्री हटाएं? (Delete Advance)</h3>
+                <p className="text-xs text-slate-400">{deletingAdvance.rider.name}</p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+              <div className="flex justify-between text-slate-300">
+                <span>राशि (Amount):</span>
+                <span className="font-mono font-bold text-rose-400">₹{formatINR(deletingAdvance.entry.amount)}</span>
+              </div>
+              <div className="flex justify-between text-slate-400 text-[11px]">
+                <span>विवरण (Reason):</span>
+                <span className="text-slate-200">{deletingAdvance.entry.reason || 'सामान्य एडवांस'}</span>
+              </div>
+              <div className="flex justify-between text-slate-400 text-[11px]">
+                <span>दिनांक (Date):</span>
+                <span>{formatDateDisplay(deletingAdvance.entry.date || deletingAdvance.entry.createdAt.slice(0, 10))}</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              यह एडवांस डेटाबेस से स्थायी रूप से हटा दिया जाएगा और राइडर का कुल बकाया एडवांस तुरंत पुनः समायोजित होगा।
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeletingAdvance(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-950/50 flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeleting ? 'हटाया जा रहा है...' : 'हाँ, हटाएं (Yes, Delete)'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

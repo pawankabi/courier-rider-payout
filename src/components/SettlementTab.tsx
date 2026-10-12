@@ -21,7 +21,8 @@ import {
   ArrowRight,
   TrendingDown,
   Phone,
-  IndianRupee
+  IndianRupee,
+  Info
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { DeliveryEntry, Rider, SettlementRecord, UserRateConfig } from '../types';
@@ -103,6 +104,12 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   // WhatsApp Slip Modal State
   const [slipData, setSlipData] = useState<WhatsAppSlipData | null>(null);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
 
   // Instant Salary SMS Feedback State
   const [salarySmsFeedback, setSalarySmsFeedback] = useState<{
@@ -244,7 +251,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   // Mark all entries as Paid
   const handleMarkAllAsPaid = () => {
     if (unpaidEntries.length === 0) {
-      alert('All entries in this date range are already marked as Paid!');
+      showToast('इस तारीख सीमा में सभी एंट्रियां पहले से पेड (Paid) हैं!');
       return;
     }
 
@@ -374,7 +381,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       });
     } catch (err) {
       console.error('Error generating PDF receipt', err);
-      alert('Could not export PDF receipt. Please check details.');
+      showToast('पीडीएफ रसीद तैयार करने में असमर्थ। कृपया विवरण जांचें।');
     } finally {
       setTimeout(() => setIsExportingPDF(false), 800);
     }
@@ -1170,6 +1177,14 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
           data={slipData}
           onClose={() => setSlipData(null)}
         />
+      )}
+
+      {/* In-App Toast Notification (Android WebView Safe) */}
+      {toastMessage && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 border border-slate-700 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-in slide-in-from-top duration-200">
+          <Info className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
       )}
     </div>
   );

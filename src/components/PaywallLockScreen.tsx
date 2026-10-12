@@ -228,7 +228,7 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
             }
           } catch (autoErr: any) {
             console.error('Error in executeRazorpayAutoApproval:', autoErr);
-            alert('Razorpay भुगतान स्वीकृत हो गया है, कृपया ऐप पुनः रिफ्रेश करें।');
+            setRazorpayError('Razorpay भुगतान स्वीकृत हो गया है, कृपया ऐप पुनः रिफ्रेश करें।');
           }
         },
         onError: (err) => {

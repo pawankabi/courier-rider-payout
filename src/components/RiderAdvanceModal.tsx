@@ -100,6 +100,10 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // In-App Confirm Delete Advance State (Android WebView safe, no window.confirm)
+  const [deletingAdvanceEntry, setDeletingAdvanceEntry] = useState<RiderAdvanceEntry | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
   // Auto-save unsaved form draft on typing, phone sleep, or app switch (phone calls / screen lock resilience)
   useEffect(() => {
     if (editingAdvance) return;
@@ -455,21 +459,10 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
-  const handleDeleteItem = async (advId: string) => {
-    if (!onDeleteAdvance) return;
-    const targetAdv = (rider.advances || []).find((a) => a.id === advId);
-    if (!targetAdv) return;
-    
-    const confirmPrompt = `क्या आप इसे हटाना चाहते हैं? (₹${targetAdv.amount} - ${targetAdv.reason || 'एडवांस'})`;
-    let confirmed = true;
-    try {
-      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-        confirmed = window.confirm(confirmPrompt);
-      }
-    } catch {
-      confirmed = true;
-    }
-    if (!confirmed) return;
+  const handleConfirmDelete = async () => {
+    if (!deletingAdvanceEntry || !onDeleteAdvance) return;
+    const advId = deletingAdvanceEntry.id;
+    setIsDeleting(true);
 
     try {
       const remainingList = (rider.advances || []).filter((a) => a.id !== advId);
@@ -488,8 +481,12 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       }
       setToastMessage('एडवांस एंट्री सफलतापूर्वक हटाई गई।');
       setTimeout(() => setToastMessage(null), 3000);
-    } catch (err) {
+      setDeletingAdvanceEntry(null);
+    } catch (err: any) {
       console.error('Error deleting advance item:', err);
+      setErrorMessage(err?.message || 'एडवांस हटाने में त्रुटि हुई।');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -941,8 +938,8 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
                             {onDeleteAdvance && (
                               <button
                                 type="button"
-                                onClick={() => handleDeleteItem(adv.id)}
-                                className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition"
+                                onClick={() => setDeletingAdvanceEntry(adv)}
+                                className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition cursor-pointer"
                                 title="एडवांस हटाएं (Delete Entry)"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -975,6 +972,76 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* In-App Confirm Delete Advance Modal (Android WebView Safe, zero window.confirm) */}
+      {deletingAdvanceEntry && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in">
+          <div 
+            className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">एडवांस एंट्री हटाएं?</h3>
+                <p className="text-xs text-slate-400">यह रिकॉर्ड डेटाबेस से हटा दिया जाएगा।</p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between text-slate-300 font-sans">
+                <span>राइडर:</span>
+                <span className="font-bold text-white">{rider.name}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>एडवांस राशि:</span>
+                <span className="font-bold text-rose-400">₹{deletingAdvanceEntry.amount}</span>
+              </div>
+              <div className="flex justify-between text-slate-400 font-sans">
+                <span>कारण:</span>
+                <span className="text-slate-300 truncate max-w-[180px]">{deletingAdvanceEntry.reason || 'सामान्य एडवांस'}</span>
+              </div>
+              {deletingAdvanceEntry.date && (
+                <div className="flex justify-between text-slate-400">
+                  <span>तारीख:</span>
+                  <span className="text-slate-300">{formatDateDisplay(deletingAdvanceEntry.date)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeletingAdvanceEntry(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>हटा रहे हैं...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>हाँ, हटाएं (Confirm Delete)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Automatic 1-Tap SMS / WhatsApp Instant Share Success Modal */}
       {instantShareData && (

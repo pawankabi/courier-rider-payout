@@ -150,6 +150,8 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   const [historyModalUser, setHistoryModalUser] = useState<AppUser | null>(null);
   // Free to Paid Conversion Modal
   const [convertingToPaidUser, setConvertingToPaidUser] = useState<AppUser | null>(null);
+  // In-App Confirm Lock/Deactivate User state (Android WebView safe, zero window.confirm)
+  const [lockingUser, setLockingUser] = useState<AppUser | null>(null);
 
   // Action loading state (per user uid or per permission)
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
@@ -560,8 +562,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       );
     } catch (err: any) {
       console.error('Failed to switch subscription plan to free:', err);
-      alert('Failed to switch subscription plan in Firestore: ' + (err?.message || err));
-      showToast('Failed to switch subscription plan to free.', 'error');
+      showToast('Failed to switch subscription plan in Firestore: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -588,8 +589,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       );
     } catch (err: any) {
       console.error('Failed to convert user to paid plan:', err);
-      alert('Failed to convert user to paid plan in Firestore: ' + (err?.message || err));
-      showToast('Failed to convert user to paid plan.', 'error');
+      showToast('Failed to convert user to paid plan: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -619,8 +619,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       showToast(`Saved monthly fee ₹${newFee} for ${user.displayName || user.email}!`, 'success');
     } catch (err: any) {
       console.error('Failed to update monthly fee:', err);
-      alert('Failed to save monthly fee in Firestore: ' + (err?.message || err));
-      showToast('Failed to save monthly fee in Firestore.', 'error');
+      showToast('Failed to save monthly fee in Firestore: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -662,8 +661,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       showToast(`Custom UPI QR Code saved for ${user.displayName || user.email}!`, 'success');
     } catch (err: any) {
       console.error('Failed to upload custom QR code:', err);
-      alert('Failed to upload custom QR code in Firestore: ' + (err?.message || err));
-      showToast('Failed to upload custom QR code. Please try another image.', 'error');
+      showToast('Failed to upload custom QR code: ' + (err?.message || err), 'error');
     } finally {
       setUploadingQrUserId(null);
     }
@@ -680,8 +678,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       showToast(`Removed custom QR code for ${user.displayName || user.email}`, 'info');
     } catch (err: any) {
       console.error('Failed to remove QR code:', err);
-      alert('Failed to remove QR code in Firestore: ' + (err?.message || err));
-      showToast('Failed to remove QR code.', 'error');
+      showToast('Failed to remove QR code: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -703,8 +700,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       showToast('वैधता सफलतापूर्वक अपडेट कर दी गई।', 'success');
     } catch (err: any) {
       console.error('Failed to extend plan:', err);
-      alert('Failed to extend subscription in Firestore: ' + (err?.message || err));
-      showToast('Failed to extend subscription in Firestore.', 'error');
+      showToast('Failed to extend subscription in Firestore: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -736,12 +732,15 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
     }
   };
 
-  // Lock / Deactivate User to immediately revoke access
-  const handleLockDeactivateUser = async (user: AppUser, e?: React.MouseEvent) => {
+  // Lock / Deactivate User to immediately revoke access (Android WebView safe, zero window.confirm)
+  const handleLockDeactivateUser = (user: AppUser, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (!window.confirm(`क्या आप वाकई ${user.displayName || user.email} को सस्पेंड/लॉक करना चाहते हैं? इनका डैशबोर्ड एक्सेस तुरंत बंद हो जाएगा।`)) {
-      return;
-    }
+    setLockingUser(user);
+  };
+
+  const handleConfirmLockDeactivateUser = async () => {
+    if (!lockingUser) return;
+    const user = lockingUser;
     setActionLoadingId(`lock-deact-${user.uid}`);
     try {
       await deactivateOrLockUser(user.uid);
@@ -753,6 +752,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
         subscription: u.subscription ? { ...u.subscription, validUntil: expiredYesterday, paymentStatus: 'expired' } : undefined,
       } : u));
       showToast('खाता सफलतापूर्वक सस्पेंड/लॉक कर दिया गया।', 'info');
+      setLockingUser(null);
     } catch (err: any) {
       console.error('Failed to lock/deactivate user:', err);
       showToast('Failed to lock user in Firestore: ' + (err?.message || err), 'error');
@@ -772,8 +772,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       showToast(`Payment slip approved for ${user.displayName || user.email}! +30 Days extended and added to payment history.`, 'success');
     } catch (err: any) {
       console.error('Failed to approve slip:', err);
-      alert('Failed to approve payment slip in Firestore: ' + (err?.message || err));
-      showToast('Failed to approve payment slip in Firestore.', 'error');
+      showToast('Failed to approve payment slip in Firestore: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -790,8 +789,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       showToast(`Payment slip rejected. Status set to expired for ${user.displayName || user.email}`, 'info');
     } catch (err: any) {
       console.error('Failed to reject slip:', err);
-      alert('Failed to reject payment slip in Firestore: ' + (err?.message || err));
-      showToast('Failed to reject payment slip.', 'error');
+      showToast('Failed to reject payment slip: ' + (err?.message || err), 'error');
     } finally {
       setActionLoadingId(null);
     }
@@ -3980,6 +3978,59 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
         onClose={() => setConvertingToPaidUser(null)}
         onConfirm={handleConfirmFreeToPaid}
       />
+
+      {/* In-App Confirm Lock / Deactivate User Modal (Android WebView safe, zero window.confirm) */}
+      {lockingUser && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in">
+          <div 
+            className="w-full max-w-sm bg-slate-900 border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">खाता सस्पेंड / लॉक करें?</h3>
+                <p className="text-xs text-rose-300">डैशबोर्ड एक्सेस तुरंत बंद हो जाएगा</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              क्या आप वाकई <strong>{lockingUser.displayName || lockingUser.email}</strong> को सस्पेंड/लॉक करना चाहते हैं? इनका डैशबोर्ड एक्सेस तुरंत बंद हो जाएगा।
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setLockingUser(null)}
+                disabled={Boolean(actionLoadingId)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLockDeactivateUser}
+                disabled={Boolean(actionLoadingId)}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+              >
+                {actionLoadingId ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>लॉक हो रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>हाँ, सस्पेंड करें</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

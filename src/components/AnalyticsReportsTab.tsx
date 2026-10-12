@@ -12,7 +12,8 @@ import {
   Square,
   FileSpreadsheet,
   Filter,
-  Phone
+  Phone,
+  Info
 } from 'lucide-react';
 import { DeliveryEntry, Rider, UserRateConfig } from '../types';
 import { 
@@ -52,6 +53,12 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
   const [endDate, setEndDate] = useState<string>(getTodayDateString());
   const [isMultiSelectOpen, setIsMultiSelectOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
 
   // Quick Date Range Presets
   const handlePresetDate = (days: number) => {
@@ -160,7 +167,7 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
       });
     } catch (err) {
       console.error('Error generating PDF', err);
-      alert('Could not export PDF. Please check data entries.');
+      showToast('पीडीएफ एक्सपोर्ट करने में असमर्थ। कृपया डेटा प्रविष्टियां जांचें।');
     } finally {
       setTimeout(() => setIsExporting(false), 800);
     }
@@ -181,7 +188,7 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
       });
     } catch (err) {
       console.error('Error generating CSV', err);
-      alert('Could not export CSV. Please check data entries.');
+      showToast('सीएसवी एक्सपोर्ट करने में असमर्थ। कृपया डेटा प्रविष्टियां जांचें।');
     }
   };
 
@@ -672,6 +679,14 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* In-App Toast Notification (Android WebView Safe) */}
+      {toastMessage && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 border border-slate-700 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-in slide-in-from-top duration-200">
+          <Info className="w-4 h-4 text-purple-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
     </div>
   );
 };

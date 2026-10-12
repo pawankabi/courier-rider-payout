@@ -178,7 +178,7 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
       onClose();
     } catch (err: any) {
       console.error('Failed to process PayU auto-approval in Firestore:', err);
-      alert('PayU payment successful, but error updating user profile in cloud. Please refresh.');
+      setRazorpayError('PayU payment successful, but error updating user profile in cloud. Please refresh.');
     }
   };
 
@@ -224,7 +224,7 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
             onSuccessToast?.(`🎉 ${paidPlan.displayName} भुगतान सफल! प्रो सदस्यता सक्रिय हुई।`);
           } catch (autoErr: any) {
             console.error('Error auto-approving Razorpay in cloud:', autoErr);
-            alert('Razorpay भुगतान सफल रहा, लेकिन प्रोफाइल अपडेट में त्रुटि आई। कृपया रिफ्रेश करें।');
+            setRazorpayError('Razorpay भुगतान सफल रहा, लेकिन प्रोफाइल अपडेट में त्रुटि आई। कृपया रिफ्रेश करें।');
           }
         },
         onError: (err) => {
