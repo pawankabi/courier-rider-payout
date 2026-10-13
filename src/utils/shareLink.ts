@@ -2,25 +2,80 @@
  * Application Sharing Link Utilities
  */
 
-export const getRiderAppUrl = () => 'https://courier-rider-payout.vercel.app/#cod-entry';
-
 export const getBaseUrl = (): string => {
-  if (typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')) {
+  if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
   }
   return 'https://courier-rider-payout.vercel.app';
 };
 
+export const getRiderAppUrl = (): string => {
+  return `${getBaseUrl()}/#cod-entry`;
+};
+
+export const getRiderApkDownloadUrl = (): string => {
+  return `${getBaseUrl()}/downloads/COD-Entry-Rider-Release.apk`;
+};
+
+export const getAdminApkDownloadUrl = (): string => {
+  return `${getBaseUrl()}/downloads/Admin-Payout-Release.apk`;
+};
+
+/**
+ * Checks whether the current application context is strictly the Rider App / Flavor.
+ */
+export function isRiderBuild(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  // 1. Direct Build-Time Target Check
+  const appTarget = (import.meta.env.VITE_APP_TARGET || '').trim().toLowerCase();
+  if (appTarget === 'admin') {
+    return false;
+  }
+  if (appTarget === 'cod_companion' || appTarget === 'companion' || appTarget === 'rider') {
+    return true;
+  }
+
+  // 2. Android Capacitor Rider Flavor Hostname Check
+  const hostname = window.location.hostname || '';
+  if (
+    hostname === 'cod-entry-rider.firebaseapp.com' ||
+    hostname.includes('cod-entry') ||
+    hostname.includes('rider-portal')
+  ) {
+    return true;
+  }
+
+  // 3. Hash / Search / Pathname checks
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+  const pathname = window.location.pathname || '';
+
+  if (
+    hash.includes('cod-entry') ||
+    hash.includes('rider-portal') ||
+    hash.includes('rider') ||
+    pathname.includes('/cod-entry') ||
+    pathname.includes('/rider') ||
+    search.includes('app=cod-entry') ||
+    search.includes('app=rider') ||
+    search.includes('cod=entry') ||
+    search.includes('target=rider')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export const getRiderStatementUrl = (riderId: string): string => {
   const cleanId = encodeURIComponent((riderId || '').trim());
-  const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')
-    ? window.location.origin
-    : 'https://courier-rider-payout.vercel.app';
+  const baseUrl = getBaseUrl();
   return `${baseUrl}/#/statement/${cleanId}`;
 };
 
 export const getAppShareUrl = (): string => {
-  return 'https://courier-rider-payout.vercel.app';
+  return getBaseUrl();
 };
 
 export const PRODUCTION_DOMAIN = 'https://courier-rider-payout.vercel.app';

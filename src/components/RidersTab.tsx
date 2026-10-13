@@ -1429,22 +1429,22 @@ export const RidersTab: React.FC<Props> = ({
 
                     {/* Actions */}
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {/* Prominent Advance Button [Prompt Requirement] */}
+                      {/* Prominent Advance Button [Desktop] */}
                       <button
                         type="button"
                         onClick={() => setAdvanceModalRider(rider)}
-                        className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 hover:border-amber-400 rounded-xl text-xs font-bold flex items-center gap-1 transition active:scale-95 shadow-sm shadow-amber-500/10 cursor-pointer"
+                        className="hidden sm:flex px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 hover:border-amber-400 rounded-xl text-xs font-bold items-center gap-1 transition active:scale-95 shadow-sm shadow-amber-500/10 cursor-pointer"
                         title="एडवांस जोड़ें / देखें (+ Advance)"
                       >
                         <IndianRupee className="w-3.5 h-3.5 text-amber-400" />
                         <span>+ एडवांस</span>
                       </button>
 
-                      {/* Matching Prominent Incentive Button [Prompt Requirement] */}
+                      {/* Matching Prominent Incentive Button [Desktop] */}
                       <button
                         type="button"
                         onClick={() => setIncentiveModalRider(rider)}
-                        className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 hover:text-emerald-200 border border-emerald-500/40 hover:border-emerald-400 rounded-xl text-xs font-bold flex items-center gap-1 transition active:scale-95 shadow-sm shadow-emerald-500/10 cursor-pointer"
+                        className="hidden sm:flex px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 hover:text-emerald-200 border border-emerald-500/40 hover:border-emerald-400 rounded-xl text-xs font-bold items-center gap-1 transition active:scale-95 shadow-sm shadow-emerald-500/10 cursor-pointer"
                         title="इंसेंटिव जोड़ें / देखें (+ Incentive)"
                       >
                         <Gift className="w-3.5 h-3.5 text-emerald-400" />
@@ -1457,10 +1457,10 @@ export const RidersTab: React.FC<Props> = ({
                           type="button"
                           onClick={() => onViewLedger(rider.id)}
                           className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700/80 rounded-xl text-xs font-semibold flex items-center gap-1 transition active:scale-95 cursor-pointer"
-                          title="खाता लेजर देखें (Khatabook Statement)"
+                          title="हिसाब किताब देखें (Hisab Kitab)"
                         >
                           <Receipt className="w-3.5 h-3.5 text-blue-400" />
-                          <span className="hidden sm:inline">खाता</span>
+                          <span className="hidden sm:inline">हिसाब किताब</span>
                         </button>
                       )}
 
@@ -1515,6 +1515,29 @@ export const RidersTab: React.FC<Props> = ({
                       </button>
                     </div>
                   </div>
+                </div>
+
+                {/* Mobile Dedicated Prominent Action Buttons [ + एडवांस ] & [ + इंसेंटिव ] */}
+                <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-800/80 sm:hidden">
+                  <button
+                    type="button"
+                    onClick={() => setAdvanceModalRider(rider)}
+                    className="w-full py-2.5 px-3 bg-gradient-to-r from-amber-500/25 to-amber-600/20 hover:from-amber-500/35 hover:to-amber-600/30 active:scale-95 text-amber-300 hover:text-amber-100 border border-amber-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-amber-950/40 transition cursor-pointer"
+                    title="एडवांस जोड़ें / देखें (+ Advance)"
+                  >
+                    <IndianRupee className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>+ एडवांस</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIncentiveModalRider(rider)}
+                    className="w-full py-2.5 px-3 bg-gradient-to-r from-emerald-500/25 to-emerald-600/20 hover:from-emerald-500/35 hover:to-emerald-600/30 active:scale-95 text-emerald-300 hover:text-emerald-100 border border-emerald-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40 transition cursor-pointer"
+                    title="इंसेंटिव जोड़ें / देखें (+ Incentive)"
+                  >
+                    <Gift className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>+ इंसेंटिव</span>
+                  </button>
                 </div>
 
                 {/* Expanded Entries Drawer */}

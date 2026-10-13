@@ -132,6 +132,7 @@ import { ProfileSettingsModal } from './components/ProfileSettingsModal';
 import { CodStandaloneApp } from './components/CodStandaloneApp';
 import { CodCompanionApp } from './components/CodCompanionApp';
 import { ShareAppModal } from './components/ShareAppModal';
+import { isRiderBuild } from './utils/shareLink';
 
 /**
  * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
@@ -3107,11 +3108,23 @@ export default function App() {
     );
   }
 
-  // 2. ONLY render CodCompanionApp if explicitly requested:
-  if (hash === '#cod-entry' || hash.startsWith('#cod-entry') || search.includes('app=cod-entry')) {
+  // 2. Rider App / Flavor Separation:
+  // If running in Rider App build (VITE_APP_TARGET=cod_companion/rider or rider flavor)
+  // or explicitly navigating to companion rider portal:
+  const isRiderFlavor = isRiderBuild();
+  const isCompanionRequested = 
+    hash === '#cod-entry' || 
+    hash.startsWith('#cod-entry') || 
+    hash.includes('rider') || 
+    search.includes('app=cod-entry') || 
+    search.includes('app=rider') ||
+    pathname.includes('/cod-entry') ||
+    pathname.includes('/rider');
+
+  if (isRiderFlavor || isCompanionRequested) {
     return (
       <CodCompanionApp 
-        onBackToMainApp={() => {
+        onBackToMainApp={isRiderFlavor ? undefined : () => {
           try {
             window.location.hash = '';
             const url = new URL(window.location.href);

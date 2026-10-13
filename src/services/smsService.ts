@@ -42,13 +42,16 @@ export function formatAdvanceSmsText(params: {
   riderName: string;
   amount: number;
   reason?: string;
-  totalAdvance: number;
+  totalAdvance?: number;
   statementUrl: string;
 }): string {
   const reasonText = params.reason && params.reason.trim().length > 0 
     ? params.reason.trim() 
     : 'सामान्य एडवांस';
-  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} एडवांस जोड़ा गया है (${reasonText})। कुल बकाया एडवांस: ₹${params.totalAdvance}। खाता लेजर देखें: ${params.statementUrl}`;
+  const advancePart = typeof params.totalAdvance === 'number'
+    ? `। कुल बकाया एडवांस: ₹${params.totalAdvance}`
+    : '';
+  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} एडवांस जोड़ा गया है (${reasonText})${advancePart}। हिसाब किताब देखें: ${params.statementUrl}`;
 }
 
 /**

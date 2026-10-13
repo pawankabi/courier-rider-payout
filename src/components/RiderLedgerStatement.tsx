@@ -497,7 +497,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     if (!statement) return;
     let csvContent = 'data:text/csv;charset=utf-8,';
 
-    csvContent += `KHATABOOK STATEMENT - ${statement.riderName}\n`;
+    csvContent += `HISAAB KITAAB STATEMENT - ${statement.riderName}\n`;
     csvContent += `Hub: ${statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}\n`;
     csvContent += `Phone: +91 ${statement.riderPhone}\n`;
     csvContent += `Net Balance: ${
@@ -527,7 +527,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `${statement.riderName.replace(/\s+/g, '_')}_Ledger_Statement.csv`);
+    link.setAttribute('download', `${statement.riderName.replace(/\s+/g, '_')}_Hisab_Kitab_Statement.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -535,7 +535,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const cleanDigits = statement ? getCleanPhoneDigits(statement.riderPhone).slice(-10) : '';
   const shareText = statement 
-    ? `नमस्ते ${statement.riderName}, आपका कूरियर खाता स्टेटमेंट यहाँ देखें:\n${balanceLabel}\nलिंक: ${statementUrl}` 
+    ? `नमस्ते ${statement.riderName}, आपका हिसाब किताब यहाँ देखें:\n${balanceLabel}\nलिंक: ${statementUrl}` 
     : '';
   const waShareUrl = cleanDigits
     ? `https://wa.me/91${cleanDigits}?text=${encodeURIComponent(shareText)}` 
@@ -543,28 +543,28 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white">
-        <RefreshCw className="w-10 h-10 text-emerald-400 animate-spin mb-4" />
-        <h2 className="text-xl font-bold">लेजर खाता लोड हो रहा है...</h2>
-        <p className="text-slate-400 text-sm mt-1">कृपया प्रतीक्षा करें, राइडर स्टेटमेंट प्राप्त किया जा रहा है।</p>
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6 text-slate-800">
+        <RefreshCw className="w-10 h-10 text-[#047857] animate-spin mb-4" />
+        <h2 className="text-xl font-bold text-slate-900">हिसाब किताब लोड हो रहा है...</h2>
+        <p className="text-slate-500 text-sm mt-1">कृपया प्रतीक्षा करें, राइडर स्टेटमेंट प्राप्त किया जा रहा है।</p>
       </div>
     );
   }
 
   if (!statement) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white text-center">
-        <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-4">
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6 text-slate-900 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mb-4 shadow-xs">
           <FileSpreadsheet className="w-8 h-8" />
         </div>
-        <h2 className="text-2xl font-bold text-white">स्टेटमेंट उपलब्ध नहीं है (Statement Not Found)</h2>
-        <p className="text-slate-400 text-sm max-w-md mt-2">
-          इस राइडर ID के लिए कोई सार्वजनिक लेजर रिकॉर्ड नहीं मिला।
+        <h2 className="text-2xl font-bold text-slate-900">स्टेटमेंट उपलब्ध नहीं है (Statement Not Found)</h2>
+        <p className="text-slate-500 text-sm max-w-md mt-2">
+          इस राइडर ID के लिए कोई सार्वजनिक हिसाब किताब रिकॉर्ड नहीं मिला।
         </p>
         {onBackToApp && (
           <button
             onClick={onBackToApp}
-            className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition cursor-pointer"
+            className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition cursor-pointer shadow-sm active:scale-95"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>ऐप पर वापस जाएं</span>
@@ -575,47 +575,47 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col print:bg-white print:text-black">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col print:bg-white print:text-black">
       {/* Toast Notification */}
       {toastMsg && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top duration-200">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-[#047857] text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top duration-200">
           <Check className="w-4 h-4" />
           <span>{toastMsg}</span>
         </div>
       )}
 
       {/* Top Application Ribbon (Actions & Navigation) */}
-      <header className="border-b border-slate-800 bg-slate-900/95 backdrop-blur sticky top-0 z-30 px-3 sm:px-4 py-3 print:hidden">
+      <header className="border-b border-slate-200 bg-white sticky top-0 z-30 px-3 sm:px-4 py-3 shadow-xs print:hidden">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2.5">
             {onBackToApp && (
               <button
                 onClick={onBackToApp}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white transition cursor-pointer"
+                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
                 title="मुख्य ऐप पर वापस जाएं"
               >
                 <ArrowLeft className="w-4 h-4" />
               </button>
             )}
             <div className="flex items-center gap-2">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-900/40">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#047857] to-teal-600 flex items-center justify-center text-white shadow-xs">
                 <Receipt className="w-5 h-5" />
               </div>
               <div>
-                <h1 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
-                  <span>खाता लेजर (Khatabook)</span>
+                <h1 className="font-bold text-sm sm:text-base text-slate-900 flex items-center gap-2">
+                  <span>हिसाब किताब (Hisab Kitab)</span>
                   {isAdmin ? (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-medium flex items-center gap-1">
-                      <ShieldCheck className="w-3 h-3 text-blue-400" />
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-semibold flex items-center gap-1">
+                      <ShieldCheck className="w-3 h-3 text-blue-600" />
                       <span>Admin View</span>
                     </span>
                   ) : (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-medium">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-[#047857] border border-emerald-200 font-semibold">
                       Read-Only
                     </span>
                   )}
                 </h1>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-slate-500 font-medium">
                   {statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}
                 </p>
               </div>
@@ -630,17 +630,17 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                 type="button"
                 onClick={() => setShowResetConfirm(true)}
                 disabled={actionInProgress === 'reset-all'}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-950/50 hover:bg-rose-900/80 text-rose-300 hover:text-rose-100 border border-rose-800/60 transition active:scale-95 cursor-pointer text-xs font-bold disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-[#B91C1C] border border-red-200 transition active:scale-95 cursor-pointer text-xs font-bold disabled:opacity-50"
                 title="खाता रीसेट करें (Clear Test Data & Set Balance to ₹0)"
               >
-                <RotateCcw className={`w-3.5 h-3.5 text-rose-400 ${actionInProgress === 'reset-all' ? 'animate-spin' : ''}`} />
+                <RotateCcw className={`w-3.5 h-3.5 text-[#B91C1C] ${actionInProgress === 'reset-all' ? 'animate-spin' : ''}`} />
                 <span>खाता रीसेट (Clear Test Data)</span>
               </button>
             )}
 
             <button
               onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-600/30 transition active:scale-95 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-xs transition active:scale-95 cursor-pointer"
               title="डाउनलोड पीडीएफ या प्रिंट करें"
             >
               <Printer className="w-3.5 h-3.5" />
@@ -649,19 +649,19 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
             <button
               onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition active:scale-95 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-300 transition active:scale-95 cursor-pointer shadow-2xs"
               title="एक्सेल CSV फाइल डाउनलोड करें"
             >
-              <Download className="w-3.5 h-3.5 text-emerald-400" />
+              <Download className="w-3.5 h-3.5 text-[#047857]" />
               <span className="hidden sm:inline">Excel CSV</span>
             </button>
 
             <button
               onClick={handleCopyLink}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition active:scale-95 cursor-pointer"
-              title="सार्वजनिक खाता लिंक कॉपी करें"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-300 transition active:scale-95 cursor-pointer shadow-2xs"
+              title="सार्वजनिक हिसाब किताब लिंक कॉपी करें"
             >
-              {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+              {copiedLink ? <Check className="w-3.5 h-3.5 text-[#047857]" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
               <span>{copiedLink ? 'Copied!' : 'Copy Link'}</span>
             </button>
 
@@ -669,8 +669,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               href={waShareUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-slate-950 text-xs font-bold transition active:scale-95 shadow cursor-pointer"
-              title="WhatsApp पर खाता भेजें"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-slate-950 text-xs font-bold transition active:scale-95 shadow-xs cursor-pointer"
+              title="WhatsApp पर हिसाब किताब भेजें"
             >
               <MessageCircle className="w-3.5 h-3.5" />
               <span>WhatsApp</span>
@@ -684,31 +684,31 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         
         {/* 2. ONE SIMPLE, CLEAN HEADER BAR */}
         {/* Rider Name & Phone + Simple Net Balance in Plain Text (Prints identically) */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4 print:border print:border-slate-300 print:bg-white print:shadow-none print:p-4">
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 print:border print:border-slate-300 print:bg-white print:shadow-none print:p-4">
           {/* Left: Rider Name & Phone */}
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex items-center justify-center text-xl font-black shadow-md shrink-0 print:border print:border-indigo-300">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex items-center justify-center text-xl font-black shadow-xs shrink-0 print:border print:border-indigo-300">
               {statement.riderName.charAt(0).toUpperCase()}
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg sm:text-xl font-black text-white print:text-black">
+                <h2 className="text-lg sm:text-xl font-black text-slate-900 print:text-black">
                   {statement.riderName}
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 print:bg-slate-100 print:text-slate-800 print:border-slate-300">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 print:bg-slate-100 print:text-slate-800">
                   {statement.hubName || 'सरायकेला कूरियर हब'}
                 </span>
               </div>
-              <div className="text-xs text-slate-400 mt-1 flex items-center gap-2 flex-wrap print:text-slate-600">
+              <div className="text-xs text-slate-500 mt-1 flex items-center gap-2 flex-wrap print:text-slate-600">
                 <a
                   href={`tel:${cleanDigits}`}
-                  className="inline-flex items-center gap-1 font-mono text-slate-300 hover:text-white print:text-slate-800"
+                  className="inline-flex items-center gap-1 font-mono text-slate-700 hover:text-blue-600 font-semibold print:text-slate-800"
                 >
-                  <Phone className="w-3 h-3 text-blue-400 print:text-slate-600" />
+                  <Phone className="w-3 h-3 text-blue-600 print:text-slate-600" />
                   <span>+91 {formatPhoneNumber(statement.riderPhone)}</span>
                 </a>
                 <span>•</span>
-                <span className="text-slate-400 print:text-slate-600">
+                <span className="text-slate-500 font-medium print:text-slate-600">
                   {statement.vehicleType || 'Bike'}
                 </span>
               </div>
@@ -717,25 +717,25 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
           {/* Right: Simple Net Balance in Plain Hindi/English */}
           <div className="flex items-center">
-            <div className={`w-full sm:w-auto px-4 py-3 rounded-xl border text-sm sm:text-base font-black flex items-center gap-2 shadow-sm ${
+            <div className={`w-full sm:w-auto px-4 py-3 rounded-xl border text-sm sm:text-base font-black flex items-center gap-2 shadow-xs ${
               balanceStatus === 'rider_due'
-                ? 'bg-rose-950/40 border-rose-500/40 text-rose-300 print:bg-rose-50 print:border-rose-300 print:text-rose-800'
+                ? 'bg-red-50 border-red-200 text-[#B91C1C] print:bg-rose-50 print:border-rose-300 print:text-rose-800'
                 : balanceStatus === 'payable'
-                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 print:bg-emerald-50 print:border-emerald-300 print:text-emerald-800'
-                : 'bg-slate-800/80 border-slate-700 text-slate-200 print:bg-slate-100 print:border-slate-300 print:text-slate-800'
+                ? 'bg-emerald-50 border-emerald-200 text-[#047857] print:bg-emerald-50 print:border-emerald-300 print:text-emerald-800'
+                : 'bg-slate-100 border-slate-200 text-slate-800 print:bg-slate-100 print:border-slate-300 print:text-slate-800'
             }`}>
               <span>{balanceLabel}</span>
             </div>
           </div>
         </div>
 
-        {/* 3. CLEAN KHATABOOK TABLE (EXACT 4 COLUMNS) */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg print:border print:border-slate-300 print:bg-white print:shadow-none">
-          <div className="p-3.5 sm:p-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2 print:bg-slate-100 print:border-slate-300">
+        {/* 3. CLEAN HISAB KITAB TABLE (EXACT 4 COLUMNS) */}
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs print:border print:border-slate-300 print:bg-white print:shadow-none">
+          <div className="p-3.5 sm:p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2 print:bg-slate-100 print:border-slate-300">
             <div className="flex items-center gap-2">
-              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-              <h3 className="text-sm font-bold text-white print:text-black">
-                खाता लेजर तालिका (Rider Ledger Sheet)
+              <FileSpreadsheet className="w-4 h-4 text-[#047857]" />
+              <h3 className="text-sm font-bold text-slate-900 print:text-black">
+                हिसाब किताब तालिका (Rider Ledger Sheet)
               </h3>
             </div>
             
@@ -743,14 +743,14 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               <button
                 type="button"
                 onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer print:hidden"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 text-[11px] font-semibold border border-slate-300 transition cursor-pointer print:hidden shadow-2xs"
                 title="तारीख के अनुसार क्रम बदलें"
               >
-                <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                <ArrowUpDown className="w-3 h-3 text-slate-500" />
                 <span>{sortOrder === 'asc' ? 'क्रम: पुराना से नया (Ascending)' : 'क्रम: नया से पुराना (Descending)'}</span>
               </button>
-              <span className="text-xs text-slate-400 font-mono">
-                कुल एंट्री: <strong className="text-white print:text-black">{timelineRows.length}</strong>
+              <span className="text-xs text-slate-500 font-mono font-medium">
+                कुल एंट्री: <strong className="text-slate-900 print:text-black">{timelineRows.length}</strong>
               </span>
             </div>
           </div>
@@ -763,85 +763,100 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="border-b border-slate-800 bg-slate-950 text-slate-300 font-bold sticky top-0 print:bg-slate-200 print:text-black print:border-slate-400">
+                  <tr className="border-b border-slate-200 bg-slate-100/70 text-slate-700 font-bold sticky top-0 print:bg-slate-200 print:text-black print:border-slate-400">
                     {/* Column 1: तारीख व विवरण (Date & Details) */}
                     <th className="py-3 px-3 sm:px-4 min-w-[280px]">
                       तारीख व विवरण (Date & Details)
                     </th>
-                    {/* Column 2: आपने दिया (YOU GAVE ₹) [Red] */}
-                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-rose-400 print:text-rose-800 bg-rose-950/10 print:bg-transparent">
+                    {/* Column 2: आपने दिया (YOU GAVE ₹) [Crimson / Maroon #B91C1C] */}
+                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-[#B91C1C] bg-red-50/50 print:bg-transparent">
                       आपने दिया (YOU GAVE ₹)
                     </th>
-                    {/* Column 3: बना / मिला (YOU GOT ₹) [Green] */}
-                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-emerald-400 print:text-emerald-800 bg-emerald-950/10 print:bg-transparent">
+                    {/* Column 3: बना / मिला (YOU GOT ₹) [Dark Emerald Green #047857] */}
+                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-[#047857] bg-emerald-50/50 print:bg-transparent">
                       बना / मिला (YOU GOT ₹)
                     </th>
                     {/* Column 4: एडमिन (Admin delete action - only visible to admin) */}
                     {isAdmin && (
-                      <th className="py-3 px-3 sm:px-4 text-center w-[80px] whitespace-nowrap text-slate-400 print:hidden">
+                      <th className="py-3 px-3 sm:px-4 text-center w-[80px] whitespace-nowrap text-slate-500 print:hidden">
                         एडमिन
                       </th>
                     )}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/80 font-sans print:divide-slate-300">
+                <tbody className="divide-y divide-slate-100 font-sans print:divide-slate-300">
                   {timelineRows.map((row) => (
                     <tr 
                       key={row.id} 
-                      className="hover:bg-slate-850/40 transition print:hover:bg-transparent"
+                      className="hover:bg-slate-50/80 transition print:hover:bg-transparent"
                     >
                       {/* 1. तारीख व विवरण (Date & Details) */}
                       <td className="py-3 px-3 sm:px-4 align-top">
                         <div className="flex items-start gap-2.5">
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${
                             row.type === 'advance'
-                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                              ? 'bg-red-50 text-[#B91C1C] border border-red-200'
                               : row.type === 'incentive'
-                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                              ? 'bg-emerald-50 text-[#047857] border border-emerald-200'
                               : row.type === 'salary'
-                              ? 'bg-blue-500/15 text-blue-300 border border-blue-500/30'
-                              : 'bg-slate-800 text-slate-300 border border-slate-700'
+                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                              : 'bg-slate-100 text-slate-700 border border-slate-200'
                           }`}>
                             {row.type === 'advance' ? 'एडवांस' : row.type === 'incentive' ? 'इंसेंटिव' : row.type === 'salary' ? 'पे-आउट' : 'डिलीवरी'}
                           </span>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono text-[11px] font-semibold text-slate-400 print:text-slate-600">
+                              <span className="font-mono text-[11px] font-semibold text-slate-500 print:text-slate-600">
                                 {row.formattedDate}
                               </span>
-                              <span className="text-slate-600 print:text-slate-400">•</span>
-                              <span className="font-bold text-white print:text-black text-xs">
+                              <span className="text-slate-300 print:text-slate-400">•</span>
+                              <span className="font-bold text-slate-900 print:text-black text-xs">
                                 {row.title}
                               </span>
                             </div>
                             {row.subTitle && (
-                              <div className="text-[11px] text-slate-400 print:text-slate-600 mt-0.5">
+                              <div className="text-[11px] text-slate-500 print:text-slate-600 mt-0.5 leading-relaxed">
                                 {row.subTitle}
                               </div>
                             )}
+
+                            {/* PART 2: In-Row Balance Badge (Bal. ₹...) directly beneath timestamp & details */}
+                            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                              <span 
+                                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight ${
+                                  row.runningBalance > 0
+                                    ? 'bg-red-50 text-[#B91C1C] border border-red-200'
+                                    : row.runningBalance < 0
+                                    ? 'bg-emerald-50 text-[#047857] border border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                }`}
+                              >
+                                Bal. ₹{formatINR(Math.abs(row.runningBalance))}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </td>
 
-                      {/* 2. आपने दिया (YOU GAVE ₹) [Red] */}
-                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-rose-950/10 print:bg-transparent align-top whitespace-nowrap">
+                      {/* 2. आपने दिया (YOU GAVE ₹) [Crimson / Maroon #B91C1C] */}
+                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-red-50/25 print:bg-transparent align-top whitespace-nowrap">
                         {row.paidToRider > 0 ? (
-                          <span className="text-rose-400 print:text-rose-700">
+                          <span className="text-[#B91C1C]">
                             +₹{formatINR(row.paidToRider)}
                           </span>
                         ) : (
-                          <span className="text-slate-600 print:text-slate-400 font-normal">-</span>
+                          <span className="text-slate-300 print:text-slate-400 font-normal">-</span>
                         )}
                       </td>
 
-                      {/* 3. बना / मिला (YOU GOT ₹) [Green] */}
-                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-emerald-950/10 print:bg-transparent align-top whitespace-nowrap">
+                      {/* 3. बना / मिला (YOU GOT ₹) [Dark Emerald Green #047857] */}
+                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-emerald-50/25 print:bg-transparent align-top whitespace-nowrap">
                         {row.settledOrEarned > 0 ? (
-                          <span className="text-emerald-400 print:text-emerald-700">
+                          <span className="text-[#047857]">
                             -₹{formatINR(row.settledOrEarned)}
                           </span>
                         ) : (
-                          <span className="text-slate-600 print:text-slate-400 font-normal">-</span>
+                          <span className="text-slate-300 print:text-slate-400 font-normal">-</span>
                         )}
                       </td>
 
@@ -855,10 +870,10 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                                   type="button"
                                   onClick={() => handleStartEditAdvance(row)}
                                   disabled={actionInProgress === row.id}
-                                  className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                  className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
                                   title="एडवांस एडिट करें (Edit Advance)"
                                 >
-                                  <Pencil className="w-3.5 h-3.5 text-amber-400" />
+                                  <Pencil className="w-3.5 h-3.5 text-amber-600" />
                                 </button>
                               )}
                               {row.type === 'incentive' && onEditIncentive && (
@@ -866,24 +881,24 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                                   type="button"
                                   onClick={() => handleStartEditIncentive(row)}
                                   disabled={actionInProgress === row.id}
-                                  className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                  className="p-1.5 text-slate-500 hover:text-[#047857] hover:bg-emerald-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
                                   title="इंसेंटिव एडिट करें (Edit Incentive)"
                                 >
-                                  <Pencil className="w-3.5 h-3.5 text-emerald-400" />
+                                  <Pencil className="w-3.5 h-3.5 text-[#047857]" />
                                 </button>
                               )}
                               <button
                                 type="button"
                                 onClick={() => setDeletingRow(row)}
                                 disabled={actionInProgress === row.id}
-                                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                className="p-1.5 text-slate-500 hover:text-[#B91C1C] hover:bg-red-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
                                 title={`${row.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'} एंट्री हटाएं (Delete Document)`}
                               >
-                                <Trash2 className={`w-3.5 h-3.5 ${actionInProgress === row.id ? 'animate-pulse text-rose-500' : ''}`} />
+                                <Trash2 className={`w-3.5 h-3.5 ${actionInProgress === row.id ? 'animate-pulse text-[#B91C1C]' : ''}`} />
                               </button>
                             </div>
                           ) : (
-                            <span className="text-slate-600 text-xs">-</span>
+                            <span className="text-slate-400 text-xs">-</span>
                           )}
                         </td>
                       )}
@@ -893,30 +908,30 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
                 {/* Bottom TOTALS Row & Net Status */}
                 <tfoot>
-                  <tr className="border-t-2 border-slate-700 bg-slate-950 text-xs font-bold font-mono print:bg-slate-200 print:border-slate-400">
-                    <td className="py-3.5 px-3 sm:px-4 font-sans font-black text-white print:text-black">
+                  <tr className="border-t-2 border-slate-200 bg-slate-50 text-xs font-bold font-mono print:bg-slate-200 print:border-slate-400">
+                    <td className="py-3.5 px-3 sm:px-4 font-sans font-black text-slate-900 print:text-black">
                       कुल योग (Grand Totals)
                     </td>
-                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-rose-400 print:text-rose-700 bg-rose-950/20 print:bg-transparent whitespace-nowrap">
+                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-[#B91C1C] bg-red-50/50 print:bg-transparent whitespace-nowrap">
                       ₹{formatINR(totalPaidToRider)}
                     </td>
-                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-emerald-400 print:text-emerald-700 bg-emerald-950/20 print:bg-transparent whitespace-nowrap">
+                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-[#047857] bg-emerald-50/50 print:bg-transparent whitespace-nowrap">
                       ₹{formatINR(totalSettledOrEarned)}
                     </td>
                     {isAdmin && <td className="print:hidden" />}
                   </tr>
-                  <tr className="border-t border-slate-800 bg-slate-900/90 text-xs font-bold print:bg-slate-100 print:border-slate-300">
-                    <td className="py-3 px-3 sm:px-4 font-sans text-slate-300 print:text-black">
+                  <tr className="border-t border-slate-200 bg-white text-xs font-bold print:bg-slate-100 print:border-slate-300">
+                    <td className="py-3 px-3 sm:px-4 font-sans text-slate-700 print:text-black">
                       अंतिम हिसाब स्थिति (Net Status)
                     </td>
                     <td 
                       colSpan={isAdmin ? 3 : 2} 
                       className={`py-3 px-3 sm:px-4 text-right font-black font-sans text-sm ${
                         balanceStatus === 'rider_due'
-                          ? 'text-rose-400 print:text-rose-800'
+                          ? 'text-[#B91C1C]'
                           : balanceStatus === 'payable'
-                          ? 'text-emerald-400 print:text-emerald-800'
-                          : 'text-slate-300 print:text-black'
+                          ? 'text-[#047857]'
+                          : 'text-slate-800 print:text-black'
                       }`}
                     >
                       {balanceLabel}
@@ -949,12 +964,12 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-900/60 py-4 px-4 text-center text-xs text-slate-500 print:hidden mt-auto">
+      <footer className="border-t border-slate-200 bg-white py-4 px-4 text-center text-xs text-slate-500 print:hidden mt-auto shadow-2xs">
         <div className="max-w-5xl mx-auto flex items-center justify-between flex-wrap gap-2">
-          <span>
-            {statement.hubName || 'सरायकेला कूरियर हब'} • सुरक्षित खाता
+          <span className="font-medium text-slate-600">
+            {statement.hubName || 'सरायकेला कूरियर हब'} • सुरक्षित हिसाब किताब
           </span>
-          <span className="font-mono text-[11px] text-slate-600">
+          <span className="font-mono text-[11px] text-slate-500">
             {statementUrl}
           </span>
         </div>
@@ -962,18 +977,18 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
       {/* Admin Edit Advance Modal */}
       {editingAdvanceRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150 print:hidden">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 print:hidden">
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200 text-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                <div className="p-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-200">
                   <Pencil className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm sm:text-base text-white">
+                  <h3 className="font-bold text-sm sm:text-base text-slate-900">
                     एडवांस संपादित करें (Edit Advance)
                   </h3>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-500">
                     {statement.riderName} • {statement.riderPhone ? `+91 ${statement.riderPhone}` : ''}
                   </p>
                 </div>
@@ -981,7 +996,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               <button
                 type="button"
                 onClick={handleCancelEditAdvance}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -989,8 +1004,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
             <form onSubmit={handleSaveEditAdvance} className="space-y-4">
               <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
-                  एडवांस राशि (Amount in ₹) <span className="text-rose-400">*</span>
+                <label className="text-xs text-slate-700 font-bold block mb-1">
+                  एडवांस राशि (Amount in ₹) <span className="text-[#B91C1C]">*</span>
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
@@ -1002,26 +1017,26 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                     onChange={(e) => setEditAmount(e.target.value)}
                     required
                     placeholder="1000"
-                    className="w-full pl-7 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-500 transition"
+                    className="w-full pl-7 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 font-mono font-bold focus:outline-none focus:bg-white focus:border-amber-500 transition"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
-                  दिनांक (Date) <span className="text-rose-400">*</span>
+                <label className="text-xs text-slate-700 font-bold block mb-1">
+                  दिनांक (Date) <span className="text-[#B91C1C]">*</span>
                 </label>
                 <input
                   type="date"
                   value={editDate}
                   onChange={(e) => setEditDate(e.target.value)}
                   required
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-amber-500 transition cursor-pointer"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 font-mono focus:outline-none focus:bg-white focus:border-amber-500 transition cursor-pointer"
                 />
               </div>
 
               <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
+                <label className="text-xs text-slate-700 font-bold block mb-1">
                   कारण / विवरण (Reason / Purpose)
                 </label>
                 <input
@@ -1029,22 +1044,22 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                   value={editReason}
                   onChange={(e) => setEditReason(e.target.value)}
                   placeholder="उदा. बाइक मरम्मत, फ्यूल, त्यौहार खर्च"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 transition"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:bg-white focus:border-amber-500 transition"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
                 <button
                   type="button"
                   onClick={handleCancelEditAdvance}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
                 >
                   रद्द करें (Cancel)
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingEdit}
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white text-xs font-bold shadow-lg shadow-amber-950/50 flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-[#B91C1C] hover:from-amber-500 hover:to-red-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
                 >
                   <Check className="w-3.5 h-3.5" />
                   <span>{isSavingEdit ? 'अपडेट हो रहा है...' : 'सुरक्षित करें (Save Changes)'}</span>
@@ -1057,18 +1072,18 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
       {/* Admin Edit Incentive Modal */}
       {editingIncentiveRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150 print:hidden">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 print:hidden">
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200 text-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                <div className="p-2 rounded-xl bg-emerald-50 text-[#047857] border border-emerald-200">
                   <Pencil className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm sm:text-base text-white">
+                  <h3 className="font-bold text-sm sm:text-base text-slate-900">
                     इंसेंटिव संपादित करें (Edit Incentive)
                   </h3>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-500">
                     {statement.riderName} • {statement.riderPhone ? `+91 ${statement.riderPhone}` : ''}
                   </p>
                 </div>
@@ -1076,7 +1091,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               <button
                 type="button"
                 onClick={handleCancelEditIncentive}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1084,8 +1099,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
             <form onSubmit={handleSaveEditIncentive} className="space-y-4">
               <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
-                  इंसेंटिव राशि (Amount in ₹) <span className="text-rose-400">*</span>
+                <label className="text-xs text-slate-700 font-bold block mb-1">
+                  इंसेंटिव राशि (Amount in ₹) <span className="text-[#B91C1C]">*</span>
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
@@ -1097,26 +1112,26 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                     onChange={(e) => setEditIncAmount(e.target.value)}
                     required
                     placeholder="500"
-                    className="w-full pl-7 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-emerald-300 font-mono font-bold focus:outline-none focus:border-emerald-500 transition"
+                    className="w-full pl-7 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-[#047857] font-mono font-bold focus:outline-none focus:bg-white focus:border-[#047857] transition"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
-                  दिनांक (Date) <span className="text-rose-400">*</span>
+                <label className="text-xs text-slate-700 font-bold block mb-1">
+                  दिनांक (Date) <span className="text-[#B91C1C]">*</span>
                 </label>
                 <input
                   type="date"
                   value={editIncDate}
                   onChange={(e) => setEditIncDate(e.target.value)}
                   required
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500 transition cursor-pointer"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 font-mono focus:outline-none focus:bg-white focus:border-[#047857] transition cursor-pointer"
                 />
               </div>
 
               <div>
-                <label className="text-xs text-slate-300 font-bold block mb-1">
+                <label className="text-xs text-slate-700 font-bold block mb-1">
                   कारण / विवरण (Reason / Purpose)
                 </label>
                 <input
@@ -1124,22 +1139,22 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                   value={editIncReason}
                   onChange={(e) => setEditIncReason(e.target.value)}
                   placeholder="उदा. त्यौहार बोनस, परफॉर्मेंस इंसेंटिव"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 transition"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:bg-white focus:border-[#047857] transition"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
                 <button
                   type="button"
                   onClick={handleCancelEditIncentive}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
                 >
                   रद्द करें (Cancel)
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingIncEdit}
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-950/50 flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-[#047857] hover:bg-emerald-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
                 >
                   <Check className="w-3.5 h-3.5" />
                   <span>{isSavingIncEdit ? 'अपडेट हो रहा है...' : 'सुरक्षित करें (Save Changes)'}</span>
@@ -1152,54 +1167,54 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
       {/* In-App Confirm Delete Row Modal (Android WebView safe, zero window.confirm) */}
       {deletingRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in print:hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in print:hidden">
           <div 
-            className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            className="w-full max-w-sm bg-white border border-slate-200 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 text-slate-900"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+              <div className="p-2.5 rounded-xl bg-red-50 text-[#B91C1C] border border-red-200">
                 <Trash2 className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-white">
+                <h3 className="font-bold text-sm text-slate-900">
                   {deletingRow.type === 'advance' ? 'एडवांस एंट्री हटाएं?' : 'इंसेंटिव एंट्री हटाएं?'}
                 </h3>
-                <p className="text-xs text-slate-400">यह रिकॉर्ड डेटाबेस से हमेशा के लिए हटा दिया जाएगा।</p>
+                <p className="text-xs text-slate-500">यह रिकॉर्ड डेटाबेस से हमेशा के लिए हटा दिया जाएगा।</p>
               </div>
             </div>
 
-            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1.5 text-xs font-mono">
-              <div className="flex justify-between text-slate-300 font-sans">
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between text-slate-700 font-sans">
                 <span>राइडर:</span>
-                <span className="font-bold text-white">{statement.riderName}</span>
+                <span className="font-bold text-slate-900">{statement.riderName}</span>
               </div>
-              <div className="flex justify-between text-slate-300">
+              <div className="flex justify-between text-slate-700">
                 <span>प्रकार:</span>
-                <span className="font-semibold text-amber-300">{deletingRow.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'}</span>
+                <span className="font-semibold text-amber-700">{deletingRow.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'}</span>
               </div>
-              <div className="flex justify-between text-slate-300">
+              <div className="flex justify-between text-slate-700">
                 <span>राशि:</span>
-                <span className="font-bold text-rose-400">
+                <span className="font-bold text-[#B91C1C]">
                   ₹{deletingRow.paidToRider || deletingRow.settledOrEarned}
                 </span>
               </div>
-              <div className="flex justify-between text-slate-400 font-sans">
+              <div className="flex justify-between text-slate-500 font-sans">
                 <span>विवरण:</span>
-                <span className="text-slate-300 truncate max-w-[180px]">{deletingRow.title}</span>
+                <span className="text-slate-800 truncate max-w-[180px] font-medium">{deletingRow.title}</span>
               </div>
-              <div className="flex justify-between text-slate-400">
+              <div className="flex justify-between text-slate-500">
                 <span>दिनांक:</span>
-                <span className="text-slate-300">{deletingRow.formattedDate}</span>
+                <span className="text-slate-800 font-medium">{deletingRow.formattedDate}</span>
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
               <button
                 type="button"
                 onClick={() => setDeletingRow(null)}
                 disabled={isDeletingRow}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
               >
                 रद्द करें (Cancel)
               </button>
@@ -1207,7 +1222,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                 type="button"
                 onClick={handleConfirmDeleteRow}
                 disabled={isDeletingRow}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+                className="px-4 py-2 rounded-xl bg-[#B91C1C] hover:bg-red-800 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md"
               >
                 {isDeletingRow ? (
                   <>
@@ -1228,32 +1243,32 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
       {/* In-App Confirm Reset Entire Account Modal (Android WebView safe, zero window.confirm) */}
       {showResetConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-in fade-in print:hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in print:hidden">
           <div 
-            className="w-full max-w-sm bg-slate-900 border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95"
+            className="w-full max-w-sm bg-white border border-red-200 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 text-slate-900"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+              <div className="p-2.5 rounded-xl bg-red-50 text-[#B91C1C] border border-red-200">
                 <RotateCcw className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-white">खाता पूरा रीसेट करें?</h3>
-                <p className="text-xs text-rose-300">Clear Test Data • सेट बकाया ₹0</p>
+                <h3 className="font-bold text-sm text-slate-900">खाता पूरा रीसेट करें?</h3>
+                <p className="text-xs text-[#B91C1C] font-semibold">Clear Test Data • सेट बकाया ₹0</p>
               </div>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed">
+            <p className="text-xs text-slate-600 leading-relaxed">
               क्या आप <strong>{statement.riderName}</strong> का पूरा खाता रीसेट करना चाहते हैं?
               सभी टेस्ट एडवांस और इंसेंटिव डेटा स्थायी रूप से हटा दिए जाएंगे और कुल बकाया ₹0 हो जाएगा।
             </p>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
               <button
                 type="button"
                 onClick={() => setShowResetConfirm(false)}
                 disabled={isResetting}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
               >
                 रद्द करें (Cancel)
               </button>
@@ -1261,7 +1276,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                 type="button"
                 onClick={handleConfirmResetAccount}
                 disabled={isResetting}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-900/40"
+                className="px-4 py-2 rounded-xl bg-[#B91C1C] hover:bg-red-800 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md"
               >
                 {isResetting ? (
                   <>

@@ -30,7 +30,9 @@ import {
   HelpCircle,
   Building2,
   AlertCircle,
-  Plus
+  Plus,
+  Package,
+  Receipt
 } from 'lucide-react';
 import { 
   CodDailyEntry, 
@@ -39,6 +41,8 @@ import {
   DailyCodSheetData,
   Rider
 } from '../types';
+import { RiderLedgerStatement } from './RiderLedgerStatement';
+import { isRiderBuild } from '../utils/shareLink';
 import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 import { signInAnonymously } from 'firebase/auth';
 import { auth, db } from '../firebase';
@@ -56,6 +60,7 @@ import {
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
 import { purgeLegacyMockStorage } from '../utils/storage';
+import { formatAdvanceSmsText, dispatchAutomatedSms } from '../services/smsService';
 
 interface CodCompanionAppProps {
   onBackToMainApp?: () => void;
@@ -165,12 +170,17 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
   // Rider Row Edit Modal State
   const [editingEntry, setEditingEntry] = useState<CodDailyEntry | null>(null);
+  const [editDeliveryCount, setEditDeliveryCount] = useState<number | string>(0);
   const [editCompany1, setEditCompany1] = useState<number | string>(0);
   const [editCompany2, setEditCompany2] = useState<number | string>(0);
   const [editCash, setEditCash] = useState<number | string>(0);
   const [editOnline, setEditOnline] = useState<number | string>(0);
   const [editNotes, setEditNotes] = useState('');
   const [isSavingEntry, setIsSavingEntry] = useState(false);
+
+  // Rider Active Portal Tab: Daily Delivery / COD Submission vs Khatabook Passbook
+  const [riderActiveTab, setRiderActiveTab] = useState<'cod_entry' | 'khatabook'>('cod_entry');
+  const isRiderFlavor = isRiderBuild();
 
   // Incharge / Supervisor Shortage Modal
   const [shortageModal, setShortageModal] = useState<{
@@ -228,7 +238,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       authenticatedHubId,
       (riders) => {
         const cleanRiders = (riders || []).filter(
-          (r) => r.name !== 'Akash Mahato' && r.phone !== '6207262418'
+          (r) => r.name !== 'Akash Mahato' && 
+                 r.phone !== '6207262418' && 
+                 (r.status ? r.status === 'active' : r.active !== false) && 
+                 r.status !== 'inactive' && 
+                 r.active !== false
         );
         setHubRiders(cleanRiders);
       },
@@ -465,35 +479,34 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         }
       }
 
+      // Hub-Wide Daily Entry Feed: Logged-in rider can view daily entry list of ALL active riders in the hub for that date.
+      // Peer entries are strictly read-only (enforced via canEditRow & canVerifyField).
+      // The logged-in rider's own entry is sorted to the very top for effortless editing.
+      if (isRider && authUser) {
+        return [...merged].sort((a, b) => {
+          const aIsMe = isMatchingRiderRow(a);
+          const bIsMe = isMatchingRiderRow(b);
+          if (aIsMe && !bIsMe) return -1;
+          if (!aIsMe && bIsMe) return 1;
+          return a.riderName.localeCompare(b.riderName);
+        });
+      }
+
       return merged;
     }
 
-    // Fallback: If logged-in as rider, display ONLY their own record - NEVER leak full sheetData.entries
-    if (isRider && authUser) {
-      const cleanUserPhone = (authUser.phone || '').replace(/\D/g, '').slice(-10);
-      const myId = authUser.riderId || authUser.id;
-      const myEntry = (sheetData.entries || []).find((e) => {
-        const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-        return e.riderId === myId || (cleanUserPhone && cleanPhone === cleanUserPhone);
-      });
-      if (myEntry) return [myEntry];
-      const fallbackEntry: CodDailyEntry = {
-        id: `cod_${selectedDate}_${myId}`,
-        date: selectedDate,
-        riderId: myId,
-        riderName: authUser.name,
-        riderPhone: authUser.phone,
-        company1Amount: 0,
-        company2Amount: 0,
-        totalCod: 0,
-        cashDeposit: 0,
-        onlineDeposit: 0,
-        totalDeposit: 0,
-        balance: 0,
-        status: 'draft',
-        updatedAt: new Date().toISOString(),
-      };
-      return [fallbackEntry];
+    // Fallback if hubRiders is loading: Return all hub entries for selected date, prioritizing own entry
+    if (sheetData.entries && sheetData.entries.length > 0) {
+      if (isRider && authUser) {
+        return [...sheetData.entries].sort((a, b) => {
+          const aIsMe = isMatchingRiderRow(a);
+          const bIsMe = isMatchingRiderRow(b);
+          if (aIsMe && !bIsMe) return -1;
+          if (!aIsMe && bIsMe) return 1;
+          return a.riderName.localeCompare(b.riderName);
+        });
+      }
+      return sheetData.entries;
     }
 
     return [];
@@ -593,6 +606,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
 
     setEditingEntry(targetRow);
+    setEditDeliveryCount(targetRow.deliveryCount && targetRow.deliveryCount > 0 ? String(targetRow.deliveryCount) : '');
     setEditCompany1(targetRow.company1Amount > 0 ? String(targetRow.company1Amount) : '');
     setEditCompany2(targetRow.company2Amount > 0 ? String(targetRow.company2Amount) : '');
     setEditCash(targetRow.cashDeposit > 0 ? String(targetRow.cashDeposit) : '');
@@ -603,8 +617,13 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   // Save Row with instant optimistic UI update + direct Firestore write
   const handleSaveEditRow = async () => {
     if (!editingEntry || !authUser) return;
+    if (isRider && !isMatchingRiderRow(editingEntry)) {
+      showToast('⚠️ आप केवल अपनी खुद की एंट्री सेव कर सकते हैं।', 'error');
+      return;
+    }
     setIsSavingEntry(true);
 
+    const deliveryCount = Math.max(0, parseInt(String(editDeliveryCount) || '0', 10) || 0);
     const c1 = Number(editCompany1) || 0;
     const c2 = Number(editCompany2) || 0;
     const cash = Number(editCash) || 0;
@@ -615,6 +634,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
     const updated: CodDailyEntry = {
       ...editingEntry,
+      deliveryCount,
       company1Amount: c1,
       company2Amount: c2,
       totalCod,
@@ -815,6 +835,38 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         'success'
       );
       setShortageModal((prev) => ({ ...prev, isOpen: false }));
+
+      // Hook COD Shortage to Background SMS Dispatch (same service as Main App Advance flow)
+      if (shortAmount > 0) {
+        try {
+          const cleanPhone = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
+          const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')
+            ? window.location.origin
+            : 'https://courier-rider-payout.vercel.app';
+          const statementUrl = `${baseUrl}/#/statement/${encodeURIComponent(row.riderId)}`;
+          const targetRider = hubRiders.find((r) => r.id === row.riderId);
+          const totalAdvance = (Number(targetRider?.totalAdvance) || 0) + shortAmount;
+          const description = `COD Shortage (${field.toUpperCase()})`;
+          const smsText = formatAdvanceSmsText({
+            riderName: row.riderName,
+            amount: shortAmount,
+            reason: description,
+            totalAdvance,
+            statementUrl,
+          });
+
+          dispatchAutomatedSms({
+            riderName: row.riderName,
+            riderPhone: cleanPhone,
+            amount: shortAmount,
+            message: smsText,
+            type: 'advance',
+            statementUrl,
+          }).catch((e) => console.warn('COD companion shortage SMS notice:', e));
+        } catch (smsErr) {
+          console.warn('COD companion shortage SMS hook error:', smsErr);
+        }
+      }
     } catch {
       showToast('शॉर्टेज अपडेट विफल हुआ।', 'error');
     }
@@ -1086,7 +1138,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           </div>
 
           {/* Exit to Main Hub App if triggered */}
-          {onBackToMainApp && (
+          {onBackToMainApp && !isRiderFlavor && (
             <div className="mt-6 text-center">
               <button
                 type="button"
@@ -1134,7 +1186,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans pb-16 selection:bg-emerald-500 selection:text-white">
       {/* Prominent Admin Dashboard Return Top Bar */}
-      {onBackToMainApp && (
+      {onBackToMainApp && !isRiderFlavor && !isRider && (
         <div 
           id="companion-authenticated-top-admin-banner"
           className="bg-slate-900 border-b border-slate-800 text-white px-3 sm:px-6 py-2.5 flex items-center justify-between text-xs sticky top-0 z-50 shadow-md"
@@ -1242,7 +1294,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             </div>
 
             {/* Back to Admin Dashboard if triggered */}
-            {onBackToMainApp && (
+            {onBackToMainApp && !isRiderFlavor && !isRider && (
               <button
                 type="button"
                 id="header-back-to-admin-btn"
@@ -1271,8 +1323,44 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
       {/* Main Body */}
       <main className="max-w-6xl mx-auto w-full px-3 sm:px-6 pt-4 space-y-4">
-        {/* 2. DATE SELECTOR & STATUS TOOLBAR */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+        {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Khatabook Statement */}
+        {isRider && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-1.5 flex items-center gap-2 shadow-xs">
+            <button
+              type="button"
+              onClick={() => setRiderActiveTab('cod_entry')}
+              className={`flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+                riderActiveTab === 'cod_entry'
+                  ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <Bike className="w-4 h-4" />
+              <span>📦 दैनिक डिलीवरी व COD प्रविष्टि</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setRiderActiveTab('khatabook')}
+              className={`flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+                riderActiveTab === 'khatabook'
+                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/20'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <Receipt className="w-4 h-4" />
+              <span>📖 मेरा हिसाब किताब (Hisab Kitab)</span>
+            </button>
+          </div>
+        )}
+
+        {isRider && riderActiveTab === 'khatabook' ? (
+          <div className="bg-white text-slate-900 rounded-2xl p-2 sm:p-4 shadow-sm border border-slate-200">
+            <RiderLedgerStatement riderId={currentRiderId} isAdmin={false} />
+          </div>
+        ) : (
+          <>
+            {/* 2. DATE SELECTOR & STATUS TOOLBAR */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
           {/* Date Navigator */}
           <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
             <button
@@ -1494,8 +1582,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                   </span>
                 </h4>
                 <p className="text-xs text-slate-500">
-                  {myRiderRow && (Number(myRiderRow.totalCod) > 0 || Number(myRiderRow.totalDeposit) > 0)
-                    ? `दर्ज: Co 1: ₹${myRiderRow.company1Amount} | Co 2: ₹${myRiderRow.company2Amount} | कैश: ₹${myRiderRow.cashDeposit} | UPI: ₹${myRiderRow.onlineDeposit}`
+                  {myRiderRow && (Number(myRiderRow.totalCod) > 0 || Number(myRiderRow.totalDeposit) > 0 || Number(myRiderRow.deliveryCount) > 0)
+                    ? `दर्ज: 📦 डिलीवरी: ${myRiderRow.deliveryCount || 0} pkts | Co 1: ₹${myRiderRow.company1Amount} | Co 2: ₹${myRiderRow.company2Amount} | कैश: ₹${myRiderRow.cashDeposit} | UPI: ₹${myRiderRow.onlineDeposit}`
                     : 'आज की एंट्री अभी खाली है। तुरंत टैप कर दर्ज करें।'}
                 </p>
               </div>
@@ -1562,6 +1650,21 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         {/* 7. RENDERING ENTRIES: CARDS VIEW (Clean White UI) */}
         {viewMode === 'cards' && (
           <div className="space-y-3">
+            {/* Hub Daily Feed Banner for Riders */}
+            {isRider && (
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 flex items-center justify-between text-xs text-slate-600 flex-wrap gap-2 shadow-xs">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                  <span className="font-bold text-slate-800">हब दैनिक प्रविष्टि फीड (Hub Daily Summary)</span>
+                  <span className="text-slate-300">•</span>
+                  <span className="font-semibold text-slate-600">{filteredEntries.length} सक्रिय राइडर्स</span>
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  पारदर्शिता हेतु सभी सक्रिय राइडर्स की एंट्री दृश्यमान (अन्य राइडर्स: Read-Only)
+                </span>
+              </div>
+            )}
+
             {filteredEntries.length === 0 ? (
               <div className="text-center py-10 bg-white border border-slate-200 rounded-2xl p-6 text-slate-500 space-y-3 shadow-sm">
                 <Bike className="w-10 h-10 mx-auto text-slate-400 mb-2" />
@@ -1611,7 +1714,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                         : 'border-slate-200 hover:border-slate-300'
                     }`}
                   >
-                    {/* Top Row: Rider Name, Role badge, and Edit button */}
+                    {/* Top Row: Rider Name, Role badge, Packet count, and Edit button */}
                     <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
                       <div className="flex items-center gap-2 min-w-0">
                         <div
@@ -1632,7 +1735,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                             </span>
                             {isMyRow && (
                               <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.2 rounded font-bold">
-                                मेरी एंट्री
+                                मेरी एंट्री (You)
                               </span>
                             )}
                             {recentlySubmittedRiderId === row.riderId ? (
@@ -1647,15 +1750,21 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                               </span>
                             ) : null}
                           </div>
-                          {row.riderPhone && (
-                            <span className="text-xs text-slate-500 font-mono">
-                              {row.riderPhone}
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            {row.riderPhone && (
+                              <span className="text-xs text-slate-500 font-mono">
+                                {row.riderPhone}
+                              </span>
+                            )}
+                            <span className="inline-flex items-center gap-1 text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-md font-semibold">
+                              <Package className="w-3 h-3 text-blue-600" />
+                              <span>डिलीवरी: <strong>{row.deliveryCount || 0} pkts</strong></span>
                             </span>
-                          )}
+                          </div>
                         </div>
                       </div>
 
-                      {/* Right Action: Edit Button (if allowed) */}
+                      {/* Right Action: Edit Button (if allowed) or Read-Only pill */}
                       <div className="flex items-center gap-2 shrink-0">
                         {canEditThis ? (
                           <button
@@ -1670,7 +1779,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                             <span>एडिट करें</span>
                           </button>
                         ) : (
-                          <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                          <span className="text-[11px] text-slate-400 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg flex items-center gap-1 font-medium">
                             <Eye className="w-3 h-3" />
                             <span>केवल देखें</span>
                           </span>
@@ -1870,87 +1979,110 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
         {/* 8. RENDERING ENTRIES: EXCEL SPREADSHEET TABLE VIEW (Clean White UI) */}
         {viewMode === 'table' && (
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-sans whitespace-nowrap">
-                <thead className="bg-slate-100 text-slate-700 text-[11px] uppercase tracking-wider font-bold border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-3">राइडर नाम (Rider)</th>
-                    <th className="py-3 px-3 text-right">{sheetData.company1Name} (₹)</th>
-                    <th className="py-3 px-3 text-right">{sheetData.company2Name} (₹)</th>
-                    <th className="py-3 px-3 text-right text-indigo-700 font-bold">कुल COD (₹)</th>
-                    <th className="py-3 px-3 text-right text-emerald-700">कैश जमा (₹)</th>
-                    <th className="py-3 px-3 text-right text-sky-700">ऑनलाइन (₹)</th>
-                    <th className="py-3 px-3 text-right text-emerald-700 font-bold">कुल जमा (₹)</th>
-                    <th className="py-3 px-3 text-right font-bold">बकाया / अंतर (₹)</th>
-                    <th className="py-3 px-3 text-center">एक्शन</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-mono">
-                  {filteredEntries.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="py-10 px-4 text-center text-slate-500 font-sans">
-                        <div className="space-y-2.5">
-                          <p className="text-sm font-semibold text-slate-800">कोई राइडर एंट्री नहीं मिली।</p>
-                          <p className="text-xs text-slate-500">इस तारीख के लिए अभी तक कोई रिकॉर्ड उपलब्ध नहीं है।</p>
-                          {!isPastDate && !isDayEndLocked && (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditRow(null)}
-                              className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              <span>+ आज की COD एंट्री शुरू करें</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredEntries.map((row) => {
-                      const isMyRow = isRider && isMatchingRiderRow(row);
-                      const canEditThis = canEditRow(row);
+          <div className="space-y-3">
+            {/* Hub Daily Feed Banner for Riders */}
+            {isRider && (
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 flex items-center justify-between text-xs text-slate-600 flex-wrap gap-2 shadow-xs">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                  <span className="font-bold text-slate-800">हब दैनिक प्रविष्टि फीड (Hub Daily Summary)</span>
+                  <span className="text-slate-300">•</span>
+                  <span className="font-semibold text-slate-600">{filteredEntries.length} सक्रिय राइडर्स</span>
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  पारदर्शिता हेतु सभी सक्रिय राइडर्स की एंट्री दृश्यमान (अन्य राइडर्स: Read-Only)
+                </span>
+              </div>
+            )}
 
-                      return (
-                        <tr
-                          key={row.id || row.riderId}
-                          onClick={() => {
-                            if (canEditThis) {
-                              handleOpenEditRow(row);
-                            }
-                          }}
-                          className={`transition ${
-                            canEditThis ? 'cursor-pointer' : ''
-                          } ${
-                            isMyRow
-                              ? 'bg-emerald-50/60 hover:bg-emerald-50'
-                              : 'hover:bg-slate-50'
-                          }`}
-                        >
-                          <td className="py-3 px-3 font-sans">
-                            <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
-                              <span>{row.riderName}</span>
-                              {isMyRow && (
-                                <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 rounded font-bold">
-                                  You
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-sans whitespace-nowrap">
+                  <thead className="bg-slate-100 text-slate-700 text-[11px] uppercase tracking-wider font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="py-3 px-3">राइडर नाम (Rider)</th>
+                      <th className="py-3 px-3 text-center">डिलीवरी (Pkts)</th>
+                      <th className="py-3 px-3 text-right">{sheetData.company1Name} (₹)</th>
+                      <th className="py-3 px-3 text-right">{sheetData.company2Name} (₹)</th>
+                      <th className="py-3 px-3 text-right text-indigo-700 font-bold">कुल COD (₹)</th>
+                      <th className="py-3 px-3 text-right text-emerald-700">कैश जमा (₹)</th>
+                      <th className="py-3 px-3 text-right text-sky-700">ऑनलाइन (₹)</th>
+                      <th className="py-3 px-3 text-right text-emerald-700 font-bold">कुल जमा (₹)</th>
+                      <th className="py-3 px-3 text-right font-bold">बकाया / अंतर (₹)</th>
+                      <th className="py-3 px-3 text-center">एक्शन</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-mono">
+                    {filteredEntries.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className="py-10 px-4 text-center text-slate-500 font-sans">
+                          <div className="space-y-2.5">
+                            <p className="text-sm font-semibold text-slate-800">कोई राइडर एंट्री नहीं मिली।</p>
+                            <p className="text-xs text-slate-500">इस तारीख के लिए अभी तक कोई रिकॉर्ड उपलब्ध नहीं है।</p>
+                            {!isPastDate && !isDayEndLocked && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditRow(null)}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>+ आज की COD एंट्री शुरू करें</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredEntries.map((row) => {
+                        const isMyRow = isRider && isMatchingRiderRow(row);
+                        const canEditThis = canEditRow(row);
+
+                        return (
+                          <tr
+                            key={row.id || row.riderId}
+                            onClick={() => {
+                              if (canEditThis) {
+                                handleOpenEditRow(row);
+                              }
+                            }}
+                            className={`transition ${
+                              canEditThis ? 'cursor-pointer' : ''
+                            } ${
+                              isMyRow
+                                ? 'bg-emerald-50/60 hover:bg-emerald-50'
+                                : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <td className="py-3 px-3 font-sans">
+                              <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                                <span>{row.riderName}</span>
+                                {isMyRow && (
+                                  <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 rounded font-bold">
+                                    You
+                                  </span>
+                                )}
+                                {recentlySubmittedRiderId === row.riderId ? (
+                                  <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-bold animate-pulse">
+                                    सिंक हुआ ✓
+                                  </span>
+                                ) : row.status === 'submitted' ? (
+                                  <span className="text-[9px] bg-emerald-50 text-emerald-700 px-1 rounded font-medium">
+                                    दर्ज ✓
+                                  </span>
+                                ) : null}
+                              </div>
+                              {row.riderPhone && (
+                                <span className="text-[10px] text-slate-500 font-mono">
+                                  {row.riderPhone}
                                 </span>
                               )}
-                              {recentlySubmittedRiderId === row.riderId ? (
-                                <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-bold animate-pulse">
-                                  सिंक हुआ ✓
-                                </span>
-                              ) : row.status === 'submitted' ? (
-                                <span className="text-[9px] bg-emerald-50 text-emerald-700 px-1 rounded font-medium">
-                                  दर्ज ✓
-                                </span>
-                              ) : null}
-                            </div>
-                            {row.riderPhone && (
-                              <span className="text-[10px] text-slate-500 font-mono">
-                                {row.riderPhone}
+                            </td>
+                            <td className="py-3 px-3 text-center font-sans">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-200">
+                                <Package className="w-3 h-3 text-blue-600" />
+                                <span>{row.deliveryCount || 0}</span>
                               </span>
-                            )}
-                          </td>
+                            </td>
                           <td className="py-3 px-3 text-right">
                             <span>{formatINR(row.company1Amount)}</span>
                             {row.company1Verified && <span className="text-emerald-600 ml-1">✓</span>}
@@ -2010,8 +2142,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               </table>
             </div>
           </div>
-        )}
-      </main>
+        </div>
+      )}
+    </>
+  )}
+</main>
 
       {/* =====================================================================
           MODAL 1: RIDER ROW EDIT MODAL (Clean White Theme)
@@ -2045,6 +2180,26 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
             {/* Modal Inputs */}
             <div className="space-y-3.5">
+              {/* Delivery Parcel Count */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Package className="w-4 h-4 text-emerald-600" />
+                    <span>कुल डिलीवर पार्सल (Delivery Count)</span>
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-normal">आज के कुल पैकेट</span>
+                </label>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  placeholder="0"
+                  value={editDeliveryCount}
+                  onChange={(e) => setEditDeliveryCount(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                />
+              </div>
+
               {/* Co 1 COD */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">

@@ -32,6 +32,7 @@ export interface Rider {
   vehicleType?: string;
   joinedDate: string;
   active: boolean;
+  status?: 'active' | 'inactive';
   order?: number; // custom display sequence order index
   baseRate?: number; // custom base payout per parcel (e.g. ₹13 or admin-configured)
   incentiveRate?: number; // custom incentive rate per parcel (e.g. ₹2 or admin-configured)
@@ -412,6 +413,7 @@ export interface CodDailyEntry {
   company2Verified?: boolean;
   company2VerifiedBy?: string;
   company2VerifiedAt?: string;
+  deliveryCount?: number; // Daily delivery parcel count
   totalCod: number; // Auto-calculated: company1Amount + company2Amount
   cashDeposit: number; // Rider physical cash handed in
   cashVerified?: boolean;

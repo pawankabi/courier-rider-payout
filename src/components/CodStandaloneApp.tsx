@@ -127,16 +127,21 @@ export const CodStandaloneApp: React.FC<Props> = ({
     });
   }, [riders]);
 
-  // Strict Multi-Tenant Rider Isolation:
-  // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab.
-  // Filters out riders belonging to other hubs completely from memory and display.
+  // Strict Multi-Tenant Rider Isolation & Strict Active Status Filter:
+  // Inactive riders must NOT appear anywhere in the COD daily entry, selection pickers,
+  // daily collection tables, or settlement sheets unless Admin marks them active.
   const activeTenantRiders = useMemo(() => {
     if (!cleanRiders || !Array.isArray(cleanRiders)) return [];
     const cleanUid = (userId || '').trim();
-    if (!cleanUid || cleanUid === 'guest') {
-      return cleanRiders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
-    }
     return cleanRiders.filter((r) => {
+      // 1. Strict Active Status Check: Exclude inactive riders completely
+      const isRiderActive = (r.status ? r.status === 'active' : r.active !== false) && r.status !== 'inactive' && r.active !== false;
+      if (!isRiderActive) return false;
+
+      // 2. Hub / Workspace Ownership Check
+      if (!cleanUid || cleanUid === 'guest') {
+        return !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest';
+      }
       const owner = (r.workspaceId || r.userId || r.hubId || r.ownerUid || r.createdBy || '').trim();
       if (owner) {
         return owner === cleanUid;
@@ -654,6 +659,35 @@ export const CodStandaloneApp: React.FC<Props> = ({
         : `✅ Full ₹${reportedAmount} received confirmed for ${targetRow.riderName}`,
       safeShortage > 0 ? 'info' : 'success'
     );
+
+    // Background SMS Hook on Marking Shortage (same service as Main App Advance flow)
+    if (safeShortage > 0) {
+      try {
+        const cleanPhone = (targetRow.riderPhone || activeTenantRiders.find((r) => r.id === riderId)?.phone || '').replace(/\D/g, '').slice(-10);
+        const riderObj = activeTenantRiders.find((r) => r.id === riderId);
+        const totalAdvance = (Number(riderObj?.totalAdvance) || 0) + safeShortage;
+        const statementUrl = getRiderStatementUrl(riderId);
+        const description = `COD Shortage (${fieldLabel})`;
+        const smsText = formatAdvanceSmsText({
+          riderName: targetRow.riderName,
+          amount: safeShortage,
+          reason: description,
+          totalAdvance,
+          statementUrl,
+        });
+
+        dispatchAutomatedSms({
+          riderName: targetRow.riderName,
+          riderPhone: cleanPhone,
+          amount: safeShortage,
+          message: smsText,
+          type: 'advance',
+          statementUrl,
+        }).catch((e) => console.warn('Background shortage SMS notice:', e));
+      } catch (smsErr) {
+        console.warn('Shortage SMS hook error:', smsErr);
+      }
+    }
   };
 
   // One-click Shortage to Advance Transfer with SMS Trigger
@@ -767,7 +801,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
     const targetRider = activeTenantRiders.find((r) => r.id === shortageModal.riderId);
     const riderName = targetRider ? targetRider.name : shortageModal.riderName;
     const riderPhone = targetRider ? targetRider.phone : '';
-    const reasonText = `अतिरिक्त जमा: ${data.source} (${data.date})`;
+    const reasonText = `COD Extra Deposit: ${data.source} (${data.date})`;
 
     try {
       // 1. Write directly to incentives collection

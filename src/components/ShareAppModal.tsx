@@ -7,11 +7,15 @@ import {
   ExternalLink, 
   Bike, 
   Globe, 
-  Sparkles
+  Sparkles,
+  Smartphone,
+  Download
 } from 'lucide-react';
 import { 
   getBaseUrl, 
   getRiderAppUrl, 
+  getRiderApkDownloadUrl,
+  getAdminApkDownloadUrl,
   copyAppShareLink
 } from '../utils/shareLink';
 
@@ -26,25 +30,35 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   onClose,
   onToast
 }) => {
-  const [copiedType, setCopiedType] = useState<'rider' | 'admin' | null>(null);
+  const [copiedType, setCopiedType] = useState<'rider' | 'admin' | 'rider_apk' | 'admin_apk' | null>(null);
 
   if (!isOpen) return null;
 
   const currentBaseUrl = getBaseUrl();
   const riderUrl = getRiderAppUrl();
+  const riderApkUrl = getRiderApkDownloadUrl();
+  const adminApkUrl = getAdminApkDownloadUrl();
 
-  const handleCopy = async (type: 'rider' | 'admin') => {
-    const targetUrl = type === 'rider' ? riderUrl : currentBaseUrl;
+  const handleCopy = async (type: 'rider' | 'admin' | 'rider_apk' | 'admin_apk') => {
+    let targetUrl = currentBaseUrl;
+    let label = '📋 एडमिन पोर्टल लिंक कॉपी हो गया!';
+
+    if (type === 'rider') {
+      targetUrl = riderUrl;
+      label = '📋 साथी ऐप (Rider Entry) लिंक कॉपी हो गया!';
+    } else if (type === 'rider_apk') {
+      targetUrl = riderApkUrl;
+      label = '📋 राइडर ऐप APK (COD Entry Rider) डाउनलोड लिंक कॉपी हो गया!';
+    } else if (type === 'admin_apk') {
+      targetUrl = adminApkUrl;
+      label = '📋 एडमिन ऐप APK डाउनलोड लिंक कॉपी हो गया!';
+    }
+
     const success = await copyAppShareLink(targetUrl);
     if (success) {
       setCopiedType(type);
       if (onToast) {
-        onToast(
-          type === 'rider'
-            ? '📋 साथी ऐप (Rider Entry) लिंक कॉपी हो गया!'
-            : '📋 एडमिन पोर्टल लिंक कॉपी हो गया!',
-          'success'
-        );
+        onToast(label, 'success');
       }
       setTimeout(() => setCopiedType(null), 2500);
     }
@@ -188,6 +202,123 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
             </button>
           </div>
 
+          {/* Card 3: Dedicated Rider App APK Download (Strict Flavor Build) */}
+          <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/50 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                  <Smartphone className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5">
+                    <span>📲 राइडर ऐप APK (COD Entry Rider Build)</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
+                      Rider Only
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-300">
+                    राइडर्स के लिए समर्पित Android APK — सीधा फ़ोन नंबर व PIN लॉगिन, नो एडमिन झंझट।
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 font-mono text-xs text-emerald-300 flex items-center justify-between gap-2">
+              <span className="truncate">COD-Entry-Rider-Release.apk</span>
+              <span className="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 shrink-0">
+                v1.0.5 Rider
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <a
+                href={riderApkUrl}
+                download="COD-Entry-Rider-Release.apk"
+                className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow cursor-pointer text-center"
+              >
+                <Download className="w-4 h-4" />
+                <span>डाउनलोड राइडर APK</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => handleCopy('rider_apk')}
+                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer"
+                title="APK डाउनलोड लिंक कॉपी करें"
+              >
+                {copiedType === 'rider_apk' ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span className="hidden sm:inline">कॉपी हुआ!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span className="hidden sm:inline">कॉपी लिंक</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Card 4: Dedicated Admin App APK Download */}
+          <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/60 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <Smartphone className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5">
+                    <span>💻 एडमिन ऐप APK (Admin Control Panel)</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-bold">
+                      Admin Only
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    हब मैनेजर हेतु संपूर्ण पेआउट व मैनेजमेंट APK।
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 font-mono text-xs text-indigo-300 flex items-center justify-between gap-2">
+              <span className="truncate">Admin-Payout-Release.apk</span>
+              <span className="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 shrink-0">
+                v1.0.5 Admin
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <a
+                href={adminApkUrl}
+                download="Admin-Payout-Release.apk"
+                className="flex-1 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow cursor-pointer text-center"
+              >
+                <Download className="w-4 h-4" />
+                <span>डाउनलोड एडमिन APK</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => handleCopy('admin_apk')}
+                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer"
+                title="एडमिन APK लिंक कॉपी करें"
+              >
+                {copiedType === 'admin_apk' ? (
+                  <>
+                    <Check className="w-4 h-4 text-indigo-400" />
+                    <span className="hidden sm:inline">कॉपी हुआ!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span className="hidden sm:inline">कॉपी लिंक</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Footer */}

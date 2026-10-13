@@ -927,6 +927,16 @@ export async function authenticateCodStaffCompanion(
           };
         }
 
+        // Strict Inactive Rider Check: If status !== 'active' or active === false, deny access
+        const isRiderActive = (matchedRiderData.status ? matchedRiderData.status === 'active' : matchedRiderData.active !== false) && matchedRiderData.status !== 'inactive' && matchedRiderData.active !== false;
+        if (!isRiderActive) {
+          return {
+            success: false,
+            reason: 'inactive',
+            message: 'आपका खाता निष्क्रिय (Inactive) है। कृपया हब एडमिन से संपर्क करें।',
+          };
+        }
+
         // When a matching document is found, immediately extract
         // parent tenant identifier: ownerHubId = riderDoc.workspaceId || riderDoc.hubId || riderDoc.userId || riderDoc.ownerUid || riderDoc.createdBy
         const parentHub = (
@@ -1010,6 +1020,13 @@ export async function authenticateCodStaffCompanion(
       }
 
       if (staffData) {
+        if (staffData.status === 'inactive' || staffData.isActive === false || (staffData.status && staffData.status !== 'active')) {
+          return {
+            success: false,
+            reason: 'inactive',
+            message: 'आपका खाता निष्क्रिय (Inactive) है। कृपया हब एडमिन से संपर्क करें।',
+          };
+        }
         const staffHub = (
           staffData.userId ||
           staffData.workspaceId ||

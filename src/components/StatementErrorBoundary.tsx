@@ -48,7 +48,7 @@ export class StatementErrorBoundary extends Component<Props, State> {
 
             <div className="space-y-2">
               <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                खाता लेजर (Khatabook Statement)
+                हिसाब किताब (Hisab Kitab)
               </h1>
               <p className="text-slate-300 text-sm leading-relaxed">
                 खाता विवरण तैयार हो रहा है... कृपया 1 सेकंड बाद पुनः रीफ़्रेश करें।

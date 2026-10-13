@@ -19,14 +19,13 @@ if (distFiles.length === 0) {
 fs.rmSync(buildDir, { recursive: true, force: true });
 fs.cpSync(distDir, buildDir, { recursive: true });
 
-// Mirror fresh dist build to Android assets to ensure Android APK has latest clean white theme UI
-const androidPublicDirs = [
+// Mirror fresh dist build to Android assets strictly for Admin/Main flavors
+const androidAdminPublicDirs = [
   path.resolve('android', 'app', 'src', 'main', 'assets', 'public'),
-  path.resolve('android', 'app', 'src', 'rider', 'assets', 'public'),
   path.resolve('android', 'app', 'src', 'admin', 'assets', 'public')
 ];
 
-for (const targetDir of androidPublicDirs) {
+for (const targetDir of androidAdminPublicDirs) {
   try {
     const parentDir = path.dirname(targetDir);
     if (fs.existsSync(parentDir)) {
