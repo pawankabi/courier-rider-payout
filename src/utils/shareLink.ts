@@ -2,12 +2,48 @@
  * Application Sharing Link Utilities
  */
 
+export const PRODUCTION_DOMAIN = 'https://courier-rider-payout.vercel.app';
+export const SHARED_APP_URL = PRODUCTION_DOMAIN;
+
 export const getBaseUrl = (): string => {
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
+  if (typeof window !== 'undefined' && window.location) {
+    const origin = window.location.origin || '';
+    const hostname = (window.location.hostname || '').toLowerCase();
+
+    // If currently accessed from official vercel deployment:
+    if (hostname.includes('vercel.app')) {
+      return origin;
+    }
+
+    // Exclude development sandboxes, local hosts, and Firebase staging / default hosting domains
+    // that cause 404 Site Not Found when sent in SMS:
+    if (
+      !hostname.includes('firebaseapp.com') &&
+      !hostname.includes('web.app') &&
+      !hostname.includes('run.app') &&
+      !hostname.includes('localhost') &&
+      !hostname.includes('127.0.0.1') &&
+      hostname !== ''
+    ) {
+      return origin;
+    }
   }
-  return 'https://courier-rider-payout.vercel.app';
+  return PRODUCTION_DOMAIN;
 };
+
+/**
+ * Ensures any statement URL or message text is sanitized so that any broken
+ * firebaseapp.com, web.app, or dev origin links are replaced with the live production Vercel URL.
+ */
+export function ensureProductionStatementUrl(urlOrText?: string): string {
+  if (!urlOrText) return `${PRODUCTION_DOMAIN}/#/statement/`;
+  return urlOrText
+    .replace(/https?:\/\/[a-zA-Z0-9.-]*firebaseapp\.com/gi, PRODUCTION_DOMAIN)
+    .replace(/https?:\/\/[a-zA-Z0-9.-]*web\.app/gi, PRODUCTION_DOMAIN)
+    .replace(/https?:\/\/[a-zA-Z0-9.-]*run\.app/gi, PRODUCTION_DOMAIN)
+    .replace(/https?:\/\/localhost(:\d+)?/gi, PRODUCTION_DOMAIN)
+    .replace(/https?:\/\/127\.0\.0\.1(:\d+)?/gi, PRODUCTION_DOMAIN);
+}
 
 export const getRiderAppUrl = (): string => {
   return `${getBaseUrl()}/#cod-entry`;
@@ -78,8 +114,6 @@ export const getAppShareUrl = (): string => {
   return getBaseUrl();
 };
 
-export const PRODUCTION_DOMAIN = 'https://courier-rider-payout.vercel.app';
-export const SHARED_APP_URL = PRODUCTION_DOMAIN;
 
 export const SHARE_SUCCESS_MESSAGE = 'App Link copied to clipboard! Share this with your team.';
 

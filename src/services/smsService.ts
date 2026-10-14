@@ -5,7 +5,7 @@
  */
 
 import { getCleanPhoneDigits } from '../utils/formatters';
-import { getRiderStatementUrl } from '../utils/shareLink';
+import { getRiderStatementUrl, ensureProductionStatementUrl, PRODUCTION_DOMAIN } from '../utils/shareLink';
 
 export interface SmsDispatchPayload {
   riderPhone: string;
@@ -25,10 +25,11 @@ export interface SmsDispatchResult {
   whatsappUrl?: string;
 }
 
-export const PRODUCTION_DOMAIN = typeof window !== 'undefined' && window.location ? window.location.origin : '';
+export { PRODUCTION_DOMAIN };
 
 /**
  * Generate canonical public ledger link for a rider dynamically.
+ * Always resolves to the official live production domain: https://courier-rider-payout.vercel.app/#/statement/{riderId}
  */
 export function generateStatementUrl(riderId: string): string {
   return getRiderStatementUrl(riderId);
@@ -51,7 +52,8 @@ export function formatAdvanceSmsText(params: {
   const advancePart = typeof params.totalAdvance === 'number'
     ? `। कुल बकाया एडवांस: ₹${params.totalAdvance}`
     : '';
-  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} एडवांस जोड़ा गया है (${reasonText})${advancePart}। हिसाब किताब देखें: ${params.statementUrl}`;
+  const safeStatementUrl = ensureProductionStatementUrl(params.statementUrl);
+  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} एडवांस जोड़ा गया है (${reasonText})${advancePart}। हिसाब किताब देखें: ${safeStatementUrl}`;
 }
 
 /**
@@ -69,7 +71,8 @@ export function formatIncentiveSmsText(params: {
     ? params.reason.trim()
     : 'इंसेंटिव / बोनस';
   const totalText = params.totalIncentive !== undefined ? `। कुल इंसेंटिव कमाई: ₹${params.totalIncentive}` : '';
-  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} इंसेंटिव/बोनस जोड़ा गया है (${reasonText})${totalText}। विस्तृत खाता लेजर देखें: ${params.statementUrl}`;
+  const safeStatementUrl = ensureProductionStatementUrl(params.statementUrl);
+  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} इंसेंटिव/बोनस जोड़ा गया है (${reasonText})${totalText}। विस्तृत खाता लेजर देखें: ${safeStatementUrl}`;
 }
 
 /**
@@ -83,7 +86,8 @@ export function formatSalarySmsText(params: {
   netSalary: number;
   statementUrl: string;
 }): string {
-  return `नमस्ते ${params.riderName}, आपका ${params.fromDate} से ${params.toDate} का ₹${params.netSalary} वेतन जमा कर दिया गया है। विस्तृत पे-आउट व एडवांस स्लिप देखें: ${params.statementUrl}`;
+  const safeStatementUrl = ensureProductionStatementUrl(params.statementUrl);
+  return `नमस्ते ${params.riderName}, आपका ${params.fromDate} से ${params.toDate} का ₹${params.netSalary} वेतन जमा कर दिया गया है। विस्तृत पे-आउट व एडवांस स्लिप देखें: ${safeStatementUrl}`;
 }
 
 /**
@@ -102,7 +106,8 @@ export function sanitizeIndianPhone(phone: string): string {
  */
 export function getWhatsAppUrl(phone: string, text: string): string {
   const clean = sanitizeIndianPhone(phone);
-  return `https://wa.me/91${clean}?text=${encodeURIComponent(text)}`;
+  const safeText = ensureProductionStatementUrl(text);
+  return `https://wa.me/91${clean}?text=${encodeURIComponent(safeText)}`;
 }
 
 /**
@@ -112,7 +117,8 @@ export function getWhatsAppUrl(phone: string, text: string): string {
  */
 export function getNativeSmsUrl(phone: string, text: string): string {
   const clean = (phone || '').trim().replace(/\s+/g, '');
-  return `sms:${clean}?body=${encodeURIComponent(text)}`;
+  const safeText = ensureProductionStatementUrl(text);
+  return `sms:${clean}?body=${encodeURIComponent(safeText)}`;
 }
 
 /**
@@ -123,8 +129,10 @@ export async function dispatchAutomatedSms(
   payload: SmsDispatchPayload
 ): Promise<SmsDispatchResult> {
   const cleanPhone = sanitizeIndianPhone(payload.riderPhone);
-  const waUrl = getWhatsAppUrl(cleanPhone, payload.message);
-  const smsUrl = getNativeSmsUrl(cleanPhone, payload.message);
+  const safeMessage = ensureProductionStatementUrl(payload.message);
+  const safeStatementUrl = payload.statementUrl ? ensureProductionStatementUrl(payload.statementUrl) : undefined;
+  const waUrl = getWhatsAppUrl(cleanPhone, safeMessage);
+  const smsUrl = getNativeSmsUrl(cleanPhone, safeMessage);
 
   if (!cleanPhone || cleanPhone.length < 10) {
     return {
@@ -143,10 +151,10 @@ export async function dispatchAutomatedSms(
       },
       body: JSON.stringify({
         phone: cleanPhone,
-        message: payload.message,
+        message: safeMessage,
         riderName: payload.riderName,
         type: payload.type,
-        statementUrl: payload.statementUrl,
+        statementUrl: safeStatementUrl,
         amount: payload.amount,
       }),
     });

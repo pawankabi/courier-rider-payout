@@ -956,8 +956,25 @@ export async function authenticateCodStaffCompanion(
             message: 'हब की पहचान नहीं हो सकी। कृपया एडमिन से संपर्क करें।',
           };
         }
-
         console.log('🔒 [Hub Isolation] Resolved targetHubId from rider record:', parentHub);
+
+        // Enforce strict hub-level COD access permission
+        try {
+          const hubDoc = await getDoc(doc(db, 'all_users', parentHub));
+          if (hubDoc.exists()) {
+            const hData = hubDoc.data();
+            if (hData?.permissions && hData.permissions.codCompanionAccess === false) {
+              return {
+                success: false,
+                reason: 'inactive',
+                message: 'हब एडमिन द्वारा COD साथी ऐप अनुमति बंद (Blocked) है। कृपया मास्टर एडमिन से संपर्क करें।',
+              };
+            }
+          }
+        } catch (hErr) {
+          console.warn('Hub permission verification notice:', hErr);
+        }
+
         resolvedHubId = parentHub;
         matchedUser = {
           id: matchedRiderData.id || matchedRiderId || `rider_${cleanPhone}`,
@@ -1041,6 +1058,23 @@ export async function authenticateCodStaffCompanion(
             reason: 'no_hub',
             message: 'हब की पहचान नहीं हो सकी। कृपया एडमिन से संपर्क करें।',
           };
+        }
+
+        // Enforce strict hub-level COD access permission
+        try {
+          const hubDoc = await getDoc(doc(db, 'all_users', staffHub));
+          if (hubDoc.exists()) {
+            const hData = hubDoc.data();
+            if (hData?.permissions && hData.permissions.codCompanionAccess === false) {
+              return {
+                success: false,
+                reason: 'inactive',
+                message: 'हब एडमिन द्वारा COD साथी ऐप अनुमति बंद (Blocked) है। कृपया मास्टर एडमिन से संपर्क करें।',
+              };
+            }
+          }
+        } catch (hErr) {
+          console.warn('Hub permission verification notice:', hErr);
         }
 
         resolvedHubId = staffHub;

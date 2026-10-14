@@ -546,6 +546,8 @@ function MainCourierApp() {
   const canAccessIncentives = isSuperAdminUser || Boolean(userPermissions.incentives ?? userPermissions.canAccessIncentives);
   const canAccessFestivalGreetings = isSuperAdminUser || Boolean(userPermissions.festivalGreetings ?? userPermissions.canAccessFestivalGreetings);
   const canExportData = isSuperAdminUser || Boolean(userPermissions.canExportData);
+  const canAccessCodCompanion = isSuperAdminUser || Boolean(userPermissions.codCompanionAccess);
+  const canShowCodShareLink = isSuperAdminUser || Boolean(userPermissions.codShareLinkVisibility);
 
   // Derived active hub name (Admin configured or fallback)
   const activeHubName = useMemo(() => {
@@ -2534,20 +2536,22 @@ function MainCourierApp() {
               </button>
             )}
 
-            {/* Direct साथी ऐप (Rider Entry) Tab Button */}
-            <button
-              id="desktop-tab-companion"
-              type="button"
-              onClick={() => setIsCodCompanionOpen(true)}
-              className="py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 border-transparent text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition cursor-pointer"
-              title="📲 साथी ऐप (Rider Entry Companion)"
-            >
-              <Bike className="w-4 h-4 text-emerald-400" />
-              <span>📲 साथी ऐप</span>
-              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                Rider
-              </span>
-            </button>
+            {/* Direct साथी ऐप (Rider Entry) Tab Button - Strictly guarded by Hub COD Companion Access permission */}
+            {canAccessCodCompanion && (
+              <button
+                id="desktop-tab-companion"
+                type="button"
+                onClick={() => setIsCodCompanionOpen(true)}
+                className="py-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 border-transparent text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition cursor-pointer"
+                title="📲 साथी ऐप (Rider Entry Companion)"
+              >
+                <Bike className="w-4 h-4 text-emerald-400" />
+                <span>📲 साथी ऐप</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Rider
+                </span>
+              </button>
+            )}
 
             {/* Master Admin Dashboard Tab - Visible ONLY to Super Admin */}
             {isSuperAdminUser && (
@@ -2652,6 +2656,8 @@ function MainCourierApp() {
                 hubName={activeHubName}
                 onOpenCodPortal={() => setIsCodStandaloneOpen(true)}
                 onOpenCodCompanion={() => setIsCodCompanionOpen(true)}
+                canAccessCodCompanion={canAccessCodCompanion}
+                canShowCodShareLink={canShowCodShareLink}
               />
             )}
 

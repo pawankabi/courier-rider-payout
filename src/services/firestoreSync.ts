@@ -160,6 +160,12 @@ export function normalizeUserPermissions(raw?: any, isSuperAdminUser: boolean = 
   const codCompanionAccess = raw.codCompanionAccess !== undefined
     ? Boolean(raw.codCompanionAccess)
     : isSuperAdminUser;
+  const codShareLinkVisibility = raw.codShareLinkVisibility !== undefined
+    ? Boolean(raw.codShareLinkVisibility)
+    : false;
+  const allowRiderDeliveryCountInput = raw.allowRiderDeliveryCountInput !== undefined
+    ? Boolean(raw.allowRiderDeliveryCountInput)
+    : false;
 
   return {
     dailyEntry,
@@ -174,6 +180,8 @@ export function normalizeUserPermissions(raw?: any, isSuperAdminUser: boolean = 
     canAccessFestivalGreetings: festivalGreetings,
     canExportData,
     codCompanionAccess,
+    codShareLinkVisibility,
+    allowRiderDeliveryCountInput,
   };
 }
 
@@ -971,7 +979,7 @@ export async function toggleUserStatus(
 export async function toggleUserPermission(
   userId: string,
   currentPermissions: UserPermissions,
-  key: 'dailyEntry' | 'riders' | 'incentives' | 'reports' | 'festivalGreetings' | 'codCompanionAccess'
+  key: 'dailyEntry' | 'riders' | 'incentives' | 'reports' | 'festivalGreetings' | 'codCompanionAccess' | 'codShareLinkVisibility' | 'allowRiderDeliveryCountInput'
 ): Promise<UserPermissions> {
   const nextVal = !currentPermissions[key];
   const updated: UserPermissions = {
@@ -984,6 +992,8 @@ export async function toggleUserPermission(
   if (key === 'reports') updated.canAccessReports = nextVal;
   if (key === 'festivalGreetings') updated.canAccessFestivalGreetings = nextVal;
   if (key === 'codCompanionAccess') updated.codCompanionAccess = nextVal;
+  if (key === 'codShareLinkVisibility') updated.codShareLinkVisibility = nextVal;
+  if (key === 'allowRiderDeliveryCountInput') updated.allowRiderDeliveryCountInput = nextVal;
 
   await updateUserPermissions(userId, updated);
   return updated;

@@ -97,7 +97,7 @@ export const DailyEntryTab: React.FC<Props> = ({
     if (initialDraft && initialDraft.parcels !== undefined) {
       return initialDraft.parcels;
     }
-    return 50;
+    return '';
   });
 
   const [hasIncentive, setHasIncentive] = useState<boolean>(() => {
@@ -183,7 +183,7 @@ export const DailyEntryTab: React.FC<Props> = ({
     } catch {}
     setIsDraftRestored(false);
     setDate(getTodayDateString());
-    setParcels(50);
+    setParcels('');
     setHasIncentive(true);
     setNotes('');
     if (riders.length > 0) {
@@ -282,9 +282,9 @@ export const DailyEntryTab: React.FC<Props> = ({
     } catch {}
     setIsDraftRestored(false);
 
-    // Reset notes and prep next parcels for fast rapid entry
+    // Reset notes and parcels for next entry
     setNotes('');
-    setParcels(50);
+    setParcels('');
   };
 
   const handleQuickAddParcels = (addQty: number) => {

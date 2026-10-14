@@ -107,6 +107,8 @@ interface Props {
   hubName?: string;
   onOpenCodPortal?: () => void;
   onOpenCodCompanion?: () => void;
+  canAccessCodCompanion?: boolean;
+  canShowCodShareLink?: boolean;
 }
 
 export const RidersTab: React.FC<Props> = ({
@@ -134,6 +136,8 @@ export const RidersTab: React.FC<Props> = ({
   hubName = 'सरायकेला कूरियर हब',
   onOpenCodPortal,
   onOpenCodCompanion,
+  canAccessCodCompanion = false,
+  canShowCodShareLink = false,
 }) => {
   // COD हिसाब-किताब Sub-App Modal State & Feature Flag
   const [isCodModalOpen, setIsCodModalOpen] = useState(false);
@@ -164,8 +168,8 @@ export const RidersTab: React.FC<Props> = ({
     loadCodSettings(userId).then(setCodSettings);
   }, [userId, isCodModalOpen]);
 
-  // Feature Flag: Super Admin always has access; regular users only when enabled by owner
-  const canViewCodModule = Boolean(isSuperAdmin || codSettings.isEnabled);
+  // Feature Flag: Super Admin always has access; regular users only when enabled by owner AND companion access flag is allowed
+  const canViewCodModule = Boolean(isSuperAdmin || (canAccessCodCompanion && codSettings.isEnabled));
 
   // Status Filter State: 'unpaid' (Default), 'all', 'active', 'inactive'
   const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all' | 'active' | 'inactive'>(() => {
@@ -980,31 +984,33 @@ export const RidersTab: React.FC<Props> = ({
                   <Table className="w-4 h-4 text-slate-950" />
                   <span>Open Standalone Portal</span>
                 </button>
-                <button
-                  type="button"
-                  id="share-cod-rider-url-btn"
-                  onClick={async () => {
-                    const copied = await copyAppShareLink('https://courier-rider-payout.vercel.app/#cod-entry');
-                    if (copied) {
-                      setCopiedRiderUrl(true);
-                      setTimeout(() => setCopiedRiderUrl(false), 2500);
-                    }
-                  }}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs shadow-sm active:scale-95 transition cursor-pointer"
-                  title="साथी ऐप लिंक कॉपी करें (WhatsApp Share)"
-                >
-                  {copiedRiderUrl ? (
-                    <>
-                      <Check className="w-4 h-4 text-emerald-400" />
-                      <span className="text-emerald-400">कॉपी हो गया!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Share2 className="w-4 h-4 text-blue-400" />
-                      <span>शेयर लिंक</span>
-                    </>
-                  )}
-                </button>
+                {(isSuperAdmin || canShowCodShareLink) && (
+                  <button
+                    type="button"
+                    id="share-cod-rider-url-btn"
+                    onClick={async () => {
+                      const copied = await copyAppShareLink('https://courier-rider-payout.vercel.app/#cod-entry');
+                      if (copied) {
+                        setCopiedRiderUrl(true);
+                        setTimeout(() => setCopiedRiderUrl(false), 2500);
+                      }
+                    }}
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs shadow-sm active:scale-95 transition cursor-pointer"
+                    title="साथी ऐप लिंक कॉपी करें (WhatsApp Share)"
+                  >
+                    {copiedRiderUrl ? (
+                      <>
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span className="text-emerald-400">कॉपी हो गया!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Share2 className="w-4 h-4 text-blue-400" />
+                        <span>शेयर लिंक</span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           )}

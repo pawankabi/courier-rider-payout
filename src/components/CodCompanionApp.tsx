@@ -39,11 +39,12 @@ import {
   CodStaffUser, 
   CodStaffRole,
   DailyCodSheetData,
-  Rider
+  Rider,
+  UserPermissions
 } from '../types';
 import { RiderLedgerStatement } from './RiderLedgerStatement';
-import { isRiderBuild } from '../utils/shareLink';
-import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { isRiderBuild, getRiderStatementUrl } from '../utils/shareLink';
+import { collection, query, where, getDocs, onSnapshot, doc } from 'firebase/firestore';
 import { signInAnonymously } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { 
@@ -148,6 +149,31 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     ''
   ).trim();
 
+  // Real-time Hub Tenant Permissions Listener (Master Super Admin Controlled Access Gates)
+  const [hubPermissions, setHubPermissions] = useState<UserPermissions | null>(null);
+
+  useEffect(() => {
+    if (!currentHubId || !db) return;
+    try {
+      const unsub = onSnapshot(doc(db, 'all_users', currentHubId), (snap) => {
+        if (snap.exists()) {
+          const d = snap.data();
+          if (d && d.permissions) {
+            setHubPermissions(d.permissions as UserPermissions);
+          }
+        }
+      }, (err) => {
+        console.warn('Hub permissions listener notice:', err);
+      });
+      return () => unsub();
+    } catch (e) {
+      console.warn('Error setting up hub permissions listener:', e);
+    }
+  }, [currentHubId]);
+
+  const isCodCompanionBlocked = hubPermissions ? hubPermissions.codCompanionAccess === false : false;
+  const allowDeliveryCountInput = Boolean(hubPermissions?.allowRiderDeliveryCountInput);
+
   // Sheet & Active Date State
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
   const todayStr = useMemo(() => getTodayDateString(), []);
@@ -170,7 +196,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
   // Rider Row Edit Modal State
   const [editingEntry, setEditingEntry] = useState<CodDailyEntry | null>(null);
-  const [editDeliveryCount, setEditDeliveryCount] = useState<number | string>(0);
+  const [editDeliveryCount, setEditDeliveryCount] = useState<number | string>('');
   const [editCompany1, setEditCompany1] = useState<number | string>(0);
   const [editCompany2, setEditCompany2] = useState<number | string>(0);
   const [editCash, setEditCash] = useState<number | string>(0);
@@ -623,7 +649,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
     setIsSavingEntry(true);
 
-    const deliveryCount = Math.max(0, parseInt(String(editDeliveryCount) || '0', 10) || 0);
+    const deliveryCount = allowDeliveryCountInput
+      ? (Number(editDeliveryCount) || 0)
+      : (Number(editingEntry.deliveryCount) || 0);
     const c1 = Number(editCompany1) || 0;
     const c2 = Number(editCompany2) || 0;
     const cash = Number(editCash) || 0;
@@ -840,10 +868,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       if (shortAmount > 0) {
         try {
           const cleanPhone = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
-          const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')
-            ? window.location.origin
-            : 'https://courier-rider-payout.vercel.app';
-          const statementUrl = `${baseUrl}/#/statement/${encodeURIComponent(row.riderId)}`;
+          const statementUrl = getRiderStatementUrl(row.riderId);
           const targetRider = hubRiders.find((r) => r.id === row.riderId);
           const totalAdvance = (Number(targetRider?.totalAdvance) || 0) + shortAmount;
           const description = `COD Shortage (${field.toUpperCase()})`;
@@ -1222,6 +1247,44 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           {toast.type === 'error' && <AlertCircle className="w-4 h-4 shrink-0" />}
           {toast.type === 'info' && <RefreshCw className="w-4 h-4 shrink-0" />}
           <span>{toast.text}</span>
+        </div>
+      )}
+
+      {/* Super Admin Access Control Gate: If hub's codCompanionAccess is toggled OFF */}
+      {isCodCompanionBlocked && (
+        <div className="fixed inset-0 z-50 bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center animate-in fade-in">
+          <div className="max-w-md w-full bg-slate-800 border border-rose-500/30 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-4">
+            <div className="w-16 h-16 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto text-3xl shadow-inner">
+              🔒
+            </div>
+            <h2 className="text-xl font-black text-white">
+              COD साथी ऐप अनुमति बंद है
+            </h2>
+            <span className="inline-block px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+              Access Blocked by Master Admin
+            </span>
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed pt-2">
+              इस हब के लिए मास्टर एडमिन द्वारा COD साथी ऐप (Companion Access) को बंद (Disabled) कर दिया गया है। कृपया अपने हब एडमिन या मास्टर एडमिन से संपर्क करें।
+            </p>
+            <div className="pt-4 flex flex-col sm:flex-row gap-2.5 justify-center">
+              {onBackToMainApp && (
+                <button
+                  type="button"
+                  onClick={onBackToMainApp}
+                  className="px-4 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold transition cursor-pointer"
+                >
+                  ← मुख्य ऐप पर लौटें
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer shadow-lg shadow-rose-950/40"
+              >
+                लॉगआउट करें
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2180,25 +2243,23 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
             {/* Modal Inputs */}
             <div className="space-y-3.5">
-              {/* Delivery Parcel Count */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <Package className="w-4 h-4 text-emerald-600" />
-                    <span>कुल डिलीवर पार्सल (Delivery Count)</span>
-                  </span>
-                  <span className="text-[11px] text-slate-500 font-normal">आज के कुल पैकेट</span>
-                </label>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  placeholder="0"
-                  value={editDeliveryCount}
-                  onChange={(e) => setEditDeliveryCount(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
-                />
-              </div>
+              {/* Optional Delivery Count (Controlled dynamically by Master Admin Tenant Flag) */}
+              {allowDeliveryCountInput && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    कुल डिलीवर पार्सल (DELIVERY COUNT)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    placeholder="e.g. 65"
+                    value={editDeliveryCount}
+                    onChange={(e) => setEditDeliveryCount(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-amber-50/50 border border-amber-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white"
+                  />
+                </div>
+              )}
 
               {/* Co 1 COD */}
               <div>

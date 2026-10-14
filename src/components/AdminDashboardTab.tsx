@@ -951,7 +951,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   // Real-time Permission Toggle for specific feature
   const handleToggleFeature = async (
     user: AppUser,
-    key: 'dailyEntry' | 'riders' | 'incentives' | 'reports' | 'codCompanionAccess',
+    key: 'dailyEntry' | 'riders' | 'incentives' | 'reports' | 'codCompanionAccess' | 'codShareLinkVisibility' | 'allowRiderDeliveryCountInput',
     e?: React.MouseEvent
   ) => {
     e?.stopPropagation();
@@ -965,7 +965,10 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
         key === 'dailyEntry' ? 'Daily Entry' :
         key === 'riders' ? 'Riders' :
         key === 'incentives' ? 'Incentives' :
-        key === 'reports' ? 'Reports' : 'COD Entry & Companion App Access';
+        key === 'reports' ? 'Reports' :
+        key === 'codCompanionAccess' ? 'COD Entry & Companion App Access' :
+        key === 'codShareLinkVisibility' ? 'Allow COD Share Link Visibility (शेयर लिंक)' :
+        'Rider App Delivery Count Input';
 
       showToast(
         `${featureLabel} is now ${isEnabled ? 'ENABLED' : 'DISABLED'} for ${user.displayName || user.email}.`,
@@ -2323,6 +2326,44 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                             <span>COD App</span>
                             <span className="text-[10px] font-bold">
                               {perms.codCompanionAccess ? '✓' : '✕'}
+                            </span>
+                          </button>
+
+                          {/* COD Share Link Visibility */}
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleFeature(user, 'codShareLinkVisibility', e)}
+                            disabled={permLoadingKey === `${user.uid}-codShareLinkVisibility`}
+                            className={`px-2 py-1 rounded-lg text-xs font-medium border flex items-center gap-1 transition ${
+                              perms.codShareLinkVisibility
+                                ? 'bg-blue-950/70 text-blue-300 border-blue-700 hover:bg-blue-900/80 shadow-sm'
+                                : 'bg-slate-900 text-slate-500 border-slate-800 line-through hover:text-slate-400'
+                            }`}
+                            title="Click to toggle COD Share Link Visibility (Super Admin Gate)"
+                          >
+                            <Share2 className="w-3 h-3" />
+                            <span>शेयर लिंक</span>
+                            <span className="text-[10px] font-bold">
+                              {perms.codShareLinkVisibility ? '✓' : '✕'}
+                            </span>
+                          </button>
+
+                          {/* Rider App Delivery Count Input */}
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleFeature(user, 'allowRiderDeliveryCountInput', e)}
+                            disabled={permLoadingKey === `${user.uid}-allowRiderDeliveryCountInput`}
+                            className={`px-2 py-1 rounded-lg text-xs font-medium border flex items-center gap-1 transition ${
+                              perms.allowRiderDeliveryCountInput
+                                ? 'bg-amber-950/70 text-amber-300 border-amber-700 hover:bg-amber-900/80 shadow-sm'
+                                : 'bg-slate-900 text-slate-500 border-slate-800 line-through hover:text-slate-400'
+                            }`}
+                            title="Click to toggle Rider App Delivery Count Input (Super Admin Gate)"
+                          >
+                            <Package className="w-3 h-3" />
+                            <span>पार्सल इनपुट</span>
+                            <span className="text-[10px] font-bold">
+                              {perms.allowRiderDeliveryCountInput ? '✓' : '✕'}
                             </span>
                           </button>
                         </div>

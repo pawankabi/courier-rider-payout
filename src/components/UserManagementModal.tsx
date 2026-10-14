@@ -35,6 +35,7 @@ import {
   ExternalLink,
   Upload,
   Trash2,
+  Share2,
   Image as ImageIcon
 } from 'lucide-react';
 import { compressAndEncodeImage, validateImageFile } from '../utils/imageUpload';
@@ -381,6 +382,10 @@ export const UserManagementModal: React.FC<Props> = ({
         `Feature permission "${
           key === 'codCompanionAccess'
             ? 'COD Entry & Companion App Access'
+            : key === 'codShareLinkVisibility'
+            ? 'Allow COD Share Link Visibility (शेयर लिंक अनुमति)'
+            : key === 'allowRiderDeliveryCountInput'
+            ? 'Rider App: Allow Delivery Count Input'
             : key === 'festivalGreetings'
             ? 'Festival Greetings'
             : key === 'canAccessDailyEntry'
@@ -1263,6 +1268,84 @@ export const UserManagementModal: React.FC<Props> = ({
                     <span
                       className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
                         permissions.codCompanionAccess ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* 7b. Dynamic Sub-Toggle: Rider App Delivery Parcel Count Input */}
+                <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 ml-4 sm:ml-6 flex items-center justify-between gap-4 border-l-4 border-l-amber-500">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Package className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-xs sm:text-sm font-semibold text-white">
+                          Rider App: डिलीवरी पार्सल इनपुट दिखाएं (Allow Delivery Count Input)
+                        </h4>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                          permissions.allowRiderDeliveryCountInput ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}>
+                          {permissions.allowRiderDeliveryCountInput ? 'Enabled (ON)' : 'Hidden (OFF)'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        अगर बंद रहेगा, तो राइडर के COD फॉर्म से 'कुल डिलीवर पार्सल' फील्ड अपने-आप छिप जाएगी।
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    id={`toggle-perm-rider-delivery-count-${user.uid}`}
+                    type="button"
+                    onClick={() => handleTogglePermission('allowRiderDeliveryCountInput')}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      permissions.allowRiderDeliveryCountInput ? 'bg-amber-500' : 'bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        permissions.allowRiderDeliveryCountInput ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* 8. Allow COD Share Link Visibility (शेयर लिंक अनुमति) */}
+                <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Share2 className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-sm font-semibold text-white">
+                          Allow COD Share Link Visibility (शेयर लिंक अनुमति)
+                        </h4>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                          permissions.codShareLinkVisibility ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}>
+                          {permissions.codShareLinkVisibility ? 'Visible (ON)' : 'Hidden (OFF)'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        हब राइडर्स टैब / COD कार्ड में [🔗 शेयर लिंक] बटन प्रदर्शित करें। बंद रहने पर सामान्य कर्मचारियों से यह बटन पूरी तरह छिपा रहेगा (केवल मास्टर एडमिन को दिखेगा)।
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    id={`toggle-perm-cod-share-link-${user.uid}`}
+                    type="button"
+                    onClick={() => handleTogglePermission('codShareLinkVisibility')}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      permissions.codShareLinkVisibility ? 'bg-blue-500' : 'bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        permissions.codShareLinkVisibility ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
                   </button>
