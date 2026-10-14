@@ -151,6 +151,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
   // Real-time Hub Tenant Permissions Listener (Master Super Admin Controlled Access Gates)
   const [hubPermissions, setHubPermissions] = useState<UserPermissions | null>(null);
+  const [hubCodCompanies, setHubCodCompanies] = useState<string[]>(['Valmo', 'Xpressbees']);
 
   useEffect(() => {
     if (!currentHubId || !db) return;
@@ -160,6 +161,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           const d = snap.data();
           if (d && d.permissions) {
             setHubPermissions(d.permissions as UserPermissions);
+          }
+          if (d && Array.isArray(d.codCompanies) && d.codCompanies.length > 0) {
+            setHubCodCompanies(d.codCompanies);
           }
         }
       }, (err) => {
@@ -197,6 +201,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   // Rider Row Edit Modal State
   const [editingEntry, setEditingEntry] = useState<CodDailyEntry | null>(null);
   const [editDeliveryCount, setEditDeliveryCount] = useState<number | string>('');
+  const [editCompanyAmounts, setEditCompanyAmounts] = useState<Record<string, number | string>>({});
   const [editCompany1, setEditCompany1] = useState<number | string>(0);
   const [editCompany2, setEditCompany2] = useState<number | string>(0);
   const [editCash, setEditCash] = useState<number | string>(0);
@@ -633,6 +638,22 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
     setEditingEntry(targetRow);
     setEditDeliveryCount(targetRow.deliveryCount && targetRow.deliveryCount > 0 ? String(targetRow.deliveryCount) : '');
+    
+    // Dynamic per-company initial amounts
+    const initialCompanyAmounts: Record<string, string> = {};
+    hubCodCompanies.forEach((comp, idx) => {
+      let val = 0;
+      if (targetRow.companyAmounts && targetRow.companyAmounts[comp] !== undefined) {
+        val = targetRow.companyAmounts[comp];
+      } else if (idx === 0) {
+        val = targetRow.company1Amount;
+      } else if (idx === 1) {
+        val = targetRow.company2Amount;
+      }
+      initialCompanyAmounts[comp] = val > 0 ? String(val) : '';
+    });
+    setEditCompanyAmounts(initialCompanyAmounts);
+
     setEditCompany1(targetRow.company1Amount > 0 ? String(targetRow.company1Amount) : '');
     setEditCompany2(targetRow.company2Amount > 0 ? String(targetRow.company2Amount) : '');
     setEditCash(targetRow.cashDeposit > 0 ? String(targetRow.cashDeposit) : '');
@@ -652,11 +673,20 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     const deliveryCount = allowDeliveryCountInput
       ? (Number(editDeliveryCount) || 0)
       : (Number(editingEntry.deliveryCount) || 0);
-    const c1 = Number(editCompany1) || 0;
-    const c2 = Number(editCompany2) || 0;
+
+    // Sum dynamic company fields
+    const numericCompanyAmounts: Record<string, number> = {};
+    let totalCod = 0;
+    hubCodCompanies.forEach((comp) => {
+      const amt = Number(editCompanyAmounts[comp]) || 0;
+      numericCompanyAmounts[comp] = amt;
+      totalCod += amt;
+    });
+
+    const c1 = Number(numericCompanyAmounts[hubCodCompanies[0]]) || 0;
+    const c2 = Number(numericCompanyAmounts[hubCodCompanies[1]]) || 0;
     const cash = Number(editCash) || 0;
     const online = Number(editOnline) || 0;
-    const totalCod = c1 + c2;
     const totalDeposit = cash + online;
     const balance = totalCod - totalDeposit;
 
@@ -665,6 +695,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       deliveryCount,
       company1Amount: c1,
       company2Amount: c2,
+      companyAmounts: numericCompanyAmounts,
       totalCod,
       cashDeposit: cash,
       onlineDeposit: online,
@@ -1646,7 +1677,15 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 </h4>
                 <p className="text-xs text-slate-500">
                   {myRiderRow && (Number(myRiderRow.totalCod) > 0 || Number(myRiderRow.totalDeposit) > 0 || Number(myRiderRow.deliveryCount) > 0)
-                    ? `दर्ज: 📦 डिलीवरी: ${myRiderRow.deliveryCount || 0} pkts | Co 1: ₹${myRiderRow.company1Amount} | Co 2: ₹${myRiderRow.company2Amount} | कैश: ₹${myRiderRow.cashDeposit} | UPI: ₹${myRiderRow.onlineDeposit}`
+                    ? (() => {
+                        const compStr = hubCodCompanies.map((c, i) => {
+                          const a = myRiderRow.companyAmounts && myRiderRow.companyAmounts[c] !== undefined
+                            ? myRiderRow.companyAmounts[c]
+                            : i === 0 ? myRiderRow.company1Amount : i === 1 ? myRiderRow.company2Amount : 0;
+                          return `${c}: ₹${a}`;
+                        }).join(' | ');
+                        return `दर्ज: 📦 डिलीवरी: ${myRiderRow.deliveryCount || 0} pkts | ${compStr} | कैश: ₹${myRiderRow.cashDeposit} | UPI: ₹${myRiderRow.onlineDeposit}`;
+                      })()
                     : 'आज की एंट्री अभी खाली है। तुरंत टैप कर दर्ज करें।'}
                 </p>
               </div>
@@ -1852,77 +1891,57 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
                     {/* Financial Values Grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3">
-                      {/* Co 1: Valmo COD */}
-                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
-                        <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
-                          <span>{sheetData.company1Name}</span>
-                          {/* Verification Checkmark */}
-                          <button
-                            type="button"
-                            onClick={() => handleToggleVerification(row, 'company1')}
-                            disabled={!canVerifyField('company1')}
-                            className={`p-0.5 rounded transition ${
-                              row.company1Verified
-                                ? 'text-emerald-600 bg-emerald-100'
-                                : canVerifyField('company1')
-                                ? 'text-slate-400 hover:text-slate-700 cursor-pointer'
-                                : 'text-slate-300 cursor-not-allowed'
-                            }`}
-                            title={
-                              row.company1Verified
-                                ? `सत्यापित द्वारा: ${row.company1VerifiedBy || 'Staff'}`
-                                : 'सत्यापित करें'
-                            }
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        <div className="text-sm font-bold text-slate-900 font-mono">
-                          {formatINR(row.company1Amount)}
-                        </div>
-                        {row.company1Shortage ? (
-                          <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
-                            <AlertTriangle className="w-2.5 h-2.5" />
-                            <span>शॉर्ट: -₹{row.company1Shortage}</span>
-                          </div>
-                        ) : null}
-                      </div>
+                      {/* Dynamic Companies COD Cards */}
+                      {hubCodCompanies.map((comp, idx) => {
+                        const amt = row.companyAmounts && row.companyAmounts[comp] !== undefined
+                          ? row.companyAmounts[comp]
+                          : idx === 0
+                          ? row.company1Amount
+                          : idx === 1
+                          ? row.company2Amount
+                          : 0;
+                        const isVerified = idx === 0 ? row.company1Verified : idx === 1 ? row.company2Verified : false;
+                        const verifiedBy = idx === 0 ? row.company1VerifiedBy : idx === 1 ? row.company2VerifiedBy : undefined;
+                        const shortage = idx === 0 ? row.company1Shortage : idx === 1 ? row.company2Shortage : undefined;
 
-                      {/* Co 2: Xpressbees COD */}
-                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
-                        <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
-                          <span>{sheetData.company2Name}</span>
-                          {/* Verification Checkmark */}
-                          <button
-                            type="button"
-                            onClick={() => handleToggleVerification(row, 'company2')}
-                            disabled={!canVerifyField('company2')}
-                            className={`p-0.5 rounded transition ${
-                              row.company2Verified
-                                ? 'text-emerald-600 bg-emerald-100'
-                                : canVerifyField('company2')
-                                ? 'text-slate-400 hover:text-slate-700 cursor-pointer'
-                                : 'text-slate-300 cursor-not-allowed'
-                            }`}
-                            title={
-                              row.company2Verified
-                                ? `सत्यापित द्वारा: ${row.company2VerifiedBy || 'Staff'}`
-                                : 'सत्यापित करें'
-                            }
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        <div className="text-sm font-bold text-slate-900 font-mono">
-                          {formatINR(row.company2Amount)}
-                        </div>
-                        {row.company2Shortage ? (
-                          <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
-                            <AlertTriangle className="w-2.5 h-2.5" />
-                            <span>शॉर्ट: -₹{row.company2Shortage}</span>
+                        return (
+                          <div key={comp} className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
+                            <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
+                              <span>{comp} COD</span>
+                              {idx < 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleVerification(row, idx === 0 ? 'company1' : 'company2')}
+                                  disabled={!canVerifyField(idx === 0 ? 'company1' : 'company2')}
+                                  className={`p-0.5 rounded transition ${
+                                    isVerified
+                                      ? 'text-emerald-600 bg-emerald-100'
+                                      : canVerifyField(idx === 0 ? 'company1' : 'company2')
+                                      ? 'text-slate-400 hover:text-slate-700 cursor-pointer'
+                                      : 'text-slate-300 cursor-not-allowed'
+                                  }`}
+                                  title={
+                                    isVerified
+                                      ? `सत्यापित द्वारा: ${verifiedBy || 'Staff'}`
+                                      : 'सत्यापित करें'
+                                  }
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                            <div className="text-sm font-bold text-slate-900 font-mono">
+                              {formatINR(amt)}
+                            </div>
+                            {shortage ? (
+                              <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
+                                <AlertTriangle className="w-2.5 h-2.5" />
+                                <span>शॉर्ट: -₹{shortage}</span>
+                              </div>
+                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
+                        );
+                      })}
 
                       {/* Cash Deposit */}
                       <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
@@ -2065,8 +2084,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                     <tr>
                       <th className="py-3 px-3">राइडर नाम (Rider)</th>
                       <th className="py-3 px-3 text-center">डिलीवरी (Pkts)</th>
-                      <th className="py-3 px-3 text-right">{sheetData.company1Name} (₹)</th>
-                      <th className="py-3 px-3 text-right">{sheetData.company2Name} (₹)</th>
+                      {hubCodCompanies.map((comp) => (
+                        <th key={comp} className="py-3 px-3 text-right">{comp} (₹)</th>
+                      ))}
                       <th className="py-3 px-3 text-right text-indigo-700 font-bold">कुल COD (₹)</th>
                       <th className="py-3 px-3 text-right text-emerald-700">कैश जमा (₹)</th>
                       <th className="py-3 px-3 text-right text-sky-700">ऑनलाइन (₹)</th>
@@ -2078,7 +2098,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                   <tbody className="divide-y divide-slate-100 font-mono">
                     {filteredEntries.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="py-10 px-4 text-center text-slate-500 font-sans">
+                        <td colSpan={8 + hubCodCompanies.length} className="py-10 px-4 text-center text-slate-500 font-sans">
                           <div className="space-y-2.5">
                             <p className="text-sm font-semibold text-slate-800">कोई राइडर एंट्री नहीं मिली।</p>
                             <p className="text-xs text-slate-500">इस तारीख के लिए अभी तक कोई रिकॉर्ड उपलब्ध नहीं है।</p>
@@ -2146,14 +2166,22 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                                 <span>{row.deliveryCount || 0}</span>
                               </span>
                             </td>
-                          <td className="py-3 px-3 text-right">
-                            <span>{formatINR(row.company1Amount)}</span>
-                            {row.company1Verified && <span className="text-emerald-600 ml-1">✓</span>}
-                          </td>
-                          <td className="py-3 px-3 text-right">
-                            <span>{formatINR(row.company2Amount)}</span>
-                            {row.company2Verified && <span className="text-emerald-600 ml-1">✓</span>}
-                          </td>
+                          {hubCodCompanies.map((comp, idx) => {
+                            const amt = row.companyAmounts && row.companyAmounts[comp] !== undefined
+                              ? row.companyAmounts[comp]
+                              : idx === 0
+                              ? row.company1Amount
+                              : idx === 1
+                              ? row.company2Amount
+                              : 0;
+                            const isVerified = idx === 0 ? row.company1Verified : idx === 1 ? row.company2Verified : false;
+                            return (
+                              <td key={comp} className="py-3 px-3 text-right">
+                                <span>{formatINR(amt)}</span>
+                                {isVerified && <span className="text-emerald-600 ml-1">✓</span>}
+                              </td>
+                            );
+                          })}
                           <td className="py-3 px-3 text-right font-bold text-slate-900">
                             {formatINR(row.totalCod)}
                           </td>
@@ -2261,37 +2289,28 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 </div>
               )}
 
-              {/* Co 1 COD */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  {sheetData.company1Name} (₹ COD कलेक्शन)
-                </label>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  placeholder="0"
-                  value={editCompany1}
-                  onChange={(e) => setEditCompany1(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
-                />
-              </div>
-
-              {/* Co 2 COD */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  {sheetData.company2Name} (₹ COD कलेक्शन)
-                </label>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  placeholder="0"
-                  value={editCompany2}
-                  onChange={(e) => setEditCompany2(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
-                />
-              </div>
+              {/* Dynamic Hub Courier Companies COD Fields */}
+              {hubCodCompanies.map((comp) => (
+                <div key={comp}>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    {comp} COD (₹ COD कलेक्शन)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    placeholder="0"
+                    value={editCompanyAmounts[comp] !== undefined ? editCompanyAmounts[comp] : ''}
+                    onChange={(e) =>
+                      setEditCompanyAmounts((prev) => ({
+                        ...prev,
+                        [comp]: e.target.value,
+                      }))
+                    }
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                  />
+                </div>
+              ))}
 
               {/* Cash Deposit */}
               <div>
@@ -2327,18 +2346,19 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
               {/* Live Auto-Calculated Summary Box */}
               {(() => {
-                const c1 = Number(editCompany1) || 0;
-                const c2 = Number(editCompany2) || 0;
+                let totCod = 0;
+                hubCodCompanies.forEach((comp) => {
+                  totCod += Number(editCompanyAmounts[comp]) || 0;
+                });
                 const cash = Number(editCash) || 0;
                 const online = Number(editOnline) || 0;
-                const totCod = c1 + c2;
                 const totDep = cash + online;
                 const diff = totCod - totDep;
 
                 return (
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5 font-mono text-xs">
                     <div className="flex justify-between text-slate-700">
-                      <span>कुल COD (Co1 + Co2):</span>
+                      <span>कुल COD ({hubCodCompanies.map((c) => `${c} COD`).join(' + ')}):</span>
                       <strong className="text-slate-900">{formatINR(totCod)}</strong>
                     </div>
                     <div className="flex justify-between text-emerald-700">

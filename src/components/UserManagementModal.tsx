@@ -57,6 +57,7 @@ import {
   updateUserRateConfig, 
   updateUserHubSignature,
   updateUserSubscription,
+  updateUserCodCompanies,
   normalizeUserSubscription,
   bulkUpdateRidersRates, 
   updateRiderRates, 
@@ -124,6 +125,60 @@ export const UserManagementModal: React.FC<Props> = ({
     user.permissions ? { ...DEFAULT_USER_PERMISSIONS, ...user.permissions } : { ...DEFAULT_USER_PERMISSIONS }
   );
   const [savingPermissions, setSavingPermissions] = useState(false);
+
+  // Dynamic Hub COD Companies State
+  const [codCompanies, setCodCompanies] = useState<string[]>(() =>
+    Array.isArray(user.codCompanies) && user.codCompanies.length > 0
+      ? user.codCompanies
+      : ['Valmo', 'Xpressbees']
+  );
+  const [newCompanyInput, setNewCompanyInput] = useState('');
+  const [savingCompanies, setSavingCompanies] = useState(false);
+
+  const handleAddCompany = async () => {
+    const clean = newCompanyInput.trim();
+    if (!clean) return;
+    if (codCompanies.some((c) => c.toLowerCase() === clean.toLowerCase())) {
+      showToast(`कूरियर कंपनी "${clean}" पहले से मौजूद है।`, 'error');
+      return;
+    }
+    const updated = [...codCompanies, clean];
+    setSavingCompanies(true);
+    try {
+      const saved = await updateUserCodCompanies(user.uid, updated);
+      setCodCompanies(saved);
+      setNewCompanyInput('');
+      user.codCompanies = saved;
+      if (onUserUpdated) onUserUpdated({ ...user, codCompanies: saved });
+      showToast(`कूरियर कंपनी "${clean}" सफलतापूर्वक जोड़ी गई।`, 'success');
+    } catch (err) {
+      console.error('Failed to add COD company:', err);
+      showToast('कंपनी जोड़ने में विफल। पुनः प्रयास करें।', 'error');
+    } finally {
+      setSavingCompanies(false);
+    }
+  };
+
+  const handleRemoveCompany = async (companyToRemove: string) => {
+    if (codCompanies.length <= 1) {
+      showToast('कम से कम एक कूरियर कंपनी सक्रिय रहनी आवश्यक है।', 'error');
+      return;
+    }
+    const updated = codCompanies.filter((c) => c !== companyToRemove);
+    setSavingCompanies(true);
+    try {
+      const saved = await updateUserCodCompanies(user.uid, updated);
+      setCodCompanies(saved);
+      user.codCompanies = saved;
+      if (onUserUpdated) onUserUpdated({ ...user, codCompanies: saved });
+      showToast(`कूरियर कंपनी "${companyToRemove}" हटाई गई।`, 'success');
+    } catch (err) {
+      console.error('Failed to remove COD company:', err);
+      showToast('कंपनी हटाने में विफल। पुनः प्रयास करें।', 'error');
+    } finally {
+      setSavingCompanies(false);
+    }
+  };
 
   // Rate config state
   const [rateConfig, setRateConfig] = useState<UserRateConfig>(
@@ -1310,6 +1365,78 @@ export const UserManagementModal: React.FC<Props> = ({
                       }`}
                     />
                   </button>
+                </div>
+
+                {/* 7c. Dynamic Courier Companies Manager: COD कूरियर कंपनियाँ (Hub Courier Companies) */}
+                <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 ml-4 sm:ml-6 space-y-3 border-l-4 border-l-teal-500">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-teal-500/10 text-teal-400 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <Building2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-xs sm:text-sm font-semibold text-white">
+                            COD कूरियर कंपनियाँ (Hub Courier Companies)
+                          </h4>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold uppercase tracking-wider">
+                            {codCompanies.length} Active
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          हब के लिए सक्रिय COD कूरियर कंपनियाँ प्रबंधित करें। राइडर और स्टाफ ऐप में यही कंपनियाँ दिखाई देंगी।
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Active Company Badges with Delete Chips */}
+                  <div className="flex items-center gap-2 flex-wrap pt-1">
+                    {codCompanies.map((comp) => (
+                      <span
+                        key={comp}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-teal-950/70 text-teal-200 border border-teal-700/80 text-xs font-bold shadow-xs"
+                      >
+                        <span>{comp}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCompany(comp)}
+                          disabled={savingCompanies || codCompanies.length <= 1}
+                          className="hover:text-rose-400 hover:bg-rose-950/50 rounded-full p-0.5 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title={`हटाएं ${comp}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Add New Company Input Bar */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="text"
+                      placeholder="e.g. Shadowfax, Delhivery, Amazon..."
+                      value={newCompanyInput}
+                      onChange={(e) => setNewCompanyInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCompany();
+                        }
+                      }}
+                      disabled={savingCompanies}
+                      className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCompany}
+                      disabled={savingCompanies || !newCompanyInput.trim()}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed shadow cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Add Company</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* 8. Allow COD Share Link Visibility (शेयर लिंक अनुमति) */}

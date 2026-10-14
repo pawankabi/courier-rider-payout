@@ -1,1 +1,201 @@
-if(!self.define){let e,s={};const n=(n,i)=>(n=new URL(n+".js",i).href,s[n]||new Promise(s=>{if("document"in self){const e=document.createElement("script");e.src=n,e.onload=s,document.head.appendChild(e)}else e=n,importScripts(n),s()}).then(()=>{let e=s[n];if(!e)throw new Error(`Module ${n} didn’t register its module`);return e}));self.define=(i,a)=>{const r=e||("document"in self?document.currentScript.src:"")||location.href;if(s[r])return;let l={};const c=e=>n(e,r),t={module:{uri:r},exports:l,require:c};s[r]=Promise.all(i.map(e=>t[e]||c(e))).then(e=>(a(...e),l))}}define(["./workbox-4516e109"],function(e){"use strict";self.skipWaiting(),e.clientsClaim(),e.precacheAndRoute([{url:"pwa-maskable-512x512.png",revision:"244e3e0340aec312855153ab7c5bb6c3"},{url:"pwa-512x512.png",revision:"17d98417c7c1344bb7d405ff5dc3d3a4"},{url:"pwa-192x192.png",revision:"aa07c895c7e9965a366d532e2da256ca"},{url:"index.html",revision:"41434474ac22efd8017d1a9f5dfd05c9"},{url:"icon.svg",revision:"86fdebc55d4f142947971951437ca70d"},{url:"apple-touch-icon.png",revision:"b3ea2e34925e1c8c3e73a10afc6acdaa"},{url:"assets/web-xgd0agBQ.js",revision:null},{url:"assets/web-DFXWsCVD.js",revision:null},{url:"assets/web-CvJeR1nw.js",revision:null},{url:"assets/web-5TOZKuxR.js",revision:null},{url:"assets/vendor-react-BQ1FuAAx.js",revision:null},{url:"assets/vendor-pdf-BqOOcIVZ.js",revision:null},{url:"assets/vendor-firebase-O8zrHqap.js",revision:null},{url:"assets/purify.es-DedTAGkB.js",revision:null},{url:"assets/native-dTRbiAv1.js",revision:null},{url:"assets/index.es-C2wy_r70.js",revision:null},{url:"assets/index-DYjeoR-N.css",revision:null},{url:"assets/index-2s_QINMc.js",revision:null},{url:"assets/base-BTFZ8Xog.js",revision:null},{url:"apple-touch-icon.png",revision:"b3ea2e34925e1c8c3e73a10afc6acdaa"},{url:"icon.svg",revision:"86fdebc55d4f142947971951437ca70d"},{url:"pwa-192x192.png",revision:"aa07c895c7e9965a366d532e2da256ca"},{url:"pwa-512x512.png",revision:"17d98417c7c1344bb7d405ff5dc3d3a4"},{url:"pwa-maskable-512x512.png",revision:"244e3e0340aec312855153ab7c5bb6c3"},{url:"manifest.webmanifest",revision:"bfc30088f81becccd0828bf63751cef2"}],{}),e.cleanupOutdatedCaches(),e.registerRoute(new e.NavigationRoute(e.createHandlerBoundToURL("/index.html"),{denylist:[/^\/__.*$/]})),e.registerRoute(({request:e})=>"navigate"===e.mode,new e.StaleWhileRevalidate({cacheName:"pwa-app-shell",plugins:[new e.CacheableResponsePlugin({statuses:[0,200]})]}),"GET"),e.registerRoute(({request:e})=>"script"===e.destination||"style"===e.destination||"worker"===e.destination,new e.CacheFirst({cacheName:"pwa-static-assets",plugins:[new e.CacheableResponsePlugin({statuses:[0,200]}),new e.ExpirationPlugin({maxEntries:100,maxAgeSeconds:2592e3})]}),"GET"),e.registerRoute(({request:e})=>"image"===e.destination,new e.CacheFirst({cacheName:"pwa-static-images",plugins:[new e.CacheableResponsePlugin({statuses:[0,200]}),new e.ExpirationPlugin({maxEntries:50,maxAgeSeconds:2592e3})]}),"GET"),e.registerRoute(({request:e})=>"font"===e.destination,new e.CacheFirst({cacheName:"pwa-fonts",plugins:[new e.CacheableResponsePlugin({statuses:[0,200]}),new e.ExpirationPlugin({maxEntries:20,maxAgeSeconds:31536e3})]}),"GET")});
+/**
+ * Copyright 2018 Google Inc. All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// If the loader is already loaded, just stop.
+if (!self.define) {
+  let registry = {};
+
+  // Used for `eval` and `importScripts` where we can't get script URL by other means.
+  // In both cases, it's safe to use a global var because those functions are synchronous.
+  let nextDefineUri;
+
+  const singleRequire = (uri, parentUri) => {
+    uri = new URL(uri + ".js", parentUri).href;
+    return registry[uri] || (
+      
+        new Promise(resolve => {
+          if ("document" in self) {
+            const script = document.createElement("script");
+            script.src = uri;
+            script.onload = resolve;
+            document.head.appendChild(script);
+          } else {
+            nextDefineUri = uri;
+            importScripts(uri);
+            resolve();
+          }
+        })
+      
+      .then(() => {
+        let promise = registry[uri];
+        if (!promise) {
+          throw new Error(`Module ${uri} didn’t register its module`);
+        }
+        return promise;
+      })
+    );
+  };
+
+  self.define = (depsNames, factory) => {
+    const uri = nextDefineUri || ("document" in self ? document.currentScript.src : "") || location.href;
+    if (registry[uri]) {
+      // Module is already loading or loaded.
+      return;
+    }
+    let exports = {};
+    const require = depUri => singleRequire(depUri, uri);
+    const specialDeps = {
+      module: { uri },
+      exports,
+      require
+    };
+    registry[uri] = Promise.all(depsNames.map(
+      depName => specialDeps[depName] || require(depName)
+    )).then(deps => {
+      factory(...deps);
+      return exports;
+    });
+  };
+}
+define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
+
+  self.skipWaiting();
+  workbox.clientsClaim();
+  /**
+   * The precacheAndRoute() method efficiently caches and responds to
+   * requests for URLs in the manifest.
+   * See https://goo.gl/S9QRab
+   */
+  workbox.precacheAndRoute([{
+    "url": "pwa-maskable-512x512.png",
+    "revision": "244e3e0340aec312855153ab7c5bb6c3"
+  }, {
+    "url": "pwa-512x512.png",
+    "revision": "17d98417c7c1344bb7d405ff5dc3d3a4"
+  }, {
+    "url": "pwa-192x192.png",
+    "revision": "aa07c895c7e9965a366d532e2da256ca"
+  }, {
+    "url": "index.html",
+    "revision": "c85faaf78516fae8e4b7c0c02a42a7e8"
+  }, {
+    "url": "icon.svg",
+    "revision": "86fdebc55d4f142947971951437ca70d"
+  }, {
+    "url": "apple-touch-icon.png",
+    "revision": "b3ea2e34925e1c8c3e73a10afc6acdaa"
+  }, {
+    "url": "assets/web-DmMsr17i.js",
+    "revision": null
+  }, {
+    "url": "assets/web-DCPr_0PQ.js",
+    "revision": null
+  }, {
+    "url": "assets/web-D7DpxUft.js",
+    "revision": null
+  }, {
+    "url": "assets/web-CIDOR63W.js",
+    "revision": null
+  }, {
+    "url": "assets/vendor-react-jrF7e2F0.js",
+    "revision": null
+  }, {
+    "url": "assets/vendor-pdf-CUYbDkbv.js",
+    "revision": null
+  }, {
+    "url": "assets/vendor-firebase-Kgpy1mjd.js",
+    "revision": null
+  }, {
+    "url": "assets/purify.es-DedTAGkB.js",
+    "revision": null
+  }, {
+    "url": "assets/native-CkTMgsJD.js",
+    "revision": null
+  }, {
+    "url": "assets/index.es-CsLtj_j5.js",
+    "revision": null
+  }, {
+    "url": "assets/index-EGAkTJDj.js",
+    "revision": null
+  }, {
+    "url": "assets/index-DBzCsqsl.css",
+    "revision": null
+  }, {
+    "url": "assets/base-jFa3nwvL.js",
+    "revision": null
+  }, {
+    "url": "apple-touch-icon.png",
+    "revision": "b3ea2e34925e1c8c3e73a10afc6acdaa"
+  }, {
+    "url": "icon.svg",
+    "revision": "86fdebc55d4f142947971951437ca70d"
+  }, {
+    "url": "pwa-192x192.png",
+    "revision": "aa07c895c7e9965a366d532e2da256ca"
+  }, {
+    "url": "pwa-512x512.png",
+    "revision": "17d98417c7c1344bb7d405ff5dc3d3a4"
+  }, {
+    "url": "pwa-maskable-512x512.png",
+    "revision": "244e3e0340aec312855153ab7c5bb6c3"
+  }, {
+    "url": "manifest.webmanifest",
+    "revision": "bfc30088f81becccd0828bf63751cef2"
+  }], {});
+  workbox.cleanupOutdatedCaches();
+  workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("/index.html"), {
+    denylist: [/^\/__.*$/]
+  }));
+  workbox.registerRoute(({
+    request
+  }) => request.mode === "navigate", new workbox.StaleWhileRevalidate({
+    "cacheName": "pwa-app-shell",
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
+  workbox.registerRoute(({
+    request
+  }) => request.destination === "script" || request.destination === "style" || request.destination === "worker", new workbox.CacheFirst({
+    "cacheName": "pwa-static-assets",
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    }), new workbox.ExpirationPlugin({
+      maxEntries: 100,
+      maxAgeSeconds: 2592000
+    })]
+  }), 'GET');
+  workbox.registerRoute(({
+    request
+  }) => request.destination === "image", new workbox.CacheFirst({
+    "cacheName": "pwa-static-images",
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    }), new workbox.ExpirationPlugin({
+      maxEntries: 50,
+      maxAgeSeconds: 2592000
+    })]
+  }), 'GET');
+  workbox.registerRoute(({
+    request
+  }) => request.destination === "font", new workbox.CacheFirst({
+    "cacheName": "pwa-fonts",
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    }), new workbox.ExpirationPlugin({
+      maxEntries: 20,
+      maxAgeSeconds: 31536000
+    })]
+  }), 'GET');
+
+}));

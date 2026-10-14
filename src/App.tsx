@@ -433,7 +433,10 @@ function MainCourierApp() {
     isSubscribed?: boolean;
     subscription?: any;
     subscriptionStatus?: string;
+    codCompanies?: string[];
   } | null>(null);
+
+  const [userCodCompanies, setUserCodCompanies] = useState<string[]>(['Valmo', 'Xpressbees']);
 
   // Automatic Expiry Cut-Off ticker: ticks every 5 seconds to ensure instant automatic cut-off
   const [currentTime, setCurrentTime] = useState(() => Date.now());
@@ -914,7 +917,12 @@ function MainCourierApp() {
             isSubscribed: isDocPro,
             subscription: docData.subscription,
             subscriptionStatus: docData.subscription?.paymentStatus || (isDocPro ? 'active' : undefined),
+            codCompanies: docData.codCompanies,
           });
+
+          if (docData.codCompanies && Array.isArray(docData.codCompanies) && docData.codCompanies.length > 0) {
+            setUserCodCompanies(docData.codCompanies);
+          }
 
           if (isDocPro) {
             try {
@@ -969,7 +977,12 @@ function MainCourierApp() {
             isSubscribed: isProfilePro,
             subscription: profileResult.subscription,
             subscriptionStatus: profileResult.subscription?.paymentStatus || (isProfilePro ? 'active' : undefined),
+            codCompanies: profileResult.codCompanies,
           });
+
+          if (profileResult.codCompanies && Array.isArray(profileResult.codCompanies) && profileResult.codCompanies.length > 0) {
+            setUserCodCompanies(profileResult.codCompanies);
+          }
 
           if (isProfilePro) {
             try {
@@ -2658,6 +2671,7 @@ function MainCourierApp() {
                 onOpenCodCompanion={() => setIsCodCompanionOpen(true)}
                 canAccessCodCompanion={canAccessCodCompanion}
                 canShowCodShareLink={canShowCodShareLink}
+                codCompanies={userCodCompanies}
               />
             )}
 

@@ -336,6 +336,7 @@ export interface AppUser {
   hubSignature?: string;
   subscription?: UserSubscription;
   paymentHistory?: PaymentHistoryItem[];
+  codCompanies?: string[]; // Dynamic courier companies configured for this hub
 }
 
 export interface UserProfileData {
@@ -348,6 +349,7 @@ export interface UserProfileData {
   rateConfig: UserRateConfig;
   hubSignature?: string;
   subscription?: UserSubscription;
+  codCompanies?: string[]; // Dynamic courier companies configured for this hub
   rawDoc?: any;
 }
 
@@ -403,6 +405,8 @@ export interface CodCompanyConfig {
   isActive: boolean;
 }
 
+export const DEFAULT_COD_COMPANIES: string[] = ['Valmo', 'Xpressbees'];
+
 export interface CodDailyEntry {
   id: string; // unique key, e.g. `cod_${date}_${riderId}`
   date: string; // YYYY-MM-DD
@@ -417,8 +421,9 @@ export interface CodDailyEntry {
   company2Verified?: boolean;
   company2VerifiedBy?: string;
   company2VerifiedAt?: string;
+  companyAmounts?: Record<string, number>; // Dynamic per-company COD collection amounts
   deliveryCount?: number; // Daily delivery parcel count
-  totalCod: number; // Auto-calculated: company1Amount + company2Amount
+  totalCod: number; // Auto-calculated: sum of all company amounts
   cashDeposit: number; // Rider physical cash handed in
   cashVerified?: boolean;
   cashVerifiedBy?: string;

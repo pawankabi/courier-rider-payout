@@ -109,6 +109,7 @@ interface Props {
   onOpenCodCompanion?: () => void;
   canAccessCodCompanion?: boolean;
   canShowCodShareLink?: boolean;
+  codCompanies?: string[];
 }
 
 export const RidersTab: React.FC<Props> = ({
@@ -138,11 +139,15 @@ export const RidersTab: React.FC<Props> = ({
   onOpenCodCompanion,
   canAccessCodCompanion = false,
   canShowCodShareLink = false,
+  codCompanies,
 }) => {
   // COD हिसाब-किताब Sub-App Modal State & Feature Flag
   const [isCodModalOpen, setIsCodModalOpen] = useState(false);
   const [copiedRiderUrl, setCopiedRiderUrl] = useState(false);
   const [codSettings, setCodSettings] = useState<CodSettings>(DEFAULT_COD_SETTINGS);
+
+  const configuredCompanies = codCompanies && codCompanies.length > 0 ? codCompanies : ['Valmo', 'Xpressbees'];
+  const companiesBadgeText = `(${configuredCompanies.join(' Cod / ')} Cod)`;
   const [isInternalCompanionOpen, setIsInternalCompanionOpen] = useState(false);
   const [isInternalStandaloneOpen, setIsInternalStandaloneOpen] = useState(false);
 
@@ -956,9 +961,12 @@ export const RidersTab: React.FC<Props> = ({
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
                       ✓ Public to Staff
                     </span>
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold">
+                      {companiesBadgeText}
+                    </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-0.5">
-                    Multi-Company Excel Grid ({codSettings.company1Name} / {codSettings.company2Name}), Daily Cash/UPI Deposits, Balance Tally & 4-Digit Staff PIN Security.
+                    Multi-Company Excel Grid ({configuredCompanies.join(' / ')}), Daily Cash/UPI Deposits, Balance Tally & 4-Digit Staff PIN Security.
                   </p>
                 </div>
               </div>

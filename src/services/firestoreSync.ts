@@ -389,6 +389,7 @@ export interface SyncProfileResult {
   rateConfig: UserRateConfig;
   hubSignature?: string;
   subscription: UserSubscription;
+  codCompanies?: string[];
 }
 
 /**
@@ -520,6 +521,13 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       { merge: true }
     );
 
+    let userCodCompanies: string[] = ['Valmo', 'Xpressbees'];
+    if (allSnap && allSnap.exists() && Array.isArray(allSnap.data()?.codCompanies) && allSnap.data()?.codCompanies.length > 0) {
+      userCodCompanies = allSnap.data()?.codCompanies;
+    } else if (userSnap && userSnap.exists() && Array.isArray(userSnap.data()?.codCompanies) && userSnap.data()?.codCompanies.length > 0) {
+      userCodCompanies = userSnap.data()?.codCompanies;
+    }
+
     const isPending = !adminRole && status === 'pending';
     const isBlocked = !adminRole && (status === 'deactivated' || status === 'blocked' || status === 'rejected');
     const isApproved = adminRole || status === 'approved' || status === 'active';
@@ -537,6 +545,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       rateConfig,
       hubSignature: rateConfig.hubSignature || '',
       subscription,
+      codCompanies: userCodCompanies,
     };
   } catch (error) {
     console.error('Error syncing user profile to Firestore:', error);
@@ -581,6 +590,7 @@ export function subscribeToCurrentUserDoc(
     rateConfig: UserRateConfig;
     hubSignature?: string;
     subscription?: UserSubscription;
+    codCompanies?: string[];
     rawDoc?: any;
   }) => void
 ): () => void {
@@ -611,6 +621,10 @@ export function subscribeToCurrentUserDoc(
     const subscription = normalizeUserSubscription(mergedData.subscription);
     const validUntil = mergedData.planExpiresAt || mergedData.validUntil || subscription.validUntil || '';
 
+    const codCompanies = Array.isArray(mergedData.codCompanies) && mergedData.codCompanies.length > 0
+      ? mergedData.codCompanies
+      : ['Valmo', 'Xpressbees'];
+
     onUpdate({ 
       status, 
       validUntil,
@@ -621,6 +635,7 @@ export function subscribeToCurrentUserDoc(
       rateConfig, 
       hubSignature, 
       subscription, 
+      codCompanies,
       rawDoc: mergedData 
     });
   };
@@ -645,6 +660,7 @@ export function subscribeToCurrentUserDoc(
           rateConfig: DEFAULT_USER_RATE_CONFIG,
           hubSignature: '',
           subscription: createDefaultUserSubscription(),
+          codCompanies: ['Valmo', 'Xpressbees'],
         });
       }
     },
@@ -711,6 +727,10 @@ export function subscribeToAllUsers(
         const sub = normalizeUserSubscription(data.subscription);
         const validUntil = data.validUntil || sub.validUntil || '';
 
+        const codCompanies = Array.isArray(data.codCompanies) && data.codCompanies.length > 0
+          ? data.codCompanies
+          : ['Valmo', 'Xpressbees'];
+
         users.push({
           uid: docSnap.id,
           email: data.email || '',
@@ -730,6 +750,7 @@ export function subscribeToAllUsers(
             : { ...DEFAULT_USER_RATE_CONFIG },
           hubSignature: data.hubSignature || data.rateConfig?.hubSignature || '',
           subscription: sub,
+          codCompanies,
         });
       });
 
@@ -1042,6 +1063,26 @@ export async function updateUserHubSignature(
     'rateConfig.hubSignature': cleanSig,
     hubSignatureUpdatedAt: serverTimestamp(),
   });
+}
+
+/**
+ * Super Admin: Update configured dynamic COD courier companies for a hub tenant
+ */
+export async function updateUserCodCompanies(
+  userId: string,
+  codCompanies: string[]
+): Promise<string[]> {
+  const userRef = doc(db, 'all_users', userId);
+  const cleanCompanies = Array.isArray(codCompanies)
+    ? Array.from(new Set(codCompanies.map((c) => String(c).trim()).filter(Boolean)))
+    : ['Valmo', 'Xpressbees'];
+  const finalCompanies = cleanCompanies.length > 0 ? cleanCompanies : ['Valmo', 'Xpressbees'];
+
+  await updateDoc(userRef, {
+    codCompanies: finalCompanies,
+    codCompaniesUpdatedAt: serverTimestamp(),
+  });
+  return finalCompanies;
 }
 
 /**
