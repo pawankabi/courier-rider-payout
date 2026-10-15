@@ -18,6 +18,7 @@ import { Rider, RiderAdvanceEntry } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString } from '../utils/formatters';
 import { getRiderStatementUrl } from '../utils/shareLink';
 import { formatAdvanceSmsText, dispatchAutomatedSms } from '../services/smsService';
+import { sendNativeBackgroundSms, isNativeAndroid } from '../services/nativeSms';
 
 interface Props {
   riders: Rider[];
@@ -183,6 +184,13 @@ export const AdvancesTab: React.FC<Props> = ({
         type: 'advance',
         statementUrl,
       }).catch((e) => console.warn('Advance background SMS notice:', e));
+
+      const cleanPhone = (targetRider.phone || '').trim().replace(/\D/g, '').slice(-10);
+      if (isNativeAndroid() && cleanPhone.length === 10) {
+        sendNativeBackgroundSms(cleanPhone, smsText).catch((smsErr) =>
+          console.warn('Native SIM background advance SMS error:', smsErr)
+        );
+      }
 
       setAmount('');
       setReason('');

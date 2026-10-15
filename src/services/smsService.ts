@@ -6,6 +6,7 @@
 
 import { getCleanPhoneDigits } from '../utils/formatters';
 import { getRiderStatementUrl, ensureProductionStatementUrl, PRODUCTION_DOMAIN } from '../utils/shareLink';
+import { isNativeAndroid, sendNativeBackgroundSms } from './nativeSms';
 
 export interface SmsDispatchPayload {
   riderPhone: string;
@@ -141,6 +142,13 @@ export async function dispatchAutomatedSms(
       whatsappUrl: waUrl,
       smsUrl: smsUrl,
     };
+  }
+
+  // 100% Background Native SIM dispatch on Android (Silent, Khatabook style)
+  if (isNativeAndroid()) {
+    sendNativeBackgroundSms(cleanPhone, safeMessage).catch((err) => {
+      console.warn('Native SIM background SMS notice:', err);
+    });
   }
 
   try {

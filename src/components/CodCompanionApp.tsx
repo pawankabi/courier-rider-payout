@@ -40,6 +40,8 @@ import {
   CodStaffRole,
   DailyCodSheetData,
   Rider,
+  RiderAdvanceEntry,
+  RiderIncentiveEntry,
   UserPermissions
 } from '../types';
 import { RiderLedgerStatement } from './RiderLedgerStatement';
@@ -61,7 +63,14 @@ import {
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
 import { purgeLegacyMockStorage } from '../utils/storage';
-import { formatAdvanceSmsText, dispatchAutomatedSms } from '../services/smsService';
+import { formatAdvanceSmsText, formatIncentiveSmsText, dispatchAutomatedSms } from '../services/smsService';
+import { sendNativeBackgroundSms, isNativeAndroid } from '../services/nativeSms';
+import {
+  writeAdvanceEntryToFirestore,
+  writeIncentiveEntryToFirestore,
+  saveRiderToFirestore,
+  syncPublicRiderStatement,
+} from '../services/firestoreSync';
 
 interface CodCompanionAppProps {
   onBackToMainApp?: () => void;
@@ -866,6 +875,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     const { row, field, reportedAmount, actualReceived, notes } = shortageModal;
     const actual = actualReceived === '' ? reportedAmount : Math.max(0, Number(actualReceived) || 0);
     const shortAmount = Math.max(0, reportedAmount - actual);
+    const surplusAmount = Math.max(0, actual - reportedAmount);
 
     const sProp = `${field}Shortage` as keyof CodDailyEntry;
     const aProp = `${field}ActualReceived` as keyof CodDailyEntry;
@@ -876,10 +886,10 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     const updated: CodDailyEntry = {
       ...row,
       [sProp]: shortAmount > 0 ? shortAmount : undefined,
-      [aProp]: shortAmount > 0 ? actual : undefined,
-      [nProp]: shortAmount > 0 ? notes.trim() : undefined,
-      [fProp]: shortAmount > 0 ? authUser.name : undefined,
-      [tProp]: shortAmount > 0 ? new Date().toISOString() : undefined,
+      [aProp]: (shortAmount > 0 || surplusAmount > 0) ? actual : undefined,
+      [nProp]: (shortAmount > 0 || surplusAmount > 0) ? notes.trim() : undefined,
+      [fProp]: (shortAmount > 0 || surplusAmount > 0) ? authUser.name : undefined,
+      [tProp]: (shortAmount > 0 || surplusAmount > 0) ? new Date().toISOString() : undefined,
     };
 
     try {
@@ -887,22 +897,72 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         name: authUser.name,
         role: authUser.role,
       }, currentHubId);
-      showToast(
-        shortAmount > 0
-          ? `⚠️ शॉर्टेज मार्क: ₹${shortAmount} (${row.riderName} - ${field.toUpperCase()})`
-          : `शॉर्टेज हटा दी गई।`,
-        'success'
-      );
+
+      if (shortAmount > 0) {
+        showToast(`⚠️ शॉर्टेज मार्क: ₹${shortAmount} (${row.riderName} - ${field.toUpperCase()})`, 'info');
+      } else if (surplusAmount > 0) {
+        showToast(`🎉 सरप्लस / एक्स्ट्रा जमा: ₹${surplusAmount} (${row.riderName} - ${field.toUpperCase()})`, 'success');
+      } else {
+        showToast('शॉर्टेज हटा दी गई।', 'success');
+      }
+
       setShortageModal((prev) => ({ ...prev, isOpen: false }));
 
-      // Hook COD Shortage to Background SMS Dispatch (same service as Main App Advance flow)
+      const cleanPhone = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
+      const statementUrl = getRiderStatementUrl(row.riderId);
+      const targetRider = hubRiders.find((r) => r.id === row.riderId);
+
+      // FEATURE A: Auto-write Advance to Firestore on Shortage & Trigger Background SMS
       if (shortAmount > 0) {
         try {
-          const cleanPhone = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
-          const statementUrl = getRiderStatementUrl(row.riderId);
-          const targetRider = hubRiders.find((r) => r.id === row.riderId);
           const totalAdvance = (Number(targetRider?.totalAdvance) || 0) + shortAmount;
-          const description = `COD Shortage (${field.toUpperCase()})`;
+          const description = `COD Shortage (${field.toUpperCase()} - ${selectedDate})`;
+          const advReason = `COD Shortage (₹${shortAmount})`;
+
+          let advId = '';
+          if (currentHubId) {
+            try {
+              advId = await writeAdvanceEntryToFirestore(currentHubId, {
+                riderId: row.riderId,
+                riderName: row.riderName,
+                riderPhone: row.riderPhone,
+                amount: shortAmount,
+                date: selectedDate,
+                reason: advReason,
+                runningBalance: totalAdvance,
+              });
+            } catch (wErr) {
+              console.warn('Notice writing shortage advance to Firestore:', wErr);
+            }
+          }
+
+          if (targetRider) {
+            const newAdvEntry: RiderAdvanceEntry = {
+              id: advId || `adv_${Date.now()}`,
+              riderId: targetRider.id,
+              amount: shortAmount,
+              date: selectedDate,
+              reason: advReason,
+              runningBalance: totalAdvance,
+              createdAt: new Date().toISOString(),
+              createdBy: authUser.name,
+            };
+            const updatedAdvances = [newAdvEntry, ...(targetRider.advances || [])];
+            const updatedRider: Rider = {
+              ...targetRider,
+              totalAdvance,
+              advances: updatedAdvances,
+            };
+            if (currentHubId) {
+              saveRiderToFirestore(currentHubId, updatedRider).catch((e) =>
+                console.warn('Notice saving rider advance:', e)
+              );
+              syncPublicRiderStatement(updatedRider, updatedAdvances).catch((e) =>
+                console.warn('Notice syncing statement for shortage advance:', e)
+              );
+            }
+          }
+
           const smsText = formatAdvanceSmsText({
             riderName: row.riderName,
             amount: shortAmount,
@@ -919,12 +979,98 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             type: 'advance',
             statementUrl,
           }).catch((e) => console.warn('COD companion shortage SMS notice:', e));
+
+          if (isNativeAndroid() && cleanPhone.length === 10) {
+            sendNativeBackgroundSms(cleanPhone, smsText).catch((e) =>
+              console.warn('Native SIM shortage SMS error:', e)
+            );
+          }
         } catch (smsErr) {
           console.warn('COD companion shortage SMS hook error:', smsErr);
         }
       }
+
+      // FEATURE B: Auto-write Incentive to Firestore on Extra/Surplus Deposit & Trigger Background SMS
+      if (surplusAmount > 0) {
+        try {
+          const incReason = `COD Extra Surplus (₹${surplusAmount})`;
+          let incId = '';
+          if (currentHubId) {
+            try {
+              incId = await writeIncentiveEntryToFirestore(currentHubId, {
+                riderId: row.riderId,
+                riderName: row.riderName,
+                riderPhone: row.riderPhone,
+                amount: surplusAmount,
+                date: selectedDate,
+                reason: incReason,
+                source: 'surplus',
+                createdBy: authUser.name,
+              });
+            } catch (wErr) {
+              console.warn('Notice writing surplus incentive to Firestore:', wErr);
+            }
+          }
+
+          const currentTotalInc = (Number(targetRider?.totalIncentive) || 0) + surplusAmount;
+
+          if (targetRider) {
+            const newIncEntry: RiderIncentiveEntry = {
+              id: incId || `inc_${Date.now()}`,
+              riderId: targetRider.id,
+              riderName: targetRider.name,
+              riderPhone: targetRider.phone,
+              amount: surplusAmount,
+              date: selectedDate,
+              reason: incReason,
+              source: 'surplus',
+              createdAt: new Date().toISOString(),
+              createdBy: authUser.name,
+            };
+            const updatedIncentives = [newIncEntry, ...(targetRider.incentives || [])];
+            const updatedRider: Rider = {
+              ...targetRider,
+              totalIncentive: currentTotalInc,
+              incentives: updatedIncentives,
+            };
+            if (currentHubId) {
+              saveRiderToFirestore(currentHubId, updatedRider).catch((e) =>
+                console.warn('Notice saving rider surplus incentive:', e)
+              );
+              syncPublicRiderStatement(updatedRider, updatedRider.advances || []).catch((e) =>
+                console.warn('Notice syncing statement for surplus incentive:', e)
+              );
+            }
+          }
+
+          const smsText = formatIncentiveSmsText({
+            riderName: row.riderName,
+            amount: surplusAmount,
+            reason: incReason,
+            totalIncentive: currentTotalInc,
+            statementUrl,
+          });
+
+          dispatchAutomatedSms({
+            riderName: row.riderName,
+            riderPhone: cleanPhone,
+            amount: surplusAmount,
+            message: smsText,
+            type: 'general',
+            statementUrl,
+          }).catch((e) => console.warn('COD companion surplus SMS notice:', e));
+
+          if (isNativeAndroid() && cleanPhone.length === 10) {
+            sendNativeBackgroundSms(cleanPhone, smsText).catch((e) =>
+              console.warn('Native SIM surplus SMS error:', e)
+            );
+          }
+        } catch (surplusErr) {
+          console.warn('COD companion surplus sync error:', surplusErr);
+        }
+      }
     } catch {
-      showToast('शॉर्टेज अपडेट विफल हुआ।', 'error');
+      showToast('शॉर्टेज/सरप्लस अपडेट विफल हुआ।', 'error');
     }
   };
 
@@ -2477,9 +2623,22 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               </div>
 
               {shortageModal.actualReceived !== '' && (
-                <div className="bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-rose-700 font-mono font-bold">
-                  शॉर्टेज रकम: {formatINR(Math.max(0, shortageModal.reportedAmount - Number(shortageModal.actualReceived)))}
-                </div>
+                Number(shortageModal.actualReceived) > shortageModal.reportedAmount ? (
+                  <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl text-emerald-800 font-mono font-bold flex items-center justify-between">
+                    <span>सरप्लस / एक्स्ट्रा जमा (इंसेंटिव):</span>
+                    <span className="text-emerald-600 font-extrabold">+{formatINR(Number(shortageModal.actualReceived) - shortageModal.reportedAmount)}</span>
+                  </div>
+                ) : Number(shortageModal.actualReceived) < shortageModal.reportedAmount ? (
+                  <div className="bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-rose-800 font-mono font-bold flex items-center justify-between">
+                    <span>शॉर्टेज रकम (एडवांस खाता):</span>
+                    <span className="text-rose-600 font-extrabold">{formatINR(shortageModal.reportedAmount - Number(shortageModal.actualReceived))}</span>
+                  </div>
+                ) : (
+                  <div className="bg-slate-100 border border-slate-200 p-2.5 rounded-xl text-slate-700 font-mono font-bold flex items-center justify-between">
+                    <span>हिसाब बराबर:</span>
+                    <span>₹0 (कोई शॉर्टेज नहीं)</span>
+                  </div>
+                )
               )}
 
               <div>
@@ -2509,9 +2668,15 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               <button
                 type="button"
                 onClick={handleSaveShortage}
-                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                className={`px-4 py-1.5 text-white rounded-lg text-xs font-bold cursor-pointer transition ${
+                  shortageModal.actualReceived !== '' && Number(shortageModal.actualReceived) > shortageModal.reportedAmount
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
               >
-                कन्फर्म शॉर्टेज
+                {shortageModal.actualReceived !== '' && Number(shortageModal.actualReceived) > shortageModal.reportedAmount
+                  ? 'कन्फर्म सरप्लस (इंसेंटिव)'
+                  : 'कन्फर्म शॉर्टेज'}
               </button>
             </div>
           </div>

@@ -27,7 +27,7 @@ import {
   getWhatsAppUrl, 
   getNativeSmsUrl 
 } from '../services/smsService';
-import { InstantShareSuccessModal } from './InstantShareSuccessModal';
+import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
 interface RiderIncentiveModalProps {
   rider: Rider;
@@ -67,13 +67,7 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [instantShareData, setInstantShareData] = useState<{
-    riderName: string;
-    riderPhone: string;
-    riderId: string;
-    amount: number;
-    message: string;
-  } | null>(null);
+  // Remove manual popup modal state: 100% automated background SMS
 
   // Edit Incentive Modal State
   const [editingIncentive, setEditingIncentive] = useState<RiderIncentiveEntry | null>(null);
@@ -137,13 +131,25 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
         statementUrl,
       });
 
-      setInstantShareData({
-        riderName: rider.name,
+      // 100% Automated Background SMS Dispatch (No manual prompt/popup)
+      dispatchAutomatedSms({
         riderPhone: rider.phone,
-        riderId: rider.id,
-        amount: numericAmount,
+        riderName: rider.name,
         message: smsMessage,
-      });
+        type: 'general',
+        statementUrl,
+        amount: numericAmount,
+      }).catch((smsErr) => console.warn('Background incentive SMS error:', smsErr));
+
+      const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
+      if (isNativeAndroid() && cleanPhone.length === 10) {
+        sendNativeBackgroundSms(cleanPhone, smsMessage).catch((smsErr) =>
+          console.warn('Native SIM background incentive SMS error:', smsErr)
+        );
+      }
+
+      setToastMessage(`🎉 ₹${numericAmount} का इंसेंटिव सुरक्षित हुआ एवं SMS भेजा गया!`);
+      setTimeout(() => setToastMessage(null), 3000);
 
       // Clear input
       setAmount('');
@@ -722,22 +728,6 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
           <Check className="w-4 h-4 text-emerald-200 shrink-0" />
           <span>{toastMessage}</span>
         </div>
-      )}
-
-      {/* Instant Share Success Modal */}
-      {instantShareData && (
-        <InstantShareSuccessModal
-          isOpen={true}
-          onClose={() => setInstantShareData(null)}
-          riderName={instantShareData.riderName}
-          riderPhone={instantShareData.riderPhone}
-          riderId={instantShareData.riderId}
-          amount={instantShareData.amount}
-          title="इंसेंटिव सफलतापूर्वक जोड़ा गया!"
-          subtitle="राइडर को WhatsApp व SMS द्वारा सूचना भेजें"
-          customMessage={instantShareData.message}
-          entryType="payout"
-        />
       )}
     </div>
   );

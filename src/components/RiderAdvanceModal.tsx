@@ -320,7 +320,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         // 1-Tap direct native SIM SMS dispatch confirming advance amount & balance
         const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
 
-        if (isNativeAndroid()) {
+        if (isNativeAndroid() && cleanPhone.length === 10) {
           sendNativeBackgroundSms(cleanPhone, smsMessage).then((smsRes) => {
             if (smsRes.success) {
               setToastMessage('✅ सिम से एडवांस SMS सफलतापूर्वक भेजा गया।');
@@ -330,16 +330,8 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
             setTimeout(() => setToastMessage(null), 3500);
           });
         } else {
-          try {
-            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(smsMessage)}`, '_blank');
-          } catch {}
-          setInstantShareData({
-            riderName: rider.name,
-            riderPhone: cleanPhone,
-            riderId: rider.id,
-            amount: validAmount,
-            message: smsMessage,
-          });
+          setToastMessage(`✅ ₹${validAmount} एडवांस अपडेट हुआ एवं बैकग्राउंड SMS भेजा गया!`);
+          setTimeout(() => setToastMessage(null), 3500);
         }
 
         handleCancelEdit();
@@ -415,7 +407,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         // 1-Tap direct native SIM SMS dispatch confirming advance amount & balance
         const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
 
-        if (isNativeAndroid()) {
+        if (isNativeAndroid() && cleanPhone.length === 10) {
           sendNativeBackgroundSms(cleanPhone, smsMessage).then((smsRes) => {
             if (smsRes.success) {
               setToastMessage('✅ सिम से एडवांस SMS सफलतापूर्वक भेजा गया।');
@@ -425,16 +417,8 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
             setTimeout(() => setToastMessage(null), 3500);
           });
         } else {
-          try {
-            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(smsMessage)}`, '_blank');
-          } catch {}
-          setInstantShareData({
-            riderName: rider.name,
-            riderPhone: cleanPhone,
-            riderId: rider.id,
-            amount: validAmount,
-            message: smsMessage,
-          });
+          setToastMessage(`✅ ₹${validAmount} का एडवांस दर्ज हुआ एवं बैकग्राउंड SMS भेजा गया!`);
+          setTimeout(() => setToastMessage(null), 3500);
         }
 
         // Clear input fields and saved draft

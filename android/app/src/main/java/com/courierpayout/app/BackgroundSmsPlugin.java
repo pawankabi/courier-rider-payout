@@ -177,4 +177,20 @@ public class BackgroundSmsPlugin extends Plugin {
             call.reject("Failed to send SMS: " + e.getMessage());
         }
     }
+
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        try {
+            android.content.Intent intent = new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            android.net.Uri uri = android.net.Uri.fromParts("package", getContext().getPackageName(), null);
+            intent.setData(uri);
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Failed to open app settings: " + e.getMessage());
+        }
+    }
 }

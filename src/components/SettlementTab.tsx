@@ -204,19 +204,19 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
 
   // Additional bonuses & incentives logged for this rider (festival bonus, performance rewards, surplus credits)
+  // Continuous financial ledger: Unsettled incentives are calculated across all-time up to present moment (date-independent)
   const riderBonusIncentives = useMemo(() => {
-    if (!selectedRider || !Array.isArray(selectedRider.incentives)) return 0;
+    if (!selectedRider) return 0;
+    if (matchingSettlement) {
+      // If viewing an already saved historical settlement, reflect settled gross minus delivery
+      return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
+    }
+    if (!Array.isArray(selectedRider.incentives)) return 0;
+    // All-time unsettled incentives up to present moment
     return selectedRider.incentives
-      .filter((inc) => {
-        if (inc.settlementId) return false;
-        if (!startDate && !endDate) return true;
-        const incDate = inc.date || inc.createdAt?.slice(0, 10);
-        if (startDate && incDate < startDate) return false;
-        if (endDate && incDate > endDate) return false;
-        return true;
-      })
+      .filter((inc) => !inc.settlementId)
       .reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
-  }, [selectedRider, startDate, endDate]);
+  }, [selectedRider, matchingSettlement, deliveryGross]);
 
   // Gross Earning = Sum of daily delivery earnings + logged fleet incentives/bonuses
   const grossTotal = deliveryGross + riderBonusIncentives;
@@ -343,6 +343,8 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     if (!selectedRider) return;
 
     setSlipData({
+      riderId: selectedRider.id,
+      statementUrl: generateStatementUrl(selectedRider.id),
       riderName: selectedRider.name,
       phone: selectedRider.phone,
       startDate,
@@ -350,6 +352,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       totalParcels,
       baseAmount: totalBaseAmount,
       incentiveAmount: totalIncentiveAmount,
+      riderBonusIncentives,
       totalAmount: grossTotal,
       advanceAmount: numericAdvance,
       advanceDate: advanceDate || undefined,

@@ -126,7 +126,7 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { activateUserPlanImmediately, reconcilePendingCheckoutOnResume } from './services/razorpayCheckout';
 import { AppLockScreen } from './components/AppLockScreen';
 import { isAppLockEnabled } from './services/biometricService';
-import { isNativeAndroid, autoRequestStartupPermissions } from './services/nativeSms';
+import { isNativeAndroid, autoRequestStartupPermissions, openNativeAppSettings } from './services/nativeSms';
 import { VerifiedBadge } from './components/VerifiedBadge';
 import { ProfileSettingsModal } from './components/ProfileSettingsModal';
 import { CodStandaloneApp } from './components/CodStandaloneApp';
@@ -273,12 +273,20 @@ function MainCourierApp() {
     };
   }, []);
 
+  const [showPermissionPromptModal, setShowPermissionPromptModal] = useState(false);
+
   // Seamless Onboarding: Auto-request SMS & Contacts permissions on startup (Native Android)
   useEffect(() => {
     if (isNativeAndroid()) {
-      autoRequestStartupPermissions().catch((err) => {
-        console.warn('Auto startup permissions notice:', err);
-      });
+      autoRequestStartupPermissions()
+        .then((res) => {
+          if (!res.smsGranted) {
+            setShowPermissionPromptModal(true);
+          }
+        })
+        .catch((err) => {
+          console.warn('Auto startup permissions notice:', err);
+        });
     }
   }, []);
 
@@ -1520,16 +1528,16 @@ function MainCourierApp() {
           updatedRider.advances = advanceLogs;
         }
 
-        // Handle incentive deduction and tag settled incentives
-        const paidInc = Number(settlementDetails.incentiveAmount) || 0;
-        const currentInc = Number(targetRider.totalIncentive) || 0;
-        const remainingInc = Math.max(0, currentInc - paidInc);
+        // Handle incentive settling and tag settled incentives
         const updatedIncentives = (targetRider.incentives || []).map((inc) => {
           if (!inc.settlementId) {
             return { ...inc, settlementId };
           }
           return inc;
         });
+        const remainingInc = updatedIncentives
+          .filter((inc) => !inc.settlementId)
+          .reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
         updatedRider.totalIncentive = remainingInc;
         updatedRider.incentives = updatedIncentives;
 
@@ -3069,6 +3077,82 @@ function MainCourierApp() {
               await handleResetRiderAccount(viewingLedgerRiderId);
             }}
           />
+        </div>
+      )}
+
+      {/* Native Android Permission Prompt / Denied Guidance Modal */}
+      {showPermissionPromptModal && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setShowPermissionPromptModal(false)}
+        >
+          <div 
+            className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-2xl p-5 shadow-2xl space-y-4 text-slate-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center text-xl shrink-0">
+                📲
+              </div>
+              <div className="flex-1">
+                <h3 className="font-bold text-base text-white">
+                  SMS एवं कॉन्टैक्ट्स अनुमति आवश्यक है
+                </h3>
+                <p className="text-xs text-amber-300 font-semibold mt-0.5">
+                  Permissions Required for Rider Billing & SMS Alerts
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              राइडर्स को दैनिक डिलीवरी पेआउट, एडवांस कटौती और इंसेंटिव के स्वचालित बैकग्राउंड SMS भेजने तथा फोनबुक से नए राइडर इंपोर्ट करने के लिए ऐप को <strong className="text-white">SMS</strong> और <strong className="text-white">Contacts</strong> की अनुमति चाहिए।
+            </p>
+
+            <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
+              <div className="flex items-center gap-2 text-slate-200">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
+                <span>स्वचालित बैकग्राउंड SMS (पे-आउट व एडवांस स्लिप)</span>
+              </div>
+              <div className="flex items-center gap-2 text-slate-200">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
+                <span>फोनबुक से 1-क्लिक राइडर इंपोर्ट</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  await openNativeAppSettings();
+                  setShowPermissionPromptModal(false);
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+              >
+                <span>⚙️ ऐप सेटिंग्स खोलें (Open Settings)</span>
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await autoRequestStartupPermissions();
+                  if (res.smsGranted) {
+                    setShowPermissionPromptModal(false);
+                  }
+                }}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 transition cursor-pointer"
+              >
+                दोबारा पूछें (Retry)
+              </button>
+            </div>
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => setShowPermissionPromptModal(false)}
+                className="text-[11px] text-slate-500 hover:text-slate-400 cursor-pointer"
+              >
+                बाद में (Skip for now)
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

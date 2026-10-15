@@ -16,6 +16,8 @@ import {
   getRiderAppUrl, 
   getRiderApkDownloadUrl,
   getAdminApkDownloadUrl,
+  getRiderGithubReleaseUrl,
+  getAdminGithubReleaseUrl,
   copyAppShareLink
 } from '../utils/shareLink';
 
@@ -38,6 +40,8 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   const riderUrl = getRiderAppUrl();
   const riderApkUrl = getRiderApkDownloadUrl();
   const adminApkUrl = getAdminApkDownloadUrl();
+  const riderGithubUrl = getRiderGithubReleaseUrl();
+  const adminGithubUrl = getAdminGithubReleaseUrl();
 
   const handleCopy = async (type: 'rider' | 'admin' | 'rider_apk' | 'admin_apk') => {
     let targetUrl = currentBaseUrl;
@@ -259,6 +263,20 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
                 )}
               </button>
             </div>
+
+            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5 px-1">
+              <span>GitHub Release Link:</span>
+              <a
+                href={riderGithubUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-400 hover:text-emerald-300 font-mono text-[10px] underline flex items-center gap-1"
+                title="Direct GitHub Releases Download"
+              >
+                <span>COD-Entry-Rider-Release.apk</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
           </div>
 
           {/* Card 4: Dedicated Admin App APK Download */}
@@ -317,6 +335,20 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
                   </>
                 )}
               </button>
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5 px-1">
+              <span>GitHub Release Link:</span>
+              <a
+                href={adminGithubUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-indigo-400 hover:text-indigo-300 font-mono text-[10px] underline flex items-center gap-1"
+                title="Direct GitHub Releases Download"
+              >
+                <span>Admin-Payout-Release.apk</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
             </div>
           </div>
         </div>

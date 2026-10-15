@@ -1,6 +1,9 @@
 import { formatINR, formatDateDisplay } from './formatters';
+import { getRiderStatementUrl, ensureProductionStatementUrl } from './shareLink';
 
 export interface WhatsAppSlipData {
+  riderId?: string;
+  statementUrl?: string;
   riderName: string;
   phone: string;
   startDate: string;
@@ -8,7 +11,8 @@ export interface WhatsAppSlipData {
   totalParcels: number;
   baseAmount: number;
   incentiveAmount: number;
-  totalAmount: number; // Gross Total
+  riderBonusIncentives?: number; // Additional fleet bonuses/incentives
+  totalAmount: number; // Gross Total (Delivery + Bonuses)
   baseRate?: number;
   incentiveRate?: number;
   advanceAmount?: number;
@@ -37,12 +41,21 @@ export function generateWhatsAppMessage(data: WhatsAppSlipData): string {
 
   const grossTotal = data.totalAmount;
   const advance = data.advanceAmount || 0;
-  const netTotal = data.netAmount !== undefined ? data.netAmount : Math.max(0, grossTotal - advance);
+  const isRecovery = advance > grossTotal;
+  const netDue = isRecovery
+    ? advance - grossTotal
+    : (data.netAmount !== undefined ? data.netAmount : Math.max(0, grossTotal - advance));
+
   const advanceDateText = advance > 0 && data.advanceDate ? ` (Date: ${formatDateDisplay(data.advanceDate)})` : '';
   const advanceReasonText = advance > 0 && data.advanceReason ? ` [कारण: ${data.advanceReason}]` : '';
 
   const effBaseRate = data.baseRate ?? (data.totalParcels > 0 ? Math.round(data.baseAmount / data.totalParcels) : 13);
   const effIncRate = data.incentiveRate ?? (data.totalParcels > 0 && data.incentiveAmount > 0 ? Math.round(data.incentiveAmount / data.totalParcels) : 2);
+
+  const rawStatementUrl = data.statementUrl || (data.riderId ? getRiderStatementUrl(data.riderId) : '');
+  const statementText = rawStatementUrl
+    ? `\n🔗 *विस्तृत खाता व लेजर:* ${ensureProductionStatementUrl(rawStatementUrl)}\n`
+    : '';
 
   return (
     `📦 *COURIER RIDER PAYOUT SLIP* 📦\n` +
@@ -55,13 +68,18 @@ export function generateWhatsAppMessage(data: WhatsAppSlipData): string {
     `📊 *DELIVERY & RATE BREAKDOWN:*\n` +
     `• Total Parcels: *${data.totalParcels} pkts*\n` +
     `• Base Payout: *${formatINR(data.baseAmount)}* (@ ₹${effBaseRate})\n` +
-    (data.incentiveAmount > 0 ? `• Total Incentive: *${formatINR(data.incentiveAmount)}* (@ +₹${effIncRate})\n` : '') +
+    (data.incentiveAmount > 0 ? `• Delivery Incentive: *${formatINR(data.incentiveAmount)}* (@ +₹${effIncRate})\n` : '') +
+    (data.riderBonusIncentives && data.riderBonusIncentives > 0 ? `• Additional Fleet Bonus: *+${formatINR(data.riderBonusIncentives)}*\n` : '') +
     `• Gross Total: *${formatINR(grossTotal)}*\n` +
     `• Advance Deducted: *${advance > 0 ? `-${formatINR(advance)}` : '₹0'}*${advanceDateText}${advanceReasonText}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 *FINAL NET ${data.status === 'PAID' ? 'PAID' : 'PAYABLE'} AMOUNT:* *${formatINR(netTotal)}*\n` +
-    `📌 *PAYMENT STATUS:* ${statusEmoji} *${data.status}*` +
+    (isRecovery
+      ? `⚠️ *RECOVERY DUE (राइडर से लेना बाकी):* *${formatINR(netDue)}*\n` +
+        `📌 *STATUS:* ⏳ *ADVANCE RECOVERY PENDING*\n`
+      : `💰 *FINAL NET ${data.status === 'PAID' ? 'PAID' : 'PAYABLE'} AMOUNT:* *${formatINR(netDue)}*\n` +
+        `📌 *PAYMENT STATUS:* ${statusEmoji} *${data.status}*\n`) +
     settledText +
+    statementText +
     `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `Thank you for your dedicated courier service! Safe riding. 🛵⚡`
   );

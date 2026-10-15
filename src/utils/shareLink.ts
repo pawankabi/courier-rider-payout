@@ -49,11 +49,29 @@ export const getRiderAppUrl = (): string => {
   return `${getBaseUrl()}/#cod-entry`;
 };
 
+export const DEFAULT_GITHUB_REPO = 'pawankabi/courier-rider-payout';
+
+export const getRiderGithubReleaseUrl = (repo: string = DEFAULT_GITHUB_REPO): string => {
+  const targetRepo = (import.meta.env.VITE_GITHUB_REPO || repo).trim();
+  return `https://github.com/${targetRepo}/releases/latest/download/COD-Entry-Rider-Release.apk`;
+};
+
+export const getAdminGithubReleaseUrl = (repo: string = DEFAULT_GITHUB_REPO): string => {
+  const targetRepo = (import.meta.env.VITE_GITHUB_REPO || repo).trim();
+  return `https://github.com/${targetRepo}/releases/latest/download/Admin-Payout-Release.apk`;
+};
+
 export const getRiderApkDownloadUrl = (): string => {
+  if (import.meta.env.VITE_GITHUB_REPO) {
+    return getRiderGithubReleaseUrl();
+  }
   return `${getBaseUrl()}/downloads/COD-Entry-Rider-Release.apk`;
 };
 
 export const getAdminApkDownloadUrl = (): string => {
+  if (import.meta.env.VITE_GITHUB_REPO) {
+    return getAdminGithubReleaseUrl();
+  }
   return `${getBaseUrl()}/downloads/Admin-Payout-Release.apk`;
 };
 
