@@ -147,9 +147,13 @@ export function isEntityOwnedByUser(
  */
 export function normalizeUserPermissions(raw?: any, isSuperAdminUser: boolean = false): UserPermissions {
   if (!raw) {
-    return isSuperAdminUser
-      ? { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: true }
-      : { ...DEFAULT_USER_PERMISSIONS, codCompanionAccess: false };
+    const isAllowed = isSuperAdminUser;
+    return {
+      ...DEFAULT_USER_PERMISSIONS,
+      codCompanionAccess: isAllowed,
+      isCodAccessEnabled: isAllowed,
+      hasCodPermission: isAllowed,
+    };
   }
   const dailyEntry = raw.dailyEntry ?? raw.canAccessDailyEntry ?? true;
   const riders = raw.riders ?? raw.canAccessRiders ?? true;
@@ -157,9 +161,15 @@ export function normalizeUserPermissions(raw?: any, isSuperAdminUser: boolean = 
   const reports = raw.reports ?? raw.canAccessReports ?? true;
   const festivalGreetings = raw.festivalGreetings ?? raw.canAccessFestivalGreetings ?? false;
   const canExportData = raw.canExportData ?? true;
-  const codCompanionAccess = raw.codCompanionAccess !== undefined
+  const codCompanionAccess = raw.isCodAccessEnabled !== undefined
+    ? Boolean(raw.isCodAccessEnabled)
+    : raw.hasCodPermission !== undefined
+    ? Boolean(raw.hasCodPermission)
+    : raw.codCompanionAccess !== undefined
     ? Boolean(raw.codCompanionAccess)
     : isSuperAdminUser;
+  const isCodAccessEnabled = codCompanionAccess;
+  const hasCodPermission = codCompanionAccess;
   const codShareLinkVisibility = raw.codShareLinkVisibility !== undefined
     ? Boolean(raw.codShareLinkVisibility)
     : false;
@@ -180,6 +190,8 @@ export function normalizeUserPermissions(raw?: any, isSuperAdminUser: boolean = 
     canAccessFestivalGreetings: festivalGreetings,
     canExportData,
     codCompanionAccess,
+    isCodAccessEnabled,
+    hasCodPermission,
     codShareLinkVisibility,
     allowRiderDeliveryCountInput,
   };

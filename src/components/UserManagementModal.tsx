@@ -429,6 +429,12 @@ export const UserManagementModal: React.FC<Props> = ({
     if (key === 'festivalGreetings') {
       updated.canAccessFestivalGreetings = updated.festivalGreetings;
     }
+    if (key === 'codCompanionAccess' || key === 'isCodAccessEnabled' || key === 'hasCodPermission') {
+      const isAllowed = Boolean(updated[key]);
+      updated.codCompanionAccess = isAllowed;
+      updated.isCodAccessEnabled = isAllowed;
+      updated.hasCodPermission = isAllowed;
+    }
     setPermissions(updated);
     setSavingPermissions(true);
     try {

@@ -78,29 +78,31 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Compile Both Release APKs (Admin & COD Rider Companion)
+      - name: Compile Both Release APKs (COD Rider Companion & Admin)
         run: |
           cd android
-          ./gradlew assembleAdminRelease assembleRiderRelease --no-daemon
+          ./gradlew assembleRiderRelease assembleAdminRelease --no-daemon
 
       - name: Collect & Standardize Release APKs
         run: |
-          # Copy Admin Release APK
-          ADMIN_APK=$(find android/app/build/outputs/apk/admin/release -name "*.apk" | head -n 1)
-          if [ -f "$ADMIN_APK" ]; then
-            cp "$ADMIN_APK" Admin-Payout-Release.apk
-            echo "Found Admin APK: $ADMIN_APK -> Admin-Payout-Release.apk"
-          else
-            echo "Error: Admin Release APK not found!" && exit 1
-          fi
-
-          # Copy Rider Companion Release APK
+          echo "🔍 Searching for generated APK artifacts..."
+          
+          # 1. Locate and copy Rider Companion Release APK (Rider Flavor)
           RIDER_APK=$(find android/app/build/outputs/apk/rider/release -name "*.apk" | head -n 1)
           if [ -f "$RIDER_APK" ]; then
-            cp "$RIDER_APK" COD-Entry-Rider-Release.apk
-            echo "Found Rider Companion APK: $RIDER_APK -> COD-Entry-Rider-Release.apk"
+            cp -v "$RIDER_APK" COD-Entry-Rider-Release.apk
+            echo "✅ Verified Rider Companion APK: $RIDER_APK -> COD-Entry-Rider-Release.apk ($(ls -lh COD-Entry-Rider-Release.apk | awk '{print $5}'))"
           else
-            echo "Error: Rider Release APK not found!" && exit 1
+            echo "❌ Fatal Error: Rider Companion Release APK not found in android/app/build/outputs/apk/rider/release!" && exit 1
+          fi
+
+          # 2. Locate and copy Admin Release APK (Admin Flavor)
+          ADMIN_APK=$(find android/app/build/outputs/apk/admin/release -name "*.apk" | head -n 1)
+          if [ -f "$ADMIN_APK" ]; then
+            cp -v "$ADMIN_APK" Admin-Payout-Release.apk
+            echo "✅ Verified Admin APK: $ADMIN_APK -> Admin-Payout-Release.apk ($(ls -lh Admin-Payout-Release.apk | awk '{print $5}'))"
+          else
+            echo "❌ Fatal Error: Admin Release APK not found in android/app/build/outputs/apk/admin/release!" && exit 1
           fi
 
       - name: Upload Admin Payout Release APK Artifact

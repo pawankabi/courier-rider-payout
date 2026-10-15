@@ -33,7 +33,8 @@ import {
   Gift,
   Receipt,
   RotateCcw,
-  RefreshCw
+  RefreshCw,
+  Download
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings } from '../types';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
@@ -41,7 +42,8 @@ import { RiderIncentiveModal } from './RiderIncentiveModal';
 import { generateStatementUrl, formatSalarySmsText, dispatchAutomatedSms, getWhatsAppUrl, getNativeSmsUrl } from '../services/smsService';
 import { 
   getRiderAppUrl, 
-  copyAppShareLink 
+  copyAppShareLink,
+  downloadRiderApk
 } from '../utils/shareLink';
 import { 
   formatINR, 
@@ -108,6 +110,8 @@ interface Props {
   onOpenCodPortal?: () => void;
   onOpenCodCompanion?: () => void;
   canAccessCodCompanion?: boolean;
+  isCodAccessEnabled?: boolean;
+  hasCodPermission?: boolean;
   canShowCodShareLink?: boolean;
   codCompanies?: string[];
 }
@@ -138,6 +142,8 @@ export const RidersTab: React.FC<Props> = ({
   onOpenCodPortal,
   onOpenCodCompanion,
   canAccessCodCompanion = false,
+  isCodAccessEnabled,
+  hasCodPermission,
   canShowCodShareLink = false,
   codCompanies,
 }) => {
@@ -173,8 +179,19 @@ export const RidersTab: React.FC<Props> = ({
     loadCodSettings(userId).then(setCodSettings);
   }, [userId, isCodModalOpen]);
 
-  // Feature Flag: Super Admin always has access; regular users only when enabled by owner AND companion access flag is allowed
-  const canViewCodModule = Boolean(isSuperAdmin || (canAccessCodCompanion && codSettings.isEnabled));
+  // STRICT COD PERMISSION GATE:
+  // Check user/staff permission from tenant/admin configuration: `isCodAccessEnabled` or `hasCodPermission`.
+  // If COD Access is DISABLED for the logged-in user/hub staff:
+  // - COMPLETELY HIDE the entire "COD हिसाब-किताब (STANDALONE SUB-APP)" card from the Riders tab.
+  // - Do NOT show the card, portal link, or download button to unauthorized users.
+  // - Only display this card if the user has been granted explicit COD permission from the Admin Panel.
+  const isCodAuthorized = Boolean(
+    isSuperAdmin ||
+    (isCodAccessEnabled !== undefined ? isCodAccessEnabled : false) ||
+    (hasCodPermission !== undefined ? hasCodPermission : false) ||
+    canAccessCodCompanion
+  );
+  const canViewCodModule = isCodAuthorized;
 
   // Status Filter State: 'unpaid' (Default), 'all', 'active', 'inactive'
   const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all' | 'active' | 'inactive'>(() => {
@@ -972,6 +989,18 @@ export const RidersTab: React.FC<Props> = ({
               </div>
 
               <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+                {/* 1. DIRECT RIDER APK DOWNLOAD BUTTON (High-Visibility Primary Action) */}
+                <button
+                  type="button"
+                  id="download-rider-apk-direct-btn"
+                  onClick={() => downloadRiderApk()}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 via-emerald-400 to-teal-400 hover:from-amber-300 hover:via-emerald-300 hover:to-teal-300 text-slate-950 font-black text-xs sm:text-sm shadow-lg shadow-emerald-500/25 ring-2 ring-emerald-400/60 active:scale-95 transition-all duration-200 cursor-pointer"
+                  title="Direct Download COD-Entry-Rider-Release.apk"
+                >
+                  <Download className="w-4 h-4 text-slate-950 stroke-[2.5]" />
+                  <span>📲 डाउनलोड राइडर ऐप (Direct APK Download)</span>
+                </button>
+
                 <button
                   type="button"
                   id="open-cod-companion-banner-btn"

@@ -152,6 +152,8 @@ export interface UserPermissions {
   canAccessFestivalGreetings?: boolean;
   canExportData?: boolean;
   codCompanionAccess?: boolean; // Super Admin access toggle for COD Entry Companion App
+  isCodAccessEnabled?: boolean; // Strict tenant/admin permission flag for COD Access
+  hasCodPermission?: boolean; // Strict tenant/admin permission flag for COD Access
   codShareLinkVisibility?: boolean; // Allow COD Share Link Visibility (शेयर लिंक अनुमति)
   allowRiderDeliveryCountInput?: boolean; // Rider App: Allow Delivery Count Input (डिलीवरी पार्सल इनपुट दिखाएं)
 }
@@ -169,6 +171,8 @@ export const DEFAULT_USER_PERMISSIONS: UserPermissions = {
   canAccessFestivalGreetings: false,
   canExportData: true,
   codCompanionAccess: false, // Default State: OFF for all existing and newly created hub accounts (only Master Super Admin has it active by default)
+  isCodAccessEnabled: false, // Default State: OFF (false)
+  hasCodPermission: false, // Default State: OFF (false)
   codShareLinkVisibility: false, // Default State: OFF (false)
   allowRiderDeliveryCountInput: false, // Default State: OFF (false)
 };

@@ -18,7 +18,9 @@ import {
   getAdminApkDownloadUrl,
   getRiderGithubReleaseUrl,
   getAdminGithubReleaseUrl,
-  copyAppShareLink
+  copyAppShareLink,
+  downloadRiderApk,
+  downloadAdminApk
 } from '../utils/shareLink';
 
 interface ShareAppModalProps {
@@ -215,7 +217,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
                 </div>
                 <div>
                   <h3 className="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5">
-                    <span>📲 राइडर ऐप APK (COD Entry Rider Build)</span>
+                    <span>📲 राइडर ऐप (COD Entry हिसाब किताब)</span>
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
                       Rider Only
                     </span>
@@ -237,11 +239,17 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
             <div className="flex items-center gap-2 pt-1">
               <a
                 href={riderApkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
                 download="COD-Entry-Rider-Release.apk"
+                onClick={(e) => {
+                  e.preventDefault();
+                  downloadRiderApk();
+                }}
                 className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow cursor-pointer text-center"
               >
                 <Download className="w-4 h-4" />
-                <span>डाउनलोड राइडर APK</span>
+                <span>डाउनलोड राइडर ऐप (COD Entry हिसाब किताब)</span>
               </a>
 
               <button
@@ -265,12 +273,16 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
             </div>
 
             <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5 px-1">
-              <span>GitHub Release Link:</span>
+              <span>Direct GitHub Asset:</span>
               <a
                 href={riderGithubUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-emerald-400 hover:text-emerald-300 font-mono text-[10px] underline flex items-center gap-1"
+                onClick={(e) => {
+                  e.preventDefault();
+                  downloadRiderApk();
+                }}
+                className="text-emerald-400 hover:text-emerald-300 font-mono text-[10px] underline flex items-center gap-1 cursor-pointer"
                 title="Direct GitHub Releases Download"
               >
                 <span>COD-Entry-Rider-Release.apk</span>
@@ -310,11 +322,17 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
             <div className="flex items-center gap-2 pt-1">
               <a
                 href={adminApkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
                 download="Admin-Payout-Release.apk"
+                onClick={(e) => {
+                  e.preventDefault();
+                  downloadAdminApk();
+                }}
                 className="flex-1 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow cursor-pointer text-center"
               >
                 <Download className="w-4 h-4" />
-                <span>डाउनलोड एडमिन APK</span>
+                <span>डाउनलोड एडमिन ऐप (Admin Control Panel)</span>
               </a>
 
               <button

@@ -557,7 +557,13 @@ function MainCourierApp() {
   const canAccessIncentives = isSuperAdminUser || Boolean(userPermissions.incentives ?? userPermissions.canAccessIncentives);
   const canAccessFestivalGreetings = isSuperAdminUser || Boolean(userPermissions.festivalGreetings ?? userPermissions.canAccessFestivalGreetings);
   const canExportData = isSuperAdminUser || Boolean(userPermissions.canExportData);
-  const canAccessCodCompanion = isSuperAdminUser || Boolean(userPermissions.codCompanionAccess);
+  const isCodAccessEnabled = isSuperAdminUser || Boolean(
+    userPermissions.isCodAccessEnabled ??
+    userPermissions.hasCodPermission ??
+    userPermissions.codCompanionAccess
+  );
+  const hasCodPermission = isCodAccessEnabled;
+  const canAccessCodCompanion = isCodAccessEnabled;
   const canShowCodShareLink = isSuperAdminUser || Boolean(userPermissions.codShareLinkVisibility);
 
   // Derived active hub name (Admin configured or fallback)
@@ -2132,7 +2138,7 @@ function MainCourierApp() {
   }
 
   // Dedicated Viewport Mode: COD हिसाब-किताब Standalone Full-Screen Sub-App Takeover
-  if (isCodStandaloneOpen) {
+  if (isCodStandaloneOpen && isCodAccessEnabled) {
     return (
       <CodStandaloneApp
         onExit={() => setIsCodStandaloneOpen(false)}
@@ -2145,7 +2151,7 @@ function MainCourierApp() {
   }
 
   // In-App Rider Entry Sub-App View: साथी ऐप (CodCompanionApp) with back button
-  if (isCodCompanionOpen) {
+  if (isCodCompanionOpen && isCodAccessEnabled) {
     return (
       <CodCompanionApp
         onBackToMainApp={() => setIsCodCompanionOpen(false)}
@@ -2677,7 +2683,9 @@ function MainCourierApp() {
                 hubName={activeHubName}
                 onOpenCodPortal={() => setIsCodStandaloneOpen(true)}
                 onOpenCodCompanion={() => setIsCodCompanionOpen(true)}
-                canAccessCodCompanion={canAccessCodCompanion}
+                canAccessCodCompanion={isCodAccessEnabled}
+                isCodAccessEnabled={isCodAccessEnabled}
+                hasCodPermission={hasCodPermission}
                 canShowCodShareLink={canShowCodShareLink}
                 codCompanies={userCodCompanies}
               />

@@ -350,6 +350,7 @@ export default defineConfig(({ command, mode }) => {
       host: '0.0.0.0',
       port: 3000,
       strictPort: true,
+      allowedHosts: true,
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
@@ -357,6 +358,7 @@ export default defineConfig(({ command, mode }) => {
       host: '0.0.0.0',
       port: 3000,
       strictPort: true,
+      allowedHosts: true,
     },
   };
 });
