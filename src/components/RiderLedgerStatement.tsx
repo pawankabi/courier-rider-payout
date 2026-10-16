@@ -245,6 +245,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     window.print();
   };
 
+  const isRider = !isAdmin;
+
   // Compile Transactions & Simple Khatabook Math via calculateRiderLedger
   const { 
     timelineRows, 
@@ -253,9 +255,11 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     netBalance, 
     balanceStatus,
     balanceLabel,
+    adminBalanceLabel,
+    riderBalanceLabel,
   } = useMemo(() => {
-    return calculateRiderLedger(statement, sortOrder);
-  }, [statement, sortOrder]);
+    return calculateRiderLedger(statement, sortOrder, isRider);
+  }, [statement, sortOrder, isRider]);
 
   // Admin Actions: Delete Row (Android WebView safe, zero window.confirm)
   const handleConfirmDeleteRow = async () => {
@@ -518,9 +522,9 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     csvContent += `\n"कुल योग (TOTALS)","","${totalPaidToRider}","${totalSettledOrEarned}"\n`;
     csvContent += `"अंतिम शेष (FINAL NET BALANCE)","","${
       balanceStatus === 'rider_due' 
-        ? 'लेना बाकी: Rs ' + netBalance 
+        ? (isAdmin ? 'लेना बाकी / रिकवरी: Rs ' + netBalance : 'हब में जमा करना बाकी है (आपको हब को देना होगा): Rs ' + netBalance)
         : balanceStatus === 'payable' 
-        ? 'देना बाकी: Rs ' + netBalance 
+        ? (isAdmin ? 'देना बाकी: Rs ' + netBalance : 'आपको मिलना बाकी है (हब से प्राप्त होगा): Rs ' + netBalance)
         : 'पूरा हिसाब चुकता: Rs 0'
     }",""\n`;
 
@@ -535,7 +539,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const cleanDigits = statement ? getCleanPhoneDigits(statement.riderPhone).slice(-10) : '';
   const shareText = statement 
-    ? `नमस्ते ${statement.riderName}, आपका हिसाब किताब यहाँ देखें:\n${balanceLabel}\nलिंक: ${statementUrl}` 
+    ? `नमस्ते ${statement.riderName}, आपका हिसाब किताब यहाँ देखें:\n${riderBalanceLabel}\nलिंक: ${statementUrl}` 
     : '';
   const waShareUrl = cleanDigits
     ? `https://wa.me/91${cleanDigits}?text=${encodeURIComponent(shareText)}` 

@@ -50,6 +50,8 @@ export interface LedgerCalculationResult {
   rawDifference: number; // positive = rider owes hub, negative = hub owes rider
   balanceStatus: 'rider_due' | 'payable' | 'settled';
   balanceLabel: string;
+  adminBalanceLabel: string;
+  riderBalanceLabel: string;
 }
 
 /**
@@ -72,7 +74,8 @@ export interface LedgerCalculationResult {
  */
 export function calculateRiderLedger(
   statement: PublicRiderStatement | null | undefined,
-  sortOrder: 'asc' | 'desc' = 'desc'
+  sortOrder: 'asc' | 'desc' = 'desc',
+  isRider: boolean = false
 ): LedgerCalculationResult {
   if (!statement) {
     return {
@@ -85,7 +88,9 @@ export function calculateRiderLedger(
       netBalance: 0,
       rawDifference: 0,
       balanceStatus: 'settled',
-      balanceLabel: '⚪ पूरा हिसाब चुकता: ₹0',
+      balanceLabel: '⚪ हिसाब चुकता: ₹0',
+      adminBalanceLabel: '⚪ हिसाब चुकता: ₹0',
+      riderBalanceLabel: '⚪ हिसाब चुकता: ₹0',
     };
   }
 
@@ -180,18 +185,26 @@ export function calculateRiderLedger(
   const netBalance = Math.abs(rawDifference);
 
   let balanceStatus: 'rider_due' | 'payable' | 'settled' = 'settled';
-  let balanceLabel = '⚪ हिसाब चुकता: ₹0';
+  let adminBalanceLabel = '⚪ हिसाब चुकता: ₹0';
+  let riderBalanceLabel = '⚪ हिसाब चुकता: ₹0';
 
   if (rawDifference > 0) {
+    // CASE 2: Rider owes money to hub (Adv > Earnings)
     balanceStatus = 'rider_due';
-    balanceLabel = `🔴 आपको मिलेगा (लेना बाकी): ₹${formatINR(netBalance)}`;
+    adminBalanceLabel = `लेना बाकी / रिकवरी: ₹${formatINR(netBalance)}`;
+    riderBalanceLabel = `🔴 हब में जमा करना बाकी है (आपको हब को देना होगा): ₹${formatINR(netBalance)}`;
   } else if (rawDifference < 0) {
+    // CASE 1: Hub owes money to rider (Earnings > Adv)
     balanceStatus = 'payable';
-    balanceLabel = `🟢 आपको देना होगा (देना बाकी): ₹${formatINR(netBalance)}`;
+    adminBalanceLabel = `देना बाकी: ₹${formatINR(netBalance)}`;
+    riderBalanceLabel = `🟢 आपको मिलना बाकी है (हब से प्राप्त होगा): ₹${formatINR(netBalance)}`;
   } else {
     balanceStatus = 'settled';
-    balanceLabel = '⚪ हिसाब चुकता: ₹0';
+    adminBalanceLabel = '⚪ हिसाब चुकता: ₹0';
+    riderBalanceLabel = '⚪ हिसाब चुकता: ₹0';
   }
+
+  const balanceLabel = isRider ? riderBalanceLabel : adminBalanceLabel;
 
   // 7. Assemble Unified Transaction Rows
   type DraftRow = Omit<UnifiedTransactionItem, 'runningBalance' | 'runningBalanceLabel'>;
@@ -317,10 +330,18 @@ export function calculateRiderLedger(
     running = running + row.paidToRider - row.settledOrEarned;
     const absBal = Math.abs(running);
     let label = 'Bal. ₹0';
-    if (running > 0) {
-      label = `लेना: ₹${formatINR(absBal)}`;
-    } else if (running < 0) {
-      label = `देना: ₹${formatINR(absBal)}`;
+    if (isRider) {
+      if (running > 0) {
+        label = `जमा करना: ₹${formatINR(absBal)}`;
+      } else if (running < 0) {
+        label = `मिलना बाकी: ₹${formatINR(absBal)}`;
+      }
+    } else {
+      if (running > 0) {
+        label = `लेना: ₹${formatINR(absBal)}`;
+      } else if (running < 0) {
+        label = `देना: ₹${formatINR(absBal)}`;
+      }
     }
     return {
       ...row,
@@ -349,5 +370,7 @@ export function calculateRiderLedger(
     rawDifference,
     balanceStatus,
     balanceLabel,
+    adminBalanceLabel,
+    riderBalanceLabel,
   };
 }
