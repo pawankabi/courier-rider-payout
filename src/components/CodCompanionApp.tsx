@@ -32,7 +32,8 @@ import {
   AlertCircle,
   Plus,
   Package,
-  Receipt
+  Receipt,
+  Banknote
 } from 'lucide-react';
 import { 
   CodDailyEntry, 
@@ -42,9 +43,12 @@ import {
   Rider,
   RiderAdvanceEntry,
   RiderIncentiveEntry,
-  UserPermissions
+  UserPermissions,
+  CashDenomination
 } from '../types';
 import { RiderLedgerStatement } from './RiderLedgerStatement';
+import { CashDenominationModal } from './cod/CashDenominationModal';
+import { DailyConsolidatedDenominationSummary } from './cod/DailyConsolidatedDenominationSummary';
 import { isRiderBuild, getRiderStatementUrl } from '../utils/shareLink';
 import { collection, query, where, getDocs, onSnapshot, doc } from 'firebase/firestore';
 import { signInAnonymously } from 'firebase/auth';
@@ -217,6 +221,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const [editOnline, setEditOnline] = useState<number | string>(0);
   const [editNotes, setEditNotes] = useState('');
   const [isSavingEntry, setIsSavingEntry] = useState(false);
+  const [isDenominationModalOpen, setIsDenominationModalOpen] = useState(false);
+  const [editCashDenomination, setEditCashDenomination] = useState<CashDenomination | null>(null);
+  const [auditDenominationEntry, setAuditDenominationEntry] = useState<CodDailyEntry | null>(null);
 
   // Rider Active Portal Tab: Daily Delivery / COD Submission vs Khatabook Passbook
   const [riderActiveTab, setRiderActiveTab] = useState<'cod_entry' | 'khatabook'>('cod_entry');
@@ -666,6 +673,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     setEditCompany1(targetRow.company1Amount > 0 ? String(targetRow.company1Amount) : '');
     setEditCompany2(targetRow.company2Amount > 0 ? String(targetRow.company2Amount) : '');
     setEditCash(targetRow.cashDeposit > 0 ? String(targetRow.cashDeposit) : '');
+    setEditCashDenomination(targetRow.cashDenomination || null);
     setEditOnline(targetRow.onlineDeposit > 0 ? String(targetRow.onlineDeposit) : '');
     setEditNotes(targetRow.notes || '');
   };
@@ -694,10 +702,25 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
     const c1 = Number(numericCompanyAmounts[hubCodCompanies[0]]) || 0;
     const c2 = Number(numericCompanyAmounts[hubCodCompanies[1]]) || 0;
-    const cash = Number(editCash) || 0;
+
+    // Strict Cash & Denomination Lock for Rider Submission:
+    // If cash is locked for this rider, retain the locked cash & denomination so no alteration can occur
+    const isLockedForThisRider = isRider && Boolean(editingEntry.isCashLocked);
+    const cash = isLockedForThisRider
+      ? (Number(editingEntry.cashDeposit) || 0)
+      : (Number(editCash) || 0);
+    const denominationToSave = isLockedForThisRider
+      ? editingEntry.cashDenomination
+      : (editCashDenomination || editingEntry.cashDenomination);
     const online = Number(editOnline) || 0;
     const totalDeposit = cash + online;
     const balance = totalCod - totalDeposit;
+
+    // Automatic Submission Lock:
+    // As soon as the rider submits/saves the entry for the day:
+    // Automatically set isCashLocked: true in Firestore under that rider's daily COD record.
+    // If rider was temporarily unlocked and submits again, it must IMMEDIATELY AUTO-LOCK again (isCashLocked: true).
+    const willLockCash = isRider ? true : Boolean(editingEntry.isCashLocked);
 
     const updated: CodDailyEntry = {
       ...editingEntry,
@@ -707,12 +730,16 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       companyAmounts: numericCompanyAmounts,
       totalCod,
       cashDeposit: cash,
+      cashDenomination: denominationToSave,
+      isCashLocked: willLockCash,
+      cashLockedAt: willLockCash ? (editingEntry.cashLockedAt || new Date().toISOString()) : undefined,
+      cashLockedBy: willLockCash ? (editingEntry.cashLockedBy || authUser.name) : undefined,
       onlineDeposit: online,
       totalDeposit,
       balance,
       notes: editNotes.trim(),
       status: 'submitted',
-      submittedAt: new Date().toISOString(),
+      submittedAt: editingEntry.submittedAt || new Date().toISOString(),
       submittedBy: authUser.name,
       updatedAt: new Date().toISOString(),
       updatedBy: authUser.name,
@@ -807,6 +834,65 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       );
     } catch {
       showToast('सत्यापन अपडेट विफल हुआ।', 'error');
+    }
+  };
+
+  // 6b. Toggle Cash Lock Override (Admin & Staff Manual Override)
+  const handleToggleCashLock = async (row: CodDailyEntry) => {
+    if (isRider) {
+      showToast('⚠️ केवल हब एडमिन या अधिकृत स्टाफ़ ही कैश लॉक/अनलॉक कर सकते हैं।', 'error');
+      return;
+    }
+    if (!authUser) return;
+
+    const nextLocked = !Boolean(row.isCashLocked);
+    const updated: CodDailyEntry = {
+      ...row,
+      isCashLocked: nextLocked,
+      cashLockedAt: nextLocked ? new Date().toISOString() : undefined,
+      cashLockedBy: nextLocked ? authUser.name : undefined,
+      updatedAt: new Date().toISOString(),
+      updatedBy: authUser.name,
+    };
+
+    // 1. Optimistic local UI update
+    setSheetData((prev) => {
+      const entries = prev.entries || [];
+      const cleanPhone = (updated.riderPhone || '').replace(/\D/g, '').slice(-10);
+      const idx = entries.findIndex(
+        (e) => (e.riderId && e.riderId === updated.riderId) ||
+               (cleanPhone && (e.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanPhone)
+      );
+      let nextEntries: CodDailyEntry[];
+      if (idx >= 0) {
+        nextEntries = [...entries];
+        nextEntries[idx] = updated;
+      } else {
+        nextEntries = [...entries, updated];
+      }
+      return {
+        ...prev,
+        entries: nextEntries,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    showToast(
+      nextLocked
+        ? `🔒 ${row.riderName} का कैश एडिट लॉक किया गया।`
+        : `🔓 ${row.riderName} का कैश एडिट अस्थायी रूप से अनलॉक किया गया (राइडर अब सुधार कर सकते हैं)।`,
+      'success'
+    );
+
+    // 2. Direct Firestore update
+    try {
+      await updateSingleRiderEntryInSheet(selectedDate, updated, {
+        name: authUser.name,
+        role: authUser.role,
+      }, currentHubId);
+    } catch (err) {
+      console.error('Failed to update cash lock in Firestore:', err);
+      showToast('⚠️ कैश लॉक स्थिति सिंक करने में विलंब।', 'info');
     }
   };
 
@@ -2092,7 +2178,35 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                       {/* Cash Deposit */}
                       <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
                         <div className="text-[10px] font-semibold text-slate-500 flex items-center justify-between mb-0.5">
-                          <span>कैश जमा (Cash)</span>
+                          <div className="flex items-center gap-1.5">
+                            <span>कैश जमा (Cash)</span>
+                            {/* 🔒 / 🔓 Cash Lock Indicator & Admin Manual Override */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleCashLock(row);
+                              }}
+                              disabled={isRider}
+                              className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
+                                row.isCashLocked
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200'
+                                  : 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
+                              } ${isRider ? 'cursor-default opacity-90' : 'cursor-pointer active:scale-95'}`}
+                              title={
+                                isRider
+                                  ? row.isCashLocked
+                                    ? '🔒 कैश सबमिट होकर लॉक है (अनलॉक हेतु एडमिन से संपर्क करें)'
+                                    : '🔓 कैश खुला है'
+                                  : row.isCashLocked
+                                  ? '🔒 कैश लॉक है - राइडर को सुधारने देने के लिए अनलॉक करें'
+                                  : '🔓 कैश अनलॉक है - लॉक करने के लिए क्लिक करें'
+                              }
+                            >
+                              <span>{row.isCashLocked ? '🔒' : '🔓'}</span>
+                              <span className="text-[9px]">{row.isCashLocked ? 'Locked' : 'Open'}</span>
+                            </button>
+                          </div>
                           {/* Verification Checkmark */}
                           <button
                             type="button"
@@ -2114,8 +2228,24 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                             <Check className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        <div className="text-sm font-bold text-emerald-600 font-mono">
-                          {formatINR(row.cashDeposit)}
+                        <div className="flex items-center justify-between">
+                          <div className="text-sm font-bold text-emerald-600 font-mono">
+                            {formatINR(row.cashDeposit)}
+                          </div>
+                          {row.cashDenomination && (row.cashDenomination.totalNotes || row.cashDenomination.total) ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setAuditDenominationEntry(row);
+                              }}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[10px] font-bold border border-emerald-300 transition cursor-pointer"
+                              title="कैश नोट विवरण देखें (Denomination Audit)"
+                            >
+                              <Banknote className="w-3 h-3 text-emerald-700" />
+                              <span>{row.cashDenomination.totalNotes || 0} नोट</span>
+                            </button>
+                          ) : null}
                         </div>
                         {row.cashShortage ? (
                           <div className="text-[10px] text-rose-600 font-bold mt-0.5 flex items-center gap-0.5">
@@ -2332,8 +2462,49 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                             {formatINR(row.totalCod)}
                           </td>
                           <td className="py-3 px-3 text-right text-emerald-700 font-semibold">
-                            <span>{formatINR(row.cashDeposit)}</span>
-                            {row.cashVerified && <span className="text-emerald-600 ml-1">✓</span>}
+                            <div className="inline-flex items-center justify-end gap-1.5">
+                              {/* 🔒 / 🔓 Cash Lock Indicator & Admin Manual Override */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleCashLock(row);
+                                }}
+                                disabled={isRider}
+                                className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-bold transition ${
+                                  row.isCashLocked
+                                    ? 'bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200'
+                                    : 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
+                                } ${isRider ? 'cursor-default opacity-90' : 'cursor-pointer active:scale-95'}`}
+                                title={
+                                  isRider
+                                    ? row.isCashLocked
+                                      ? '🔒 कैश सबमिट होकर लॉक है (अनलॉक हेतु एडमिन से संपर्क करें)'
+                                      : '🔓 कैश खुला है'
+                                    : row.isCashLocked
+                                    ? '🔒 कैश लॉक है - राइडर को सुधारने देने के लिए अनलॉक करें'
+                                    : '🔓 कैश अनलॉक है - लॉक करने के लिए क्लिक करें'
+                                }
+                              >
+                                <span>{row.isCashLocked ? '🔒' : '🔓'}</span>
+                              </button>
+                              <span>{formatINR(row.cashDeposit)}</span>
+                              {row.cashVerified && <span className="text-emerald-600">✓</span>}
+                              {row.cashDenomination && (row.cashDenomination.totalNotes || row.cashDenomination.total) ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setAuditDenominationEntry(row);
+                                  }}
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[10px] font-bold border border-emerald-300 transition cursor-pointer"
+                                  title="कैश नोट विवरण देखें (Denomination Audit)"
+                                >
+                                  <Banknote className="w-3 h-3 text-emerald-700" />
+                                  <span>{row.cashDenomination.totalNotes || ''}</span>
+                                </button>
+                              ) : null}
+                            </div>
                           </td>
                           <td className="py-3 px-3 text-right text-sky-700 font-semibold">
                             <span>{formatINR(row.onlineDeposit)}</span>
@@ -2378,6 +2549,16 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* 4. DAILY CONSOLIDATED HUB DENOMINATION SUMMARY */}
+          <div className="mt-5">
+            <DailyConsolidatedDenominationSummary
+              entries={filteredEntries}
+              selectedDate={selectedDate}
+              hubName={currentHubId || 'सरायकेला कूरियर हब'}
+              isDarkTheme={false}
+            />
           </div>
         </div>
       )}
@@ -2460,18 +2641,83 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
               {/* Cash Deposit */}
               <div>
-                <label className="block text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">
-                  कैश जमा (Physical Cash Handed In ₹)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>कैश जमा (Physical Cash Handed In ₹)</span>
+                    {isRider && Boolean(editingEntry.isCashLocked) && (
+                      <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-bold border border-amber-300">
+                        🔒 Locked
+                      </span>
+                    )}
+                  </label>
+                  {/* 💵 Calculator / Cash Denomination Icon Button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsDenominationModalOpen(true)}
+                    disabled={isRider && Boolean(editingEntry.isCashLocked)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-bold text-xs shadow-2xs border transition ${
+                      isRider && Boolean(editingEntry.isCashLocked)
+                        ? 'bg-slate-100 text-slate-400 border-slate-300 cursor-not-allowed opacity-60'
+                        : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border-emerald-300 cursor-pointer active:scale-95'
+                    }`}
+                    title={
+                      isRider && Boolean(editingEntry.isCashLocked)
+                        ? '🔒 कैश लॉक है (सुधार हेतु हब एडमिन/स्टाफ़ से अनलॉक कराएं)'
+                        : 'कैश नोटों का विवरण (Cash Denomination Breakdown)'
+                    }
+                  >
+                    <Banknote className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>💵 नोट विवरण (Denomination)</span>
+                  </button>
+                </div>
                 <input
                   type="number"
                   inputMode="numeric"
                   min="0"
                   placeholder="0"
+                  disabled={isRider && Boolean(editingEntry.isCashLocked)}
+                  readOnly={isRider && Boolean(editingEntry.isCashLocked)}
                   value={editCash}
                   onChange={(e) => setEditCash(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-emerald-50/50 border border-emerald-300 rounded-xl text-emerald-700 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                  className={`w-full px-3.5 py-2.5 rounded-xl font-mono text-lg font-bold focus:outline-none transition ${
+                    isRider && Boolean(editingEntry.isCashLocked)
+                      ? 'bg-slate-100 border border-slate-300 text-slate-500 cursor-not-allowed opacity-90'
+                      : 'bg-emerald-50/50 border border-emerald-300 text-emerald-700 focus:ring-2 focus:ring-emerald-500 focus:bg-white'
+                  }`}
                 />
+
+                {/* Warning notice when Cash is auto-locked */}
+                {isRider && Boolean(editingEntry.isCashLocked) && (
+                  <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-start gap-2 shadow-2xs">
+                    <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                    <span className="font-semibold leading-relaxed">
+                      🔒 कैश सबमिट हो चुका है और अपने-आप लॉक हो गया है। इसमें सुधार के लिए हब एडमिन/स्टाफ़ से अनलॉक कराएं।
+                    </span>
+                  </div>
+                )}
+
+                {editCashDenomination && (editCashDenomination.totalNotes || editCashDenomination.total) ? (
+                  <div className="text-[11px] text-emerald-700 font-semibold mt-1.5 flex items-center justify-between bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                    <span className="flex items-center gap-1">
+                      <Banknote className="w-3 h-3 text-emerald-600" />
+                      नोट विवरण दर्ज: <strong>{editCashDenomination.totalNotes || 0} नोट</strong> (₹{formatINR(editCashDenomination.total)})
+                    </span>
+                    {isRider && Boolean(editingEntry.isCashLocked) ? (
+                      <span className="text-slate-500 font-bold text-[10px] flex items-center gap-0.5">
+                        <Lock className="w-3 h-3" />
+                        सुरक्षित लॉक
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsDenominationModalOpen(true)}
+                        className="text-emerald-800 underline font-bold text-[10px] cursor-pointer"
+                      >
+                        संशोधित करें
+                      </button>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               {/* Online Deposit */}
@@ -2574,6 +2820,38 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             </div>
           </div>
         </div>
+      )}
+
+      {/* =====================================================================
+          MODAL 1.5: CASH DENOMINATION INPUT MODAL (Rider App Screen)
+      ===================================================================== */}
+      <CashDenominationModal
+        isOpen={isDenominationModalOpen}
+        onClose={() => setIsDenominationModalOpen(false)}
+        initialDenomination={editCashDenomination || editingEntry?.cashDenomination}
+        targetCashAmount={Number(editCash) || undefined}
+        riderName={editingEntry?.riderName}
+        date={selectedDate}
+        onConfirm={(denom) => {
+          setEditCashDenomination(denom);
+          setEditCash(denom.total > 0 ? String(denom.total) : '0');
+          showToast(`💵 कुल ₹${formatINR(denom.total)} (${denom.totalNotes || 0} नोट) कैश में दर्ज हुआ!`, 'success');
+        }}
+      />
+
+      {/* =====================================================================
+          MODAL 1.6: INDIVIDUAL RIDER DENOMINATION AUDIT MODAL (Read-Only)
+      ===================================================================== */}
+      {auditDenominationEntry && (
+        <CashDenominationModal
+          isOpen={Boolean(auditDenominationEntry)}
+          onClose={() => setAuditDenominationEntry(null)}
+          initialDenomination={auditDenominationEntry.cashDenomination}
+          targetCashAmount={auditDenominationEntry.cashDeposit}
+          riderName={auditDenominationEntry.riderName}
+          date={auditDenominationEntry.date || selectedDate}
+          readOnly={true}
+        />
       )}
 
       {/* =====================================================================

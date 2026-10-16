@@ -37,7 +37,8 @@ import {
   Plus,
   Bike,
   ArrowRightCircle,
-  Gift
+  Gift,
+  Banknote
 } from 'lucide-react';
 import { 
   Rider, 
@@ -47,8 +48,11 @@ import {
   CodSettings, 
   CodStaffRole,
   RiderAdvanceEntry,
-  RiderIncentiveEntry
+  RiderIncentiveEntry,
+  CashDenomination
 } from '../types';
+import { CashDenominationModal } from './cod/CashDenominationModal';
+import { DailyConsolidatedDenominationSummary } from './cod/DailyConsolidatedDenominationSummary';
 import { 
   loadCodSettings, 
   saveCodSettings, 
@@ -195,8 +199,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
     company2Amount: number;
     cashDeposit: number;
     onlineDeposit: number;
+    cashDenomination?: CashDenomination | null;
     notes: string;
   } | null>(null);
+  const [denomModalRider, setDenomModalRider] = useState<{ rider: CodDailyEntry; denom: CashDenomination | null } | null>(null);
+  const [auditDenomRider, setAuditDenomRider] = useState<CodDailyEntry | null>(null);
 
   // 3. Automated Date Lock & Historical Read-Only Safeguard
   const [ownerTemporaryUnlock, setOwnerTemporaryUnlock] = useState<boolean>(false);
@@ -409,6 +416,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
       company2Amount: row.company2Amount,
       cashDeposit: row.cashDeposit,
       onlineDeposit: row.onlineDeposit,
+      cashDenomination: row.cashDenomination || null,
       notes: row.notes || '',
     });
   };
@@ -436,17 +444,30 @@ export const CodStandaloneApp: React.FC<Props> = ({
     if (targetRow.cashDeposit !== numCash) changes.push(`Cash: ${targetRow.cashDeposit}➔${numCash}`);
     if (targetRow.onlineDeposit !== numOnline) changes.push(`Online: ${targetRow.onlineDeposit}➔${numOnline}`);
 
+    const isSelfRider = activeUser.role === 'rider';
+
     const updatedEntries = gridEntries.map((row) => {
       if (row.riderId !== riderId) return row;
+      const willLockCash = isSelfRider ? true : row.isCashLocked;
+      const effectiveCash = isSelfRider && row.isCashLocked ? row.cashDeposit : numCash;
+      const effectiveDenom = isSelfRider && row.isCashLocked
+        ? row.cashDenomination
+        : (editRowForm.cashDenomination ? editRowForm.cashDenomination : row.cashDenomination);
+      const effectiveTotalDep = effectiveCash + numOnline;
+
       return {
         ...row,
         company1Amount: numC1,
         company2Amount: numC2,
         totalCod,
-        cashDeposit: numCash,
+        cashDeposit: effectiveCash,
+        cashDenomination: effectiveDenom,
+        isCashLocked: willLockCash,
+        cashLockedAt: willLockCash ? (row.cashLockedAt || new Date().toISOString()) : undefined,
+        cashLockedBy: willLockCash ? (row.cashLockedBy || activeUser.name) : undefined,
         onlineDeposit: numOnline,
-        totalDeposit,
-        balance,
+        totalDeposit: effectiveTotalDep,
+        balance: totalCod - effectiveTotalDep,
         notes: editRowForm.notes,
         updatedAt: new Date().toISOString(),
         updatedBy: activeUser.name,
@@ -551,6 +572,41 @@ export const CodStandaloneApp: React.FC<Props> = ({
       nextVal
         ? `✅ Verified ${field.toUpperCase()} for ${targetRow.riderName}`
         : `Unchecked ${field.toUpperCase()} verification for ${targetRow.riderName}`,
+      'success'
+    );
+  };
+
+  // 2b. Toggle Cash Lock Override (Admin & Staff Manual Override)
+  const handleToggleCashLock = async (riderId: string) => {
+    if (!checkFieldVerificationPermission('cash')) {
+      showToast('⚠️ Only Admin or authorized staff can lock/unlock rider cash.', 'error');
+      return;
+    }
+
+    const targetRow = gridEntries.find((r) => r.riderId === riderId);
+    if (!targetRow) return;
+
+    const nextVal = !Boolean(targetRow.isCashLocked);
+
+    const updatedEntries = gridEntries.map((row) => {
+      if (row.riderId !== riderId) return row;
+      return {
+        ...row,
+        isCashLocked: nextVal,
+        cashLockedAt: nextVal ? new Date().toISOString() : undefined,
+        cashLockedBy: nextVal ? activeUser.name : undefined,
+        updatedAt: new Date().toISOString(),
+        updatedBy: activeUser.name,
+      };
+    });
+
+    setGridEntries(updatedEntries);
+    await saveCodDailyEntries(userId, selectedDate, updatedEntries);
+
+    showToast(
+      nextVal
+        ? `🔒 Cash locked for ${targetRow.riderName}`
+        : `🔓 Cash unlocked for ${targetRow.riderName}. Rider can now edit cash and denomination.`,
       'success'
     );
   };
@@ -934,13 +990,16 @@ export const CodStandaloneApp: React.FC<Props> = ({
       return {
         ...row,
         status: 'submitted' as const,
+        isCashLocked: true,
+        cashLockedAt: new Date().toISOString(),
+        cashLockedBy: activeUser.name,
         submittedAt: new Date().toISOString(),
         submittedBy: activeUser.name,
       };
     });
     setGridEntries(updated);
     await saveCodDailyEntries(userId, selectedDate, updated);
-    showToast(`COD submitted for rider row!`, 'success');
+    showToast(`COD submitted for rider row! Cash is auto-locked.`, 'success');
   };
 
   // Day-End Lock (Hub Incharge only)
@@ -1817,17 +1876,39 @@ export const CodStandaloneApp: React.FC<Props> = ({
                           <td className={`p-2.5 transition ${row.cashShortage && row.cashShortage > 0 ? 'bg-rose-950/30 ring-1 ring-rose-500/40' : ''}`}>
                             {isEditingThisRow ? (
                               <div>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="any"
-                                  value={editRowForm?.cashDeposit || ''}
-                                  onChange={(e) =>
-                                    setEditRowForm((prev) => prev && { ...prev, cashDeposit: Math.max(0, parseFloat(e.target.value) || 0) })
-                                  }
-                                  placeholder="0"
-                                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-emerald-200 font-mono font-bold focus:outline-none focus:border-emerald-500"
-                                />
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    disabled={isSelfRider && Boolean(row.isCashLocked)}
+                                    value={editRowForm?.cashDeposit || ''}
+                                    onChange={(e) =>
+                                      setEditRowForm((prev) => prev && { ...prev, cashDeposit: Math.max(0, parseFloat(e.target.value) || 0) })
+                                    }
+                                    placeholder="0"
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-emerald-200 font-mono font-bold focus:outline-none focus:border-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={isSelfRider && Boolean(row.isCashLocked)}
+                                    onClick={() => setDenomModalRider({ rider: row, denom: editRowForm?.cashDenomination || row.cashDenomination || null })}
+                                    className="p-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={isSelfRider && Boolean(row.isCashLocked) ? "🔒 Cash Locked by Hub Admin" : "कैश नोटों का विवरण (Cash Denomination)"}
+                                  >
+                                    <Banknote className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                {isSelfRider && Boolean(row.isCashLocked) && (
+                                  <span className="text-[9px] text-amber-400 font-medium mt-0.5 block leading-tight">
+                                    🔒 कैश सबमिट हो चुका है और अपने-आप लॉक हो गया है। इसमें सुधार के लिए हब एडमिन/स्टाफ़ से अनलॉक कराएं।
+                                  </span>
+                                )}
+                                {editRowForm?.cashDenomination && (editRowForm.cashDenomination.totalNotes || editRowForm.cashDenomination.total) ? (
+                                  <span className="text-[9px] text-emerald-400 font-mono mt-0.5 block">
+                                    ✓ {editRowForm.cashDenomination.totalNotes} नोट (₹{editRowForm.cashDenomination.total})
+                                  </span>
+                                ) : null}
                                 {row.cashShortage && row.cashShortage > 0 && (
                                   <span className="text-[9px] text-rose-400 font-mono mt-0.5 block">
                                     ⚠️ Short: ₹{row.cashShortage}
@@ -1837,9 +1918,22 @@ export const CodStandaloneApp: React.FC<Props> = ({
                             ) : (
                               <div className="flex items-center justify-between gap-1.5">
                                 <div className="flex flex-col min-w-0">
-                                  <span className="font-mono font-bold text-emerald-200 text-xs">
-                                    {formatINR(row.cashDeposit)}
-                                  </span>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-bold text-emerald-200 text-xs">
+                                      {formatINR(row.cashDeposit)}
+                                    </span>
+                                    {row.cashDenomination && (row.cashDenomination.totalNotes || row.cashDenomination.total) ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => setAuditDenomRider(row)}
+                                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-bold border border-emerald-500/40 cursor-pointer"
+                                        title="कैश नोट विवरण देखें (Denomination Audit)"
+                                      >
+                                        <Banknote className="w-2.5 h-2.5" />
+                                        <span>{row.cashDenomination.totalNotes || ''}</span>
+                                      </button>
+                                    ) : null}
+                                  </div>
                                   {row.cashShortage && row.cashShortage > 0 && (
                                     <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                                       <span className="inline-flex items-center gap-0.5 text-[9px] font-black text-rose-300 bg-rose-500/25 px-1 py-0.2 rounded border border-rose-500/40">
@@ -1854,6 +1948,29 @@ export const CodStandaloneApp: React.FC<Props> = ({
                                 </div>
 
                                 <div className="flex items-center gap-1 shrink-0">
+                                  {/* 🔒 / 🔓 Cash Lock Indicator & Admin/Staff Manual Override */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleCashLock(row.riderId)}
+                                    disabled={!checkFieldVerificationPermission('cash')}
+                                    className={`p-1 rounded-lg text-xs font-bold transition active:scale-90 ${
+                                      row.isCashLocked
+                                        ? 'bg-amber-500/25 text-amber-300 border border-amber-500/50 hover:bg-amber-500/35'
+                                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                    } ${!checkFieldVerificationPermission('cash') ? 'cursor-default opacity-80' : 'cursor-pointer'}`}
+                                    title={
+                                      !checkFieldVerificationPermission('cash')
+                                        ? row.isCashLocked
+                                          ? '🔒 कैश लॉक है (अनलॉक हेतु एडमिन से संपर्क करें)'
+                                          : '🔓 कैश अनलॉक है'
+                                        : row.isCashLocked
+                                        ? '🔒 Cash Locked. Click to unlock for rider.'
+                                        : '🔓 Cash Unlocked. Click to lock.'
+                                    }
+                                  >
+                                    <span>{row.isCashLocked ? '🔒' : '🔓'}</span>
+                                  </button>
+
                                   {/* Verification Checkmark */}
                                   <button
                                     type="button"
@@ -2122,6 +2239,16 @@ export const CodStandaloneApp: React.FC<Props> = ({
                   </tr>
                 </tfoot>
               </table>
+            </div>
+
+            {/* Daily Consolidated Hub Denomination Summary */}
+            <div className="mt-4">
+              <DailyConsolidatedDenominationSummary
+                entries={filteredRows}
+                selectedDate={selectedDate}
+                hubName={settings.company1Name ? `${settings.company1Name} Hub` : 'सरायकेला कूरियर हब'}
+                isDarkTheme={true}
+              />
             </div>
 
             {/* 3. DAILY SHORTAGE & OUTSTANDING LEDGER SUMMARY PANEL */}
@@ -3016,6 +3143,39 @@ export const CodStandaloneApp: React.FC<Props> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Cash Denomination Entry Modal (Row Edit) */}
+      {denomModalRider && (
+        <CashDenominationModal
+          isOpen={Boolean(denomModalRider)}
+          onClose={() => setDenomModalRider(null)}
+          initialDenomination={denomModalRider.denom}
+          targetCashAmount={editRowForm?.cashDeposit}
+          riderName={denomModalRider.rider.riderName}
+          date={selectedDate}
+          onConfirm={(denom) => {
+            setEditRowForm((prev) => prev && {
+              ...prev,
+              cashDeposit: denom.total,
+              cashDenomination: denom,
+            });
+            showToast(`💵 कुल ₹${denom.total} (${denom.totalNotes || 0} नोट) कैश में दर्ज हुआ!`, 'success');
+          }}
+        />
+      )}
+
+      {/* Cash Denomination Audit Modal (Read-Only) */}
+      {auditDenomRider && (
+        <CashDenominationModal
+          isOpen={Boolean(auditDenomRider)}
+          onClose={() => setAuditDenomRider(null)}
+          initialDenomination={auditDenomRider.cashDenomination}
+          targetCashAmount={auditDenomRider.cashDeposit}
+          riderName={auditDenomRider.riderName}
+          date={auditDenomRider.date || selectedDate}
+          readOnly={true}
+        />
       )}
     </div>
   );

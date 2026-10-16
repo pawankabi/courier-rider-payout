@@ -29,7 +29,8 @@ import {
   AlertTriangle, 
   ChevronRight,
   LogOut,
-  Smartphone
+  Smartphone,
+  Banknote
 } from 'lucide-react';
 import { 
   Rider, 
@@ -37,8 +38,11 @@ import {
   CodStaffUser, 
   CodAuditLog, 
   CodSettings, 
-  CodStaffRole 
+  CodStaffRole,
+  CashDenomination
 } from '../types';
+import { CashDenominationModal } from './cod/CashDenominationModal';
+import { DailyConsolidatedDenominationSummary } from './cod/DailyConsolidatedDenominationSummary';
 import { 
   loadCodSettings, 
   saveCodSettings, 
@@ -116,6 +120,10 @@ export const CodManagementModal: React.FC<Props> = ({
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [inputPin, setInputPin] = useState('');
   const [pinError, setPinError] = useState('');
+
+  // Cash Denomination Modals State
+  const [denomModalRider, setDenomModalRider] = useState<{ rider: CodDailyEntry; denom: CashDenomination | null } | null>(null);
+  const [auditDenomRider, setAuditDenomRider] = useState<CodDailyEntry | null>(null);
 
   // Company Name Config Popover
   const [isCompanyConfigOpen, setIsCompanyConfigOpen] = useState(false);
@@ -369,6 +377,28 @@ export const CodManagementModal: React.FC<Props> = ({
     );
   };
 
+  const handleDenominationConfirm = (riderId: string, denom: CashDenomination) => {
+    setGridEntries((prev) => {
+      const updated = prev.map((row) => {
+        if (row.riderId !== riderId) return row;
+        const totalDeposit = denom.total + (Number(row.onlineDeposit) || 0);
+        const totalCod = (Number(row.company1Amount) || 0) + (Number(row.company2Amount) || 0);
+        return {
+          ...row,
+          cashDeposit: denom.total,
+          cashDenomination: denom,
+          totalDeposit,
+          balance: totalCod - totalDeposit,
+          updatedAt: new Date().toISOString(),
+          updatedBy: activeUser.name,
+        };
+      });
+      saveCodDailyEntries(userId, selectedDate, updated);
+      return updated;
+    });
+    showToast(`💵 कुल ₹${denom.total} (${denom.totalNotes || 0} नोट) कैश में दर्ज हुआ!`, 'success');
+  };
+
   // Save current grid changes to storage & Firestore
   const handleSaveGrid = async () => {
     setIsSaving(true);
@@ -390,13 +420,50 @@ export const CodManagementModal: React.FC<Props> = ({
       return {
         ...row,
         status: 'submitted' as const,
+        isCashLocked: true,
+        cashLockedAt: new Date().toISOString(),
+        cashLockedBy: activeUser.name,
         submittedAt: new Date().toISOString(),
         submittedBy: activeUser.name,
       };
     });
     setGridEntries(updated);
     await saveCodDailyEntries(userId, selectedDate, updated);
-    showToast(`COD submitted for rider row!`, 'success');
+    showToast(`COD submitted for rider row! Cash is auto-locked.`, 'success');
+  };
+
+  // Toggle Cash Lock Override (Admin & Staff Manual Override)
+  const handleToggleCashLock = async (riderId: string) => {
+    if (activeUser.role === 'rider') {
+      showToast('Only Admin or authorized staff can lock/unlock cash.', 'error');
+      return;
+    }
+
+    const targetRow = gridEntries.find((r) => r.riderId === riderId);
+    if (!targetRow) return;
+
+    const nextVal = !Boolean(targetRow.isCashLocked);
+
+    const updated = gridEntries.map((row) => {
+      if (row.riderId !== riderId) return row;
+      return {
+        ...row,
+        isCashLocked: nextVal,
+        cashLockedAt: nextVal ? new Date().toISOString() : undefined,
+        cashLockedBy: nextVal ? activeUser.name : undefined,
+        updatedAt: new Date().toISOString(),
+        updatedBy: activeUser.name,
+      };
+    });
+
+    setGridEntries(updated);
+    await saveCodDailyEntries(userId, selectedDate, updated);
+    showToast(
+      nextVal
+        ? `🔒 Cash locked for ${targetRow.riderName}`
+        : `🔓 Cash unlocked for ${targetRow.riderName}. Rider can now edit cash and denomination.`,
+      'success'
+    );
   };
 
   // Verify Rider Row (Team Leader / Supervisor / Hub Incharge)
@@ -937,16 +1004,66 @@ export const CodManagementModal: React.FC<Props> = ({
 
                             {/* 5. Cash Deposit */}
                             <td className="p-2.5">
-                              <input
-                                type="number"
-                                min="0"
-                                step="any"
-                                disabled={!canEditRow}
-                                value={row.cashDeposit || ''}
-                                onChange={(e) => handleCellChange(row.riderId, 'cashDeposit', e.target.value)}
-                                placeholder="0"
-                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-emerald-200 font-mono font-bold focus:outline-none focus:border-emerald-500 disabled:opacity-60"
-                              />
+                              <div className="flex items-center gap-1">
+                                {/* 🔒 / 🔓 Cash Lock Indicator & Admin Manual Override */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleCashLock(row.riderId)}
+                                  disabled={activeUser.role === 'rider'}
+                                  className={`p-1 rounded-lg text-xs font-bold transition active:scale-90 ${
+                                    row.isCashLocked
+                                      ? 'bg-amber-500/25 text-amber-300 border border-amber-500/50 hover:bg-amber-500/35'
+                                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                  } ${activeUser.role === 'rider' ? 'cursor-default opacity-80' : 'cursor-pointer'}`}
+                                  title={
+                                    activeUser.role === 'rider'
+                                      ? row.isCashLocked
+                                        ? '🔒 कैश लॉक है (अनलॉक हेतु एडमिन से संपर्क करें)'
+                                        : '🔓 कैश अनलॉक है'
+                                      : row.isCashLocked
+                                      ? '🔒 Cash Locked. Click to unlock for rider.'
+                                      : '🔓 Cash Unlocked. Click to lock.'
+                                  }
+                                >
+                                  <span>{row.isCashLocked ? '🔒' : '🔓'}</span>
+                                </button>
+
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  disabled={!canEditRow || (activeUser.role === 'rider' && Boolean(row.isCashLocked))}
+                                  value={row.cashDeposit || ''}
+                                  onChange={(e) => handleCellChange(row.riderId, 'cashDeposit', e.target.value)}
+                                  placeholder="0"
+                                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-emerald-200 font-mono font-bold focus:outline-none focus:border-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                                />
+                                {canEditRow && !(activeUser.role === 'rider' && Boolean(row.isCashLocked)) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setDenomModalRider({ rider: row, denom: row.cashDenomination || null })}
+                                    className="p-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs shrink-0 cursor-pointer"
+                                    title="कैश नोटों का विवरण (Cash Denomination)"
+                                  >
+                                    <Banknote className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : row.cashDenomination && (row.cashDenomination.totalNotes || row.cashDenomination.total) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setAuditDenomRider(row)}
+                                    className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-bold border border-emerald-500/40 cursor-pointer"
+                                    title="कैश नोट विवरण देखें (Denomination Audit)"
+                                  >
+                                    <Banknote className="w-2.5 h-2.5" />
+                                    <span>{row.cashDenomination.totalNotes || ''}</span>
+                                  </button>
+                                ) : null}
+                              </div>
+                              {activeUser.role === 'rider' && Boolean(row.isCashLocked) && (
+                                <span className="text-[9px] text-amber-400 font-medium mt-0.5 block leading-tight">
+                                  🔒 कैश सबमिट हो चुका है और अपने-आप लॉक हो गया है। इसमें सुधार के लिए हब एडमिन/स्टाफ़ से अनलॉक कराएं।
+                                </span>
+                              )}
                             </td>
 
                             {/* 6. Online Deposit */}
@@ -1073,6 +1190,16 @@ export const CodManagementModal: React.FC<Props> = ({
                     </tr>
                   </tfoot>
                 </table>
+              </div>
+
+              {/* Daily Consolidated Hub Denomination Summary */}
+              <div className="mt-4">
+                <DailyConsolidatedDenominationSummary
+                  entries={filteredRows}
+                  selectedDate={selectedDate}
+                  hubName={hubName || 'सरायकेला कूरियर हब'}
+                  isDarkTheme={true}
+                />
               </div>
             </div>
           )}
@@ -1425,6 +1552,34 @@ export const CodManagementModal: React.FC<Props> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Cash Denomination Entry Modal (Row Edit) */}
+      {denomModalRider && (
+        <CashDenominationModal
+          isOpen={Boolean(denomModalRider)}
+          onClose={() => setDenomModalRider(null)}
+          initialDenomination={denomModalRider.denom}
+          targetCashAmount={denomModalRider.rider.cashDeposit}
+          riderName={denomModalRider.rider.riderName}
+          date={selectedDate}
+          onConfirm={(denom) => {
+            handleDenominationConfirm(denomModalRider.rider.riderId, denom);
+          }}
+        />
+      )}
+
+      {/* Cash Denomination Audit Modal (Read-Only) */}
+      {auditDenomRider && (
+        <CashDenominationModal
+          isOpen={Boolean(auditDenomRider)}
+          onClose={() => setAuditDenomRider(null)}
+          initialDenomination={auditDenomRider.cashDenomination}
+          targetCashAmount={auditDenomRider.cashDeposit}
+          riderName={auditDenomRider.riderName}
+          date={auditDenomRider.date || selectedDate}
+          readOnly={true}
+        />
       )}
 
     </div>

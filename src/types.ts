@@ -411,6 +411,28 @@ export interface CodCompanyConfig {
 
 export const DEFAULT_COD_COMPANIES: string[] = ['Valmo', 'Xpressbees'];
 
+export type DenominationValue = 2000 | 500 | 200 | 100 | 50 | 20 | 10 | 5 | 2 | 1;
+
+export const STANDARD_DENOMINATIONS: DenominationValue[] = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
+
+export interface CashDenomination {
+  2000?: number;
+  500?: number;
+  200?: number;
+  100?: number;
+  50?: number;
+  20?: number;
+  10?: number;
+  5?: number;
+  2?: number;
+  1?: number;
+  totalNotes?: number; // Total count of physical notes
+  total: number; // Grand total amount in ₹
+  notes?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
 export interface CodDailyEntry {
   id: string; // unique key, e.g. `cod_${date}_${riderId}`
   date: string; // YYYY-MM-DD
@@ -429,6 +451,10 @@ export interface CodDailyEntry {
   deliveryCount?: number; // Daily delivery parcel count
   totalCod: number; // Auto-calculated: sum of all company amounts
   cashDeposit: number; // Rider physical cash handed in
+  cashDenomination?: CashDenomination; // Structured breakdown of cash notes
+  isCashLocked?: boolean; // Automatic submission lock & Admin manual override
+  cashLockedAt?: string;
+  cashLockedBy?: string;
   cashVerified?: boolean;
   cashVerifiedBy?: string;
   cashVerifiedAt?: string;
@@ -498,6 +524,7 @@ export interface DailyCodSheetData {
   hubName?: string;
   hubId?: string; // Hub / Owner account UID for multi-tenant isolation
   ownerUid?: string; // Owner UID
+  consolidatedDenominations?: CashDenomination; // Aggregated daily cash note denomination summary
   updatedAt?: string;
 }
 
