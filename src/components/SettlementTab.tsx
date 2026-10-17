@@ -183,16 +183,26 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   }, [settlements, selectedRider, startDate, endDate]);
 
   // Auto-populate advance deduction: If selecting an already settled period, use saved record;
-  // otherwise, auto-deduct total lifetime advance of the rider (independent of selected date range)
+  // otherwise, deduct ONLY true unsettled advances that were created during that date range
   useEffect(() => {
     if (matchingSettlement) {
       setAdvanceAmount(matchingSettlement.advanceAmount || 0);
       setAdvanceDate(matchingSettlement.advanceDate || '');
       setAdvanceReason(matchingSettlement.advanceReason || '');
     } else {
-      // Auto-deduct entire active advance balance of the rider
-      const lifetimeAdv = Number(selectedRider?.totalAdvance) || 0;
-      setAdvanceAmount(lifetimeAdv);
+      // Deduct ONLY true unsettled advances created during that date range
+      const inRangeAdvances = (selectedRider?.advances || []).filter((a) => {
+        if (a.isSettled || a.isDeducted || (a as any).status === 'PAID' || a.settlementId) return false;
+        if (a.id?.startsWith('settle_adj') || a.isRecovery || a.type === 'recovery') return false;
+        const amt = Number(a.amount) || 0;
+        if (amt <= 0) return false;
+        const advDate = a.date || (a.createdAt ? a.createdAt.slice(0, 10) : '');
+        if (startDate && advDate && advDate < startDate) return false;
+        if (endDate && advDate && advDate > endDate) return false;
+        return true;
+      });
+      const periodAdv = inRangeAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+      setAdvanceAmount(periodAdv);
       setAdvanceDate(getTodayDateString());
       setAdvanceReason('');
     }
@@ -210,8 +220,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
 
   // RULE 2: BANK-GRADE CARRY-FORWARD LOGIC (OPENING BALANCE)
-  // Calculate Opening Balance from all transactions prior to startDate:
-  // Opening Balance = (Past Unpaid Delivery Earnings + Past Unsettled Incentives) - (Past Unrecovered Advances + Past Shortages)
+  // Calculate Opening Balance from all transactions prior to startDate, factoring in past paid settlements:
   const openingBalResult = useMemo(() => {
     if (!selectedRider) return null;
     return calculateOpeningBalance(
@@ -219,9 +228,10 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       startDate,
       entries,
       selectedRider.advances || [],
-      selectedRider.incentives || []
+      selectedRider.incentives || [],
+      settlements || []
     );
-  }, [selectedRider, startDate, entries]);
+  }, [selectedRider, startDate, entries, settlements]);
 
   const openingBalance = openingBalResult?.openingBalance || 0;
 
@@ -752,24 +762,24 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                   Deduct Advance Payment (Optional)
                 </h3>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                  कुल एक्टिव एडवांस: {formatINR(selectedRider?.totalAdvance || 0)}
+                  कुल एक्टिव एडवांस: {formatINR(calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id))}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                कुल एक्टिव एडवांस राशि स्वचालित रूप से समायोजित की जाएगी
+                इस अवधि के एडवांस स्वचालित रूप से समायोजित किए जाएंगे
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {(selectedRider?.totalAdvance || 0) > 0 && Number(advanceAmount) !== (selectedRider?.totalAdvance || 0) && (
+            {calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id) > 0 && Number(advanceAmount) !== calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id) && (
               <button
                 type="button"
-                onClick={() => setAdvanceAmount(selectedRider?.totalAdvance || 0)}
+                onClick={() => setAdvanceAmount(calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id))}
                 className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-300 hover:text-white bg-indigo-500/20 px-2.5 py-1 rounded-lg border border-indigo-500/30 transition"
-                title="Use entire lifetime advance"
+                title="Use entire active advance"
               >
-                <span>कुल एडवांस भरें ({formatINR(selectedRider?.totalAdvance || 0)})</span>
+                <span>कुल एक्टिव एडवांस भरें ({formatINR(calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id))})</span>
               </button>
             )}
             {numericAdvance > 0 && (

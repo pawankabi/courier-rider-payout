@@ -125,68 +125,59 @@ export function calculateRiderLedger(
     status: s.status || 'PAID',
   }));
 
-  const totalAdvanceDeducted = salaries.reduce((sum, s) => sum + s.advanceAmount, 0);
+  const paidSalaries = salaries.filter((s) => !s.status || s.status.trim().toUpperCase() === 'PAID');
+  const unpaidSalaries = salaries.filter((s) => s.status && s.status.trim().toUpperCase() !== 'PAID');
+
+  // Total advances already deducted in PAID settlements
+  const totalAdvanceDeductedInPaidSettlements = paidSalaries.reduce((sum, s) => sum + s.advanceAmount, 0);
   
   // Unpaid salaries (status is not PAID)
-  const unpaidSalary = salaries
-    .filter((s) => s.status && s.status.trim().toUpperCase() !== 'PAID')
-    .reduce((sum, s) => sum + s.netTotal, 0);
+  const unpaidSalary = unpaidSalaries.reduce((sum, s) => sum + s.netTotal, 0);
 
-  // 4. Calculate ACTIVE / UNSETTLED ADVANCES (Strict Banking Double-Entry):
+  // Unpaid daily deliveries from recentDeliveries (if present)
+  const unpaidDeliveries = (statement.recentDeliveries || [])
+    .filter((d) => d.status === 'Unpaid')
+    .reduce((sum, d) => sum + (Number(d.totalEarnings) || 0), 0);
+
+  const totalUnpaidEarnings = unpaidSalary + unpaidDeliveries;
+
+  // 4. Calculate ACTIVE / UNSETTLED ADVANCES (Universal Running Balance Law):
   // Recoveries (Cash received from rider) act as credits reducing debt
   const recoveries = (statement.advances || []).filter((a) => {
-    return (a.isRecovery || a.type === 'recovery') && !a.isSettled && !a.settlementId;
+    return (a.isRecovery || a.type === 'recovery') && !a.id?.startsWith('settle_adj');
   });
   const sumRecoveries = recoveries.reduce((sum, r) => sum + Math.abs(Number(r.amount) || 0), 0);
 
-  // Undeducted active advances that have NOT been settled or deducted in any settlement
-  const undeductedAdvances = validAdvances.filter((a) => {
-    if (a.isSettled || a.isDeducted || a.settlementId) return false;
-    if (a.isRecovery || a.type === 'recovery') return false;
+  // Total positive advances given (excluding ghost negative adjustments)
+  const totalAdvancesGiven = validAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+
+  // Total cleared advance pool = advances deducted in paid settlements + cash recoveries
+  const totalAdvanceCleared = totalAdvanceDeductedInPaidSettlements + sumRecoveries;
+
+  // Net active unsettled advances: ONLY true remaining unpaid advance debt
+  const unsettledAdvances = Math.max(0, totalAdvancesGiven - totalAdvanceCleared);
+
+  // 5. Calculate ACTIVE / UNSETTLED INCENTIVES (Universal Running Balance Law):
+  // Find latest paid settlement date
+  const latestPaidSettlementDate = paidSalaries.map((s) => s.endDate).sort().pop() || '';
+
+  const approvedUnsettledIncentives = validIncentives.filter((inc) => {
+    if (inc.isSettled || inc.isPaid || (inc as any).status === 'PAID' || inc.settlementId) return false;
+    const incDate = inc.date || (inc.createdAt ? inc.createdAt.slice(0, 10) : '');
+    // If incentive was from a period covered by a paid settlement, it is considered settled
+    if (latestPaidSettlementDate && incDate && incDate <= latestPaidSettlementDate) {
+      return false;
+    }
     return true;
   });
-  const sumUndeductedAdvances = Math.max(
-    0,
-    undeductedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0) - sumRecoveries
-  );
-  const recordedTotalAdvance = typeof statement.totalAdvance === 'number' ? Math.max(0, Number(statement.totalAdvance) || 0) : 0;
 
-  let unsettledAdvances = 0;
-  if (statement.totalAdvance === 0) {
-    unsettledAdvances = 0;
-  } else if (sumUndeductedAdvances > 0) {
-    unsettledAdvances = sumUndeductedAdvances;
-  } else if (recordedTotalAdvance > 0) {
-    unsettledAdvances = recordedTotalAdvance;
-  } else {
-    unsettledAdvances = 0;
-  }
-
-  // 5. Calculate ACTIVE / UNSETTLED INCENTIVES (Strict Rule 1 - Zero Ghost Deductions):
-  // Incentives that have NOT yet been settled or paid out
-  const undeductedIncentives = validIncentives.filter((i) => {
-    if (i.isSettled || i.isPaid || i.settlementId) return false;
-    return true;
-  });
-  const sumUndeductedIncentives = undeductedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
-  const recordedTotalIncentive = typeof statement.totalIncentive === 'number' ? Math.max(0, Number(statement.totalIncentive) || 0) : 0;
-
-  let unsettledIncentives = 0;
-  if (statement.totalIncentive === 0) {
-    unsettledIncentives = 0;
-  } else if (sumUndeductedIncentives > 0) {
-    unsettledIncentives = sumUndeductedIncentives;
-  } else if (recordedTotalIncentive > 0) {
-    unsettledIncentives = recordedTotalIncentive;
-  } else {
-    unsettledIncentives = 0;
-  }
+  const unsettledIncentives = approvedUnsettledIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
 
   // 6. Net Balance Formula:
   // Total Active Advances = unsettledAdvances (Rider Due / लेना बाकी)
-  // Total Active Earnings = unsettledIncentives + unpaidSalary (Payable to Rider / देना बाकी)
+  // Total Active Earnings = unsettledIncentives + totalUnpaidEarnings (Payable to Rider / देना बाकी)
   const totalRiderDue = unsettledAdvances;
-  const totalRiderReceivable = unsettledIncentives + unpaidSalary;
+  const totalRiderReceivable = unsettledIncentives + totalUnpaidEarnings;
   const rawDifference = totalRiderDue - totalRiderReceivable;
   const netBalance = Math.abs(rawDifference);
 
@@ -197,12 +188,12 @@ export function calculateRiderLedger(
   if (rawDifference > 0) {
     // CASE 2: Rider owes money to hub (Adv > Earnings)
     balanceStatus = 'rider_due';
-    adminBalanceLabel = `लेना बाकी / रिकवरी: ₹${formatINR(netBalance)}`;
+    adminBalanceLabel = `🔴 लेना बाकी / रिकवरी: ₹${formatINR(netBalance)}`;
     riderBalanceLabel = `🔴 हब में जमा करना बाकी है (आपको हब को देना होगा): ₹${formatINR(netBalance)}`;
   } else if (rawDifference < 0) {
     // CASE 1: Hub owes money to rider (Earnings > Adv)
     balanceStatus = 'payable';
-    adminBalanceLabel = `देना बाकी: ₹${formatINR(netBalance)}`;
+    adminBalanceLabel = `🟢 देना बाकी: ₹${formatINR(netBalance)}`;
     riderBalanceLabel = `🟢 आपको मिलना बाकी है (हब से प्राप्त होगा): ₹${formatINR(netBalance)}`;
   } else {
     balanceStatus = 'settled';

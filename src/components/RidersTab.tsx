@@ -1414,11 +1414,11 @@ export const RidersTab: React.FC<Props> = ({
             });
             // RULE 1: STRICT INCENTIVE & ADVANCE SETTLEMENT CONSUMPTION (SOLVES 211 BUG)
             // Double-entry banking grade: zero ghost deductions, honors recoveries and permanent settlement
-            const activeAdvanceBalance = calculateActiveAdvanceTotal(rider.advances);
+            const activeAdvanceBalance = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
 
             // Active Incentive: ONLY sum active, UNSETTLED incentives (!i.isSettled && !i.isPaid).
             // If settled or balance is ₹0, this returns 0 (fixes the Shambhu Mahato +₹211 ghost badge).
-            const activeIncentiveBalance = calculateActiveIncentiveTotal(rider.incentives);
+            const activeIncentiveBalance = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
 
             return (
               <div

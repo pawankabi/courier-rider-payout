@@ -1147,6 +1147,17 @@ function MainCourierApp() {
           saveRiderToFirestore(currentUid, r, ownerEmail).catch(() => {});
         });
       }
+      // Re-index public statement ledgers so public statements immediately reflect हिसाब चुकता: ₹0
+      updatedRiders.forEach((r) => {
+        syncPublicRiderStatement(
+          r,
+          r.advances || [],
+          settlements,
+          entries,
+          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+          userRateConfig.hubSignature
+        ).catch(() => {});
+      });
     }
   }, [riders.length, settlements.length, inspectedUser, currentUser?.uid]);
 
