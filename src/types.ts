@@ -9,6 +9,11 @@ export interface RiderAdvanceEntry {
   updatedAt?: string; // Optional update timestamp
   createdBy?: string;
   settlementId?: string;
+  isSettled?: boolean;
+  isDeducted?: boolean;
+  settledPayoutId?: string;
+  isRecovery?: boolean; // Cash received from rider / advance recovery (Credit)
+  type?: 'advance' | 'recovery';
 }
 
 export interface RiderIncentiveEntry {
@@ -22,6 +27,9 @@ export interface RiderIncentiveEntry {
   createdAt: string; // ISO string
   createdBy?: string;
   settlementId?: string;
+  isSettled?: boolean;
+  isPaid?: boolean;
+  settledPayoutId?: string;
   source?: 'manual' | 'surplus';
 }
 
@@ -135,6 +143,10 @@ export interface SettlementRecord {
   createdByEmail?: string;
   workspaceId?: string;
   userId?: string;
+  openingBalance?: number;
+  openingBalanceType?: 'payable' | 'rider_debt' | 'zero';
+  settledIncentiveIds?: string[];
+  settledAdvanceIds?: string[];
 }
 
 export type TabType = 'entry' | 'riders' | 'advance' | 'incentive' | 'reports' | 'settlement' | 'festivals' | 'admin';

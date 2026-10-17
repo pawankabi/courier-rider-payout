@@ -53,6 +53,10 @@ import {
   getTodayDateString, 
   getDaysAgoDateString 
 } from '../utils/formatters';
+import {
+  calculateActiveAdvanceTotal,
+  calculateActiveIncentiveTotal
+} from '../utils/payoutCalculations';
 import { FestivalBannerCard } from './FestivalBannerCard';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
 import { BulkDateRangeSmsModal } from './BulkDateRangeSmsModal';
@@ -193,11 +197,11 @@ export const RidersTab: React.FC<Props> = ({
   );
   const canViewCodModule = isCodAuthorized;
 
-  // Status Filter State: 'unpaid' (Default), 'all', 'active', 'inactive'
-  const [statusFilter, setStatusFilter] = useState<'unpaid' | 'all' | 'active' | 'inactive'>(() => {
+  // Status Filter State: 'unpaid' (Default), 'paid', 'all', 'active', 'inactive'
+  const [statusFilter, setStatusFilter] = useState<'unpaid' | 'paid' | 'all' | 'active' | 'inactive'>(() => {
     try {
       const saved = localStorage.getItem('cp_riders_status_filter');
-      if (saved === 'all' || saved === 'unpaid' || saved === 'active' || saved === 'inactive') return saved as any;
+      if (saved === 'all' || saved === 'unpaid' || saved === 'paid' || saved === 'active' || saved === 'inactive') return saved as any;
     } catch {}
     return 'unpaid';
   });
@@ -355,6 +359,51 @@ export const RidersTab: React.FC<Props> = ({
     const parcels = riderEntries.reduce((sum, e) => sum + e.parcels, 0);
     const earnings = riderEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
     return { parcels, earnings, count: riderEntries.length };
+  };
+
+  // Date-Range-Aware Payment Calculation for Riders
+  const calculateEarningsForRange = (riderId: string, startDate?: string, endDate?: string) => {
+    return entries
+      .filter((e) => {
+        if (e.riderId !== riderId) return false;
+        if (startDate && e.date < startDate) return false;
+        if (endDate && e.date > endDate) return false;
+        return true;
+      })
+      .reduce((sum, e) => sum + (Number(e.totalEarnings) || 0), 0);
+  };
+
+  const calculateSettlementsPaidForRange = (riderId: string, startDate?: string, endDate?: string) => {
+    const riderEntriesInRange = entries.filter((e) => {
+      if (e.riderId !== riderId) return false;
+      if (startDate && e.date < startDate) return false;
+      if (endDate && e.date > endDate) return false;
+      return true;
+    });
+
+    const paidFromEntries = riderEntriesInRange
+      .filter((e) => e.status === 'Paid')
+      .reduce((sum, e) => sum + (Number(e.totalEarnings) || 0), 0);
+
+    const matchingSettlements = (settlements || []).filter((s) => {
+      if (s.riderId !== riderId) return false;
+      if (!s.status || s.status.trim().toUpperCase() === 'PAID') {
+        if (startDate && endDate && s.startDate === startDate && s.endDate === endDate) return true;
+        if (startDate && endDate && s.startDate >= startDate && s.endDate <= endDate) return true;
+        if (s.entryIds && s.entryIds.some((id) => riderEntriesInRange.some((e) => e.id === id))) return true;
+      }
+      return false;
+    });
+
+    const settlementsGross = matchingSettlements.reduce((sum, s) => sum + (Number(s.grossTotal) || 0), 0);
+
+    return Math.max(paidFromEntries, settlementsGross);
+  };
+
+  const getRiderRangePendingBalance = (riderId: string, startDate?: string, endDate?: string) => {
+    const rangeEarnings = calculateEarningsForRange(riderId, startDate, endDate);
+    const rangePaid = calculateSettlementsPaidForRange(riderId, startDate, endDate);
+    return rangeEarnings - rangePaid;
   };
 
   const filteredRangeEntries = entries.filter((e) => {
@@ -745,10 +794,19 @@ export const RidersTab: React.FC<Props> = ({
     return stats.unpaidAmount > 0;
   });
 
+  // Date-range-aware dynamic counts for Unpaid and Paid filter chips
+  const unpaidInRangeCount = riders.filter((r) => {
+    return getRiderRangePendingBalance(r.id, rangeStartDate, rangeEndDate) > 0;
+  }).length;
+
+  const paidInRangeCount = riders.filter((r) => {
+    return getRiderRangePendingBalance(r.id, rangeStartDate, rangeEndDate) <= 0;
+  }).length;
+
   const activeRidersCount = riders.filter((r) => r.active !== false).length;
   const inactiveRidersCount = riders.filter((r) => r.active === false).length;
 
-  // Filter riders by search query AND statusFilter ('unpaid', 'all', 'active', 'inactive')
+  // Filter riders by search query AND statusFilter ('unpaid', 'paid', 'all', 'active', 'inactive')
   const filteredRiders = riders.filter((r) => {
     const matchesSearch =
       r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -757,8 +815,13 @@ export const RidersTab: React.FC<Props> = ({
     if (!matchesSearch) return false;
 
     if (statusFilter === 'unpaid') {
-      const stats = getRiderStats(r.id);
-      return stats.unpaidAmount > 0;
+      const rangePendingBalance = getRiderRangePendingBalance(r.id, rangeStartDate, rangeEndDate);
+      return rangePendingBalance > 0;
+    }
+
+    if (statusFilter === 'paid') {
+      const rangePendingBalance = getRiderRangePendingBalance(r.id, rangeStartDate, rangeEndDate);
+      return rangePendingBalance <= 0;
     }
 
     if (statusFilter === 'active') {
@@ -781,8 +844,8 @@ export const RidersTab: React.FC<Props> = ({
       return b.name.localeCompare(a.name);
     }
     if (sortBy === 'unpaid-desc') {
-      const unpaidA = getRiderStats(a.id).unpaidAmount;
-      const unpaidB = getRiderStats(b.id).unpaidAmount;
+      const unpaidA = getRiderRangePendingBalance(a.id, rangeStartDate, rangeEndDate);
+      const unpaidB = getRiderRangePendingBalance(b.id, rangeStartDate, rangeEndDate);
       return unpaidB - unpaidA;
     }
     if (sortBy === 'parcels-desc') {
@@ -1175,31 +1238,57 @@ export const RidersTab: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setStatusFilter('unpaid')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 ${
                 statusFilter === 'unpaid'
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm shadow-amber-500/10'
                   : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
               }`}
             >
-              Unpaid Balances ({ridersWithUnpaid.length})
+              <span>Unpaid (देना बाकी)</span>
+              <span className={`px-1.5 py-0.5 rounded-md text-[11px] font-bold ${
+                statusFilter === 'unpaid' ? 'bg-amber-500/30 text-amber-200' : 'bg-slate-700/60 text-slate-300'
+              }`}>
+                {unpaidInRangeCount}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('paid')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 ${
+                statusFilter === 'paid'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm shadow-emerald-500/10'
+                  : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
+              }`}
+            >
+              <span>Paid (भुगतान पूर्ण)</span>
+              <span className={`px-1.5 py-0.5 rounded-md text-[11px] font-bold ${
+                statusFilter === 'paid' ? 'bg-emerald-500/30 text-emerald-200' : 'bg-slate-700/60 text-slate-300'
+              }`}>
+                {paidInRangeCount}
+              </span>
             </button>
             <button
               type="button"
               onClick={() => setStatusFilter('all')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 ${
                 statusFilter === 'all'
-                  ? 'bg-blue-600/20 text-blue-300 border border-blue-500/40'
+                  ? 'bg-blue-600/20 text-blue-300 border border-blue-500/40 shadow-sm shadow-blue-500/10'
                   : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
               }`}
             >
-              All ({riders.length})
+              <span>All</span>
+              <span className={`px-1.5 py-0.5 rounded-md text-[11px] font-bold ${
+                statusFilter === 'all' ? 'bg-blue-500/30 text-blue-200' : 'bg-slate-700/60 text-slate-300'
+              }`}>
+                {riders.length}
+              </span>
             </button>
             <button
               type="button"
               onClick={() => setStatusFilter('active')}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
                 statusFilter === 'active'
-                  ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40'
+                  ? 'bg-teal-600/20 text-teal-300 border border-teal-500/40'
                   : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
               }`}
             >
@@ -1270,7 +1359,29 @@ export const RidersTab: React.FC<Props> = ({
           </div>
         ) : sortedFilteredRiders.length === 0 ? (
           <div className="bg-slate-850 border border-slate-755 rounded-2xl p-8 text-center text-slate-400 text-sm">
-            No riders match the current filter or search query.
+            {statusFilter === 'unpaid' ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-3">
+                <CheckCircle2 className="w-9 h-9 text-emerald-400 mb-1" />
+                <span className="font-bold text-emerald-300 text-base">
+                  0 Unpaid - इस समय सीमा के सभी भुगतान पूर्ण हैं
+                </span>
+                <span className="text-xs text-slate-400 max-w-md">
+                  चुनी गई तारीख रेंज ({rangeStartDate ? formatDateDisplay(rangeStartDate) : 'प्रारंभ'} से {rangeEndDate ? formatDateDisplay(rangeEndDate) : 'आज'}) के सभी राइडर्स का भुगतान पूर्ण हो चुका है।
+                </span>
+              </div>
+            ) : statusFilter === 'paid' ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-3">
+                <AlertCircle className="w-9 h-9 text-sky-400 mb-1" />
+                <span className="font-bold text-sky-300 text-base">
+                  0 Paid - इस समय सीमा में कोई चुकता राइडर नहीं है
+                </span>
+                <span className="text-xs text-slate-400 max-w-md">
+                  इस समय सीमा के सभी राइडर्स का पे-आउट अभी बाकी (Unpaid) है।
+                </span>
+              </div>
+            ) : (
+              'No riders match the current filter or search query.'
+            )}
           </div>
         ) : (
           sortedFilteredRiders.map((rider, index) => {
@@ -1301,52 +1412,13 @@ export const RidersTab: React.FC<Props> = ({
               }
               return true;
             });
-            const sumNewlyAddedAdvances = undeductedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+            // RULE 1: STRICT INCENTIVE & ADVANCE SETTLEMENT CONSUMPTION (SOLVES 211 BUG)
+            // Double-entry banking grade: zero ghost deductions, honors recoveries and permanent settlement
+            const activeAdvanceBalance = calculateActiveAdvanceTotal(rider.advances);
 
-            let activeAdvanceBalance = 0;
-            if (hasPaidSettlements) {
-              if (sumNewlyAddedAdvances > 0) {
-                activeAdvanceBalance = sumNewlyAddedAdvances;
-              } else {
-                const totalDeductedInSettlements = riderPaidSettlements.reduce(
-                  (sum, s) => sum + (Number(s.advanceAmount) || 0),
-                  0
-                );
-                const rawTotal = Number(rider.totalAdvance) || 0;
-                activeAdvanceBalance = Math.max(0, rawTotal - totalDeductedInSettlements);
-              }
-            } else {
-              activeAdvanceBalance = Number(rider.totalAdvance) || 0;
-            }
-
-            // Active Incentive:
-            const undeductedIncentives = (rider.incentives || []).filter((i) => {
-              const amt = Number(i.amount) || 0;
-              if (amt <= 0) return false;
-              if (i.settlementId) return false;
-              if (latestPaidSettlementTimestamp > 0) {
-                const incTime = new Date(i.date || i.createdAt || 0).getTime();
-                if (incTime > 0 && incTime <= latestPaidSettlementTimestamp) return false;
-              }
-              return true;
-            });
-            const sumNewlyAddedIncentives = undeductedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
-
-            let activeIncentiveBalance = 0;
-            if (hasPaidSettlements) {
-              if (sumNewlyAddedIncentives > 0) {
-                activeIncentiveBalance = sumNewlyAddedIncentives;
-              } else {
-                const totalPaidIncentivesInSettlements = riderPaidSettlements.reduce(
-                  (sum, s) => sum + (Number(s.incentiveAmount) || 0),
-                  0
-                );
-                const rawTotal = Number(rider.totalIncentive) || 0;
-                activeIncentiveBalance = Math.max(0, rawTotal - totalPaidIncentivesInSettlements);
-              }
-            } else {
-              activeIncentiveBalance = Number(rider.totalIncentive) || 0;
-            }
+            // Active Incentive: ONLY sum active, UNSETTLED incentives (!i.isSettled && !i.isPaid).
+            // If settled or balance is ₹0, this returns 0 (fixes the Shambhu Mahato +₹211 ghost badge).
+            const activeIncentiveBalance = calculateActiveIncentiveTotal(rider.incentives);
 
             return (
               <div
@@ -1460,12 +1532,19 @@ export const RidersTab: React.FC<Props> = ({
                       </div>
                     )}
 
-                    {/* Incentive Total Badge - Auto-zeros on post-payout */}
-                    {(activeIncentiveBalance > 0 || hasPaidSettlements || Number(rider.totalIncentive || 0) > 0) && (
+                    {/* Incentive Total Badge - Strictly active unsettled incentives only (Auto-zeros on post-payout, hides ghost +₹211) */}
+                    {activeIncentiveBalance > 0 ? (
                       <div className="text-right">
-                        <div className={`text-xs ${activeIncentiveBalance > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>Incentive Total</div>
-                        <div className={`text-sm font-bold font-mono ${activeIncentiveBalance > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                          {activeIncentiveBalance > 0 ? `+${formatINR(activeIncentiveBalance)}` : '₹0'}
+                        <div className="text-xs text-emerald-400">Incentive Total</div>
+                        <div className="text-sm font-bold font-mono text-emerald-400">
+                          +{formatINR(activeIncentiveBalance)}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-right">
+                        <div className="text-xs text-slate-500">Incentive Total</div>
+                        <div className="text-sm font-bold font-mono text-slate-500">
+                          ₹0
                         </div>
                       </div>
                     )}

@@ -44,6 +44,12 @@ import {
   getWhatsAppUrl, 
   getNativeSmsUrl 
 } from '../services/smsService';
+import {
+  calculateOpeningBalance,
+  isUnsettledIncentive,
+  calculateActiveAdvanceTotal,
+  calculateActiveIncentiveTotal
+} from '../utils/payoutCalculations';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 import { VerifiedBadge } from './VerifiedBadge';
 
@@ -203,30 +209,57 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   const totalIncentiveAmount = filteredEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
   const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
 
+  // RULE 2: BANK-GRADE CARRY-FORWARD LOGIC (OPENING BALANCE)
+  // Calculate Opening Balance from all transactions prior to startDate:
+  // Opening Balance = (Past Unpaid Delivery Earnings + Past Unsettled Incentives) - (Past Unrecovered Advances + Past Shortages)
+  const openingBalResult = useMemo(() => {
+    if (!selectedRider) return null;
+    return calculateOpeningBalance(
+      selectedRider.id,
+      startDate,
+      entries,
+      selectedRider.advances || [],
+      selectedRider.incentives || []
+    );
+  }, [selectedRider, startDate, entries]);
+
+  const openingBalance = openingBalResult?.openingBalance || 0;
+
   // Additional bonuses & incentives logged for this rider (festival bonus, performance rewards, surplus credits)
-  // Continuous financial ledger: Unsettled incentives are calculated across all-time up to present moment (date-independent)
-  const riderBonusIncentives = useMemo(() => {
+  // Current Period Unsettled Incentives strictly within [startDate, endDate]
+  const currentPeriodIncentives = useMemo(() => {
     if (!selectedRider) return 0;
     if (matchingSettlement) {
       // If viewing an already saved historical settlement, reflect settled gross minus delivery
       return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
     }
     if (!Array.isArray(selectedRider.incentives)) return 0;
-    // All-time unsettled incentives up to present moment
     return selectedRider.incentives
-      .filter((inc) => !inc.settlementId)
+      .filter((inc) => {
+        if (!isUnsettledIncentive(inc)) return false;
+        const incDate = inc.date || (inc.createdAt ? inc.createdAt.slice(0, 10) : '');
+        if (startDate && incDate && incDate < startDate) return false;
+        if (endDate && incDate && incDate > endDate) return false;
+        return true;
+      })
       .reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
-  }, [selectedRider, matchingSettlement, deliveryGross]);
+  }, [selectedRider, matchingSettlement, deliveryGross, startDate, endDate]);
+
+  const riderBonusIncentives = currentPeriodIncentives;
 
   // Gross Earning = Sum of daily delivery earnings + logged fleet incentives/bonuses
   const grossTotal = deliveryGross + riderBonusIncentives;
 
-  // Real-Time Calculation with Advance Deduction:
-  // Gross Earning = Delivery Earnings + Bonus/Incentive within the selected Date Range
-  // Total Advance Deducted = Entire active advance balance of the rider
-  // Net Settlement = Gross Earning - Total Advance
+  // RULE 3: ACCURATE NET PAYABLE CALCULATION (FOR THE ACTIVE CYCLE)
+  // Final Net Payable Formula for Selected Period:
+  // Net Payable = (Opening Balance) 
+  //             + (Current Period Deliveries / Base Earnings) 
+  //             + (Current Period Unsettled Incentives) 
+  //             - (Active Unsettled Advances taken in current period).
   const numericAdvance = Math.max(0, Number(advanceAmount) || 0);
-  const netSettlement = grossTotal - numericAdvance;
+  const netSettlement = matchingSettlement
+    ? matchingSettlement.netTotal
+    : (openingBalance + grossTotal - numericAdvance);
   const netPayableAmount = Math.max(0, netSettlement);
 
   const unpaidGross = filteredEntries
@@ -267,7 +300,9 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       incentiveAmount: totalIncentiveAmount,
       grossTotal,
       advanceReason: advanceReason.trim() || undefined,
-    });
+      openingBalance,
+      openingBalanceType: openingBalResult?.status || 'zero',
+    } as any);
 
     // Fire celebratory confetti!
     try {
@@ -629,6 +664,78 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         </div>
       </div>
 
+      {/* RULE 2: BANK-GRADE OPENING BALANCE & CARRY-FORWARD DISPLAY */}
+      {selectedRider && openingBalResult && (
+        <div
+          id="opening-balance-strip"
+          className={`rounded-2xl p-3.5 sm:p-4 border backdrop-blur-md shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            openingBalResult.status === 'payable'
+              ? 'bg-emerald-950/30 border-emerald-500/40'
+              : openingBalResult.status === 'rider_debt'
+              ? 'bg-rose-950/30 border-rose-500/40'
+              : 'bg-slate-900/60 border-slate-800'
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                openingBalResult.status === 'payable'
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                  : openingBalResult.status === 'rider_debt'
+                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+            >
+              <History className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                  प्रारंभिक शेष (Opening Balance - Previous Cycle Carry Forward)
+                </span>
+                <span
+                  className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
+                    openingBalResult.status === 'payable'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : openingBalResult.status === 'rider_debt'
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}
+                >
+                  {openingBalResult.status === 'payable'
+                    ? 'हब से पाना बाकी'
+                    : openingBalResult.status === 'rider_debt'
+                    ? 'हब को देना है'
+                    : 'हिसाब चुकता (₹0)'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {startDate ? `${formatDateDisplay(startDate)} से पूर्व के अनपेड पारिश्रमिक, एक्टिव इंसेंटिव एवं अनपेड एडवांस का शुद्ध शेष` : 'पूर्व चक्र का शुद्ध शेष'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 sm:self-center">
+            <span className="text-xs text-slate-400">पिछला बकाया:</span>
+            <span
+              className={`text-sm sm:text-base font-extrabold font-mono px-3 py-1 rounded-xl border ${
+                openingBalResult.status === 'payable'
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+                  : openingBalResult.status === 'rider_debt'
+                  ? 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                  : 'bg-slate-800 text-slate-300 border-slate-700'
+              }`}
+            >
+              {openingBalResult.openingBalance > 0
+                ? `+₹${formatINR(openingBalResult.openingBalance)}`
+                : openingBalResult.openingBalance < 0
+                ? `-₹${formatINR(Math.abs(openingBalResult.openingBalance))}`
+                : '₹0'}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* NEW: Advance Payment Deduction Section */}
       <div
         id="advance-payment-deduction-section"
@@ -771,8 +878,20 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         {/* Real-time Calculation Breakdown Strip */}
         <div className="mt-4 p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+            {openingBalance !== 0 && (
+              <>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-slate-400">प्रारंभिक (Opening):</span>
+                  <span className={`font-bold font-mono ${openingBalance > 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {openingBalance > 0 ? `+${formatINR(openingBalance)}` : `-${formatINR(Math.abs(openingBalance))}`}
+                  </span>
+                </div>
+                <span className="text-slate-600 hidden sm:inline">+</span>
+              </>
+            )}
+
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-slate-400">Gross Total:</span>
+              <span className="text-slate-400">अवधि पारिश्रमिक (Period Gross):</span>
               <span className="font-bold text-white">{formatINR(grossTotal)}</span>
               {riderBonusIncentives > 0 && (
                 <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-bold px-1.5 py-0.2 rounded border border-emerald-500/40">

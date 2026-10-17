@@ -132,46 +132,52 @@ export function calculateRiderLedger(
     .filter((s) => s.status && s.status.trim().toUpperCase() !== 'PAID')
     .reduce((sum, s) => sum + s.netTotal, 0);
 
-  // 4. Calculate ACTIVE / UNSETTLED ADVANCES:
-  // Advances that have NOT been deducted in any settled payout.
-  // Net balance of all advance entries (positive advances minus explicit settlement deduction adjustment entries)
-  const netAdvancesFromList = (statement.advances || []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-  // Undeducted advances that have no settlementId attached
-  const undeductedAdvances = (statement.advances || []).filter((a) => {
-    const amt = Number(a.amount) || 0;
-    if (amt <= 0) return false;
-    if (a.settlementId) return false;
-    if (a.id?.startsWith('settle_adj') || a.reason?.includes('सेटलमेंट समायोजन')) return false;
+  // 4. Calculate ACTIVE / UNSETTLED ADVANCES (Strict Banking Double-Entry):
+  // Recoveries (Cash received from rider) act as credits reducing debt
+  const recoveries = (statement.advances || []).filter((a) => {
+    return (a.isRecovery || a.type === 'recovery') && !a.isSettled && !a.settlementId;
+  });
+  const sumRecoveries = recoveries.reduce((sum, r) => sum + Math.abs(Number(r.amount) || 0), 0);
+
+  // Undeducted active advances that have NOT been settled or deducted in any settlement
+  const undeductedAdvances = validAdvances.filter((a) => {
+    if (a.isSettled || a.isDeducted || a.settlementId) return false;
+    if (a.isRecovery || a.type === 'recovery') return false;
     return true;
   });
-  const sumUndeductedAdvances = undeductedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const sumUndeductedAdvances = Math.max(
+    0,
+    undeductedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0) - sumRecoveries
+  );
   const recordedTotalAdvance = typeof statement.totalAdvance === 'number' ? Math.max(0, Number(statement.totalAdvance) || 0) : 0;
 
   let unsettledAdvances = 0;
-  if (recordedTotalAdvance > 0) {
-    unsettledAdvances = recordedTotalAdvance;
-  } else if (netAdvancesFromList > 0) {
-    unsettledAdvances = netAdvancesFromList;
+  if (statement.totalAdvance === 0) {
+    unsettledAdvances = 0;
   } else if (sumUndeductedAdvances > 0) {
     unsettledAdvances = sumUndeductedAdvances;
+  } else if (recordedTotalAdvance > 0) {
+    unsettledAdvances = recordedTotalAdvance;
   } else {
     unsettledAdvances = 0;
   }
 
-  // 5. Calculate ACTIVE / UNSETTLED INCENTIVES:
-  // Incentives that have NOT yet been paid out in a settlement
-  const undeductedIncentives = (statement.incentives || []).filter((i) => {
-    if (i.settlementId) return false;
-    return (Number(i.amount) || 0) > 0;
+  // 5. Calculate ACTIVE / UNSETTLED INCENTIVES (Strict Rule 1 - Zero Ghost Deductions):
+  // Incentives that have NOT yet been settled or paid out
+  const undeductedIncentives = validIncentives.filter((i) => {
+    if (i.isSettled || i.isPaid || i.settlementId) return false;
+    return true;
   });
   const sumUndeductedIncentives = undeductedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
   const recordedTotalIncentive = typeof statement.totalIncentive === 'number' ? Math.max(0, Number(statement.totalIncentive) || 0) : 0;
 
   let unsettledIncentives = 0;
-  if (recordedTotalIncentive > 0) {
-    unsettledIncentives = recordedTotalIncentive;
+  if (statement.totalIncentive === 0) {
+    unsettledIncentives = 0;
   } else if (sumUndeductedIncentives > 0) {
     unsettledIncentives = sumUndeductedIncentives;
+  } else if (recordedTotalIncentive > 0) {
+    unsettledIncentives = recordedTotalIncentive;
   } else {
     unsettledIncentives = 0;
   }
@@ -210,56 +216,54 @@ export function calculateRiderLedger(
   type DraftRow = Omit<UnifiedTransactionItem, 'runningBalance' | 'runningBalanceLabel'>;
   const rawList: DraftRow[] = [];
 
-  // A. Advances Given
-  validAdvances.forEach((adv) => {
-    const advAmt = Number(adv.amount) || 0;
+  // A. Advances Given & Cash Recoveries (Double Entry)
+  (statement.advances || []).forEach((adv) => {
+    const amt = Number(adv.amount) || 0;
+    if (amt <= 0 && !adv.isRecovery && adv.type !== 'recovery') return;
+    if (adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन')) return;
+
     const dateVal = adv.date || adv.createdAt || '';
     const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
+    const isRec = Boolean(adv.isRecovery || adv.type === 'recovery');
+    const positiveAmt = Math.abs(amt);
 
-    rawList.push({
-      id: `adv-${adv.id}`,
-      originalId: adv.id,
-      rawDate: dateVal,
-      sortTimestamp: timestamp,
-      formattedDate: adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt),
-      type: 'advance',
-      title: adv.reason || 'एडवांस भुगतान (Advance Given)',
-      subTitle: 'नकद / ऑनलाइन भुगतान',
-      paidToRider: advAmt,
-      settledOrEarned: 0,
-    });
+    if (isRec) {
+      // RULE 4: Advance Recovery / Cash Received from Rider -> Credit (settledOrEarned)
+      rawList.push({
+        id: `rec-${adv.id}`,
+        originalId: adv.id,
+        rawDate: dateVal,
+        sortTimestamp: timestamp,
+        formattedDate: adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt),
+        type: 'advance',
+        title: adv.reason || 'नकद रिकवरी / जमा (Cash Inward / Recovery)',
+        subTitle: 'राइडर द्वारा हब में नकद जमा (Credit)',
+        paidToRider: 0,
+        settledOrEarned: positiveAmt,
+      });
+    } else {
+      // Advance Given -> Debit (paidToRider)
+      rawList.push({
+        id: `adv-${adv.id}`,
+        originalId: adv.id,
+        rawDate: dateVal,
+        sortTimestamp: timestamp,
+        formattedDate: adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt),
+        type: 'advance',
+        title: adv.reason || 'एडवांस भुगतान (Advance Given)',
+        subTitle: adv.isSettled || adv.isDeducted ? 'नकद / ऑनलाइन भुगतान (सेटलमेंट में समायोजित)' : 'नकद / ऑनलाइन भुगतान',
+        paidToRider: positiveAmt,
+        settledOrEarned: 0,
+      });
+    }
   });
-
-  // If prior advance is needed to account for past deductions or recorded total advance:
-  const priorAdvanceNeeded = Math.max(0, (totalAdvanceDeducted + unsettledAdvances) - sumExplicitAdvances);
-  if (priorAdvanceNeeded > 0) {
-    const firstSettle = salaries[0];
-    const dateVal = firstSettle?.startDate || statement.updatedAt || new Date().toISOString();
-    const timestamp = (firstSettle ? new Date(firstSettle.startDate).getTime() : Date.now()) - 86400000;
-
-    rawList.push({
-      id: 'prior-settled-advance',
-      originalId: 'prior-settled-advance',
-      rawDate: dateVal,
-      sortTimestamp: timestamp,
-      formattedDate: formatDateDisplay(dateVal),
-      type: 'advance',
-      title: sumExplicitAdvances === 0 && totalAdvanceDeducted === 0
-        ? 'ओपनिंग एडवांस बैलेंस (Opening Advance)'
-        : 'स्वीकृत पूर्व एडवांस (Advance Given)',
-      subTitle: sumExplicitAdvances === 0 && totalAdvanceDeducted === 0
-        ? 'स्वीकृत कुल प्रारंभिक एडवांस राशि'
-        : 'सैलरी कटौती से पूर्व दिया गया नकद एडवांस',
-      paidToRider: priorAdvanceNeeded,
-      settledOrEarned: 0,
-    });
-  }
 
   // B. Incentives Given
   validIncentives.forEach((inc) => {
     const incAmt = Number(inc.amount) || 0;
     const dateVal = inc.date || inc.createdAt || '';
     const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
+    const isSettled = Boolean(inc.isSettled || inc.isPaid || inc.settlementId);
 
     rawList.push({
       id: `inc-${inc.id}`,
@@ -269,7 +273,11 @@ export function calculateRiderLedger(
       formattedDate: inc.date ? formatDateDisplay(inc.date) : formatDateDisplay(inc.createdAt),
       type: 'incentive',
       title: inc.reason || 'इंसेंटिव / बोनस (Incentive & Bonus)',
-      subTitle: inc.source === 'surplus' ? 'अतिरिक्त सरप्लस जमा' : 'स्वीकृत बोनस',
+      subTitle: inc.source === 'surplus' 
+        ? 'अतिरिक्त सरप्लस जमा' 
+        : isSettled 
+        ? 'स्वीकृत बोनस (सेटलमेंट में चुकता)' 
+        : 'स्वीकृत बोनस',
       paidToRider: 0,
       settledOrEarned: incAmt,
     });

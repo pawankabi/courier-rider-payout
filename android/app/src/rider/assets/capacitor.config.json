@@ -1,6 +1,6 @@
 {
-  "appId": "com.courierpayout.codentry",
-  "appName": "COD Entry (हिसाब किताब)",
+  "appId": "com.courierpayout.rider",
+  "appName": "COD Entry (Rider)",
   "webDir": "public",
   "server": {
     "androidScheme": "https",

@@ -93,6 +93,11 @@ import {
   purgeLegacyMockStorage
 } from './utils/storage';
 import {
+  calculateActiveAdvanceTotal,
+  calculateActiveIncentiveTotal,
+  performRetroactiveDataCleanup
+} from './utils/payoutCalculations';
+import {
   DailyEntrySkeleton,
   RidersTabSkeleton,
   AnalyticsReportsSkeleton,
@@ -1124,6 +1129,27 @@ function MainCourierApp() {
     };
   }, []);
 
+  // RULE 5: RETROACTIVE DATA CLEANUP (ONE-TIME REPAIR)
+  // Inspect riders with settled September statements (e.g., Shambhu Mahato):
+  // - Mark the September ₹211 incentive as isSettled: true, isPaid: true
+  // - Reset active card Incentive Total to ₹0
+  // - Remove ghost -₹211 advance or negative settle_adj artifacts from October statements
+  useEffect(() => {
+    if (!riders || riders.length === 0) return;
+    const { updatedRiders, cleanedCount } = performRetroactiveDataCleanup(riders, settlements);
+    if (cleanedCount > 0) {
+      const currentUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
+      const ownerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+      setRiders(updatedRiders);
+      saveRidersToStorage(updatedRiders, currentUid);
+      if (isProUser && currentUid) {
+        updatedRiders.forEach((r) => {
+          saveRiderToFirestore(currentUid, r, ownerEmail).catch(() => {});
+        });
+      }
+    }
+  }, [riders.length, settlements.length, inspectedUser, currentUser?.uid]);
+
   // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
   useEffect(() => {
     const handlePlanActivated = (e: Event) => {
@@ -1495,7 +1521,10 @@ function MainCourierApp() {
         createdByEmail: currentOwnerEmail,
         workspaceId: currentOwnerId,
         userId: currentOwnerId,
+        openingBalance: (settlementDetails as any).openingBalance,
+        openingBalanceType: (settlementDetails as any).openingBalanceType,
       };
+
       const updatedSettlements = [newSettlement, ...settlements];
       setSettlements(updatedSettlements);
       saveSettlementsToStorage(updatedSettlements, targetUid);
@@ -1505,47 +1534,77 @@ function MainCourierApp() {
       if (targetRider) {
         let updatedRider: Rider = { ...targetRider };
 
-        // Handle advance deduction if advanceAmount was deducted
-        if (advanceAmount > 0) {
-          const currentAdv = Number(targetRider.totalAdvance) || 0;
-          const gross = Number(settlementDetails.grossTotal) || 0;
-          const remainingAdv = gross >= advanceAmount
-            ? Math.max(0, currentAdv - advanceAmount)
-            : Math.max(0, advanceAmount - gross);
+        // 1. Advance settlement: Permanently flag all deducted advances:
+        // { isSettled: true, isDeducted: true, settledPayoutId: settlementId }
+        let remainingDeduction = advanceAmount;
+        const updatedAdvances = (targetRider.advances || []).map((adv) => {
+          if (remainingDeduction <= 0) return adv;
+          if (adv.isSettled || adv.isDeducted || adv.settlementId) return adv;
+          if (adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन')) return adv;
 
-          const deductedPortion = Math.min(advanceAmount, gross);
-          const advanceLogs = targetRider.advances ? [...targetRider.advances] : [];
-          if (deductedPortion > 0) {
-            advanceLogs.unshift({
-              id: `settle_adj_${Date.now()}`,
-              riderId: targetRider.id,
-              amount: -deductedPortion,
-              date: advanceDate || settlementDetails.endDate,
-              reason: (settlementDetails as any).advanceReason
-                ? `सेटलमेंट समायोजन: ${(settlementDetails as any).advanceReason}`
-                : `सेटलमेंट समायोजन (${settlementDetails.startDate} से ${settlementDetails.endDate})`,
-              runningBalance: remainingAdv,
-              createdAt: nowIso,
-              createdBy: currentOwnerId,
+          const advAmt = Number(adv.amount) || 0;
+          if (advAmt <= 0) return adv;
+
+          if (advAmt <= remainingDeduction) {
+            remainingDeduction -= advAmt;
+            return {
+              ...adv,
+              isSettled: true,
+              isDeducted: true,
+              settledPayoutId: settlementId,
               settlementId: settlementId,
-            });
+            };
+          } else {
+            remainingDeduction = 0;
+            return {
+              ...adv,
+              isSettled: true,
+              isDeducted: true,
+              settledPayoutId: settlementId,
+              settlementId: settlementId,
+            };
           }
-          updatedRider.totalAdvance = remainingAdv;
-          updatedRider.advances = advanceLogs;
-        }
+        }).filter((adv) => {
+          // Zero ghost deductions: purge legacy negative settle_adj artifacts
+          const isNegativeGhost = (Number(adv.amount) || 0) < 0 || adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन');
+          return !isNegativeGhost;
+        });
 
-        // Handle incentive settling and tag settled incentives
+        const activeAdvTotal = calculateActiveAdvanceTotal(updatedAdvances);
+        updatedRider.totalAdvance = activeAdvTotal;
+        updatedRider.advances = updatedAdvances;
+
+        // 2. Incentive settlement: Permanently flag all included incentives:
+        // { isSettled: true, isPaid: true, settledPayoutId: settlementId }
         const updatedIncentives = (targetRider.incentives || []).map((inc) => {
-          if (!inc.settlementId) {
-            return { ...inc, settlementId };
+          const incAmt = Number(inc.amount) || 0;
+          if (incAmt <= 0) return inc;
+          const incDate = inc.date || (inc.createdAt ? inc.createdAt.slice(0, 10) : '');
+          const fallsInRangeOrPrior = !incDate || incDate <= settlementDetails.endDate;
+          if (fallsInRangeOrPrior && (!inc.isSettled || !inc.isPaid || !inc.settlementId)) {
+            return {
+              ...inc,
+              isSettled: true,
+              isPaid: true,
+              settledPayoutId: settlementId,
+              settlementId: settlementId,
+            };
           }
           return inc;
         });
-        const remainingInc = updatedIncentives
-          .filter((inc) => !inc.settlementId)
-          .reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
-        updatedRider.totalIncentive = remainingInc;
+
+        const activeIncTotal = calculateActiveIncentiveTotal(updatedIncentives);
+        updatedRider.totalIncentive = activeIncTotal;
         updatedRider.incentives = updatedIncentives;
+
+        newSettlement.settledIncentiveIds = updatedIncentives
+          .filter((i) => i.settledPayoutId === settlementId)
+          .map((i) => i.id);
+        newSettlement.settledAdvanceIds = updatedAdvances
+          .filter((a) => a.settledPayoutId === settlementId)
+          .map((a) => a.id);
+
+        saveSettlementsToStorage(updatedSettlements, targetUid);
 
         const updatedRiders = riders.map((r) => (r.id === targetRider.id ? updatedRider : r));
         setRiders(updatedRiders);

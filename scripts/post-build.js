@@ -52,8 +52,8 @@ const syncOrGenerateApk = (flavor, fileName) => {
     // Generate valid distinct standalone placeholder ZIP with internal flavor package metadata
     const manifestContent = JSON.stringify({
       flavor: flavor,
-      package: flavor === 'rider' ? 'com.courierpayout.codentry' : 'com.courierpayout.app',
-      appName: flavor === 'rider' ? 'COD Entry (हिसाब किताब)' : 'Courier Rider Payout',
+      package: flavor === 'rider' ? 'com.courierpayout.rider' : 'com.courierpayout.app',
+      appName: flavor === 'rider' ? 'COD Entry (Rider)' : 'Courier Payout Pro',
       version: '1.0.5',
       builtAt: new Date().toISOString()
     }, null, 2);
@@ -109,7 +109,7 @@ try {
 
   const adminCapConfig = {
     appId: 'com.courierpayout.app',
-    appName: 'Courier Rider Payout',
+    appName: 'Courier Payout Pro',
     webDir: 'public',
     server: {
       androidScheme: 'https',
@@ -142,8 +142,8 @@ try {
   fs.cpSync(companionDir, riderAssetsDir, { recursive: true });
 
   const riderCapConfig = {
-    appId: 'com.courierpayout.codentry',
-    appName: 'COD Entry (हिसाब किताब)',
+    appId: 'com.courierpayout.rider',
+    appName: 'COD Entry (Rider)',
     webDir: 'public',
     server: {
       androidScheme: 'https',

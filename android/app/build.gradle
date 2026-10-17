@@ -16,26 +16,28 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    flavorDimensions = ["app"]
+    flavorDimensions "version"
     productFlavors {
         admin {
-            dimension "app"
+            dimension "version"
             applicationId "com.courierpayout.app"
             versionCode 5
             versionName "1.0.5"
             manifestPlaceholders = [
-                appName: "Courier Rider Payout",
+                appName: "Courier Payout Pro",
+                appAuth: "com.courierpayout.app.fileprovider",
                 customUrlScheme: "com.courierpayout.app"
             ]
         }
         rider {
-            dimension "app"
-            applicationId "com.courierpayout.codentry"
+            dimension "version"
+            applicationId "com.courierpayout.rider"
             versionCode 5
             versionName "1.0.5"
             manifestPlaceholders = [
-                appName: "COD Entry (हिसाब किताब)",
-                customUrlScheme: "com.courierpayout.codentry"
+                appName: "COD Entry (Rider)",
+                appAuth: "com.courierpayout.rider.fileprovider",
+                customUrlScheme: "com.courierpayout.rider"
             ]
         }
     }
@@ -44,9 +46,9 @@ android {
         variant.outputs.all { output ->
             if (variant.buildType.name == 'release') {
                 if (variant.flavorName == 'admin') {
-                    outputFileName = "Admin-Payout-Release.apk"
+                    outputFileName = "app-admin-release.apk"
                 } else if (variant.flavorName == 'rider') {
-                    outputFileName = "COD-Entry-Rider-Release.apk"
+                    outputFileName = "app-rider-release.apk"
                 }
             }
         }

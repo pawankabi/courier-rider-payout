@@ -1,6 +1,6 @@
 {
   "appId": "com.courierpayout.app",
-  "appName": "Courier Rider Payout",
+  "appName": "Courier Payout Pro",
   "webDir": "public",
   "server": {
     "androidScheme": "https",

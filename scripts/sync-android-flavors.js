@@ -34,7 +34,7 @@ fs.cpSync('dist', mainAssetsDir, { recursive: true });
 // Write flavor-specific capacitor.config.json for Admin
 const adminCapConfig = {
   appId: 'com.courierpayout.app',
-  appName: 'Courier Rider Payout',
+  appName: 'Courier Payout Pro',
   webDir: 'public',
   server: {
     androidScheme: 'https',
@@ -49,7 +49,7 @@ if (fs.existsSync(pluginsJsonPath)) {
 }
 
 // 4. Build Companion Rider Web App (VITE_APP_TARGET=cod_companion)
-console.log('📦 [3/4] Building Rider Companion App (COD Entry हिसाब किताब: VITE_APP_TARGET=cod_companion)...');
+console.log('📦 [3/4] Building Rider Companion App (COD Entry Rider: VITE_APP_TARGET=cod_companion)...');
 execSync('npx vite build --outDir dist-companion', { 
   stdio: 'inherit', 
   env: { ...process.env, VITE_APP_TARGET: 'cod_companion' } 
@@ -62,8 +62,8 @@ fs.cpSync('dist-companion', riderAssetsDir, { recursive: true });
 
 // Write flavor-specific capacitor.config.json for Rider
 const riderCapConfig = {
-  appId: 'com.courierpayout.codentry',
-  appName: 'COD Entry (हिसाब किताब)',
+  appId: 'com.courierpayout.rider',
+  appName: 'COD Entry (Rider)',
   webDir: 'public',
   server: {
     androidScheme: 'https',
