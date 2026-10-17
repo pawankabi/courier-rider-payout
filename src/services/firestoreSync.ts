@@ -2226,17 +2226,22 @@ export async function syncPublicRiderStatement(
         status: s.status || 'PAID',
       }));
 
-    // Recent deliveries (up to 100)
-    const recentDeliveries = deliveries
-      .filter((d) => d.riderId === rider.id)
+    // Deliveries: keep all unpaid deliveries plus recent paid ones
+    const riderDeliveries = deliveries.filter((d) => d.riderId === rider.id);
+    const unpaidDeliveries = riderDeliveries.filter((d) => d.status === 'Unpaid');
+    const paidDeliveries = riderDeliveries
+      .filter((d) => d.status === 'Paid')
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .slice(0, 100)
+      .slice(0, 100);
+    const recentDeliveries = [...unpaidDeliveries, ...paidDeliveries]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .map((d) => ({
         id: d.id,
         date: d.date,
         parcels: d.parcels,
         totalEarnings: d.totalEarnings,
         status: d.status,
+        settlementId: d.settlementId,
       }));
 
     const sortedIncentives = [...(rider.incentives || [])].sort((a, b) => {

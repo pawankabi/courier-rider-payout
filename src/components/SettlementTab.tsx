@@ -47,6 +47,9 @@ import {
 import {
   calculateOpeningBalance,
   isUnsettledIncentive,
+  isUnsettledAdvance,
+  getActiveIncentives,
+  getActiveAdvances,
   calculateActiveAdvanceTotal,
   calculateActiveIncentiveTotal
 } from '../utils/payoutCalculations';
@@ -182,94 +185,84 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     );
   }, [settlements, selectedRider, startDate, endDate]);
 
-  // Auto-populate advance deduction: If selecting an already settled period, use saved record;
-  // otherwise, deduct ONLY true unsettled advances that were created during that date range
-  useEffect(() => {
-    if (matchingSettlement) {
-      setAdvanceAmount(matchingSettlement.advanceAmount || 0);
-      setAdvanceDate(matchingSettlement.advanceDate || '');
-      setAdvanceReason(matchingSettlement.advanceReason || '');
-    } else {
-      // Deduct ONLY true unsettled advances created during that date range
-      const inRangeAdvances = (selectedRider?.advances || []).filter((a) => {
-        if (a.isSettled || a.isDeducted || (a as any).status === 'PAID' || a.settlementId) return false;
-        if (a.id?.startsWith('settle_adj') || a.isRecovery || a.type === 'recovery') return false;
-        const amt = Number(a.amount) || 0;
-        if (amt <= 0) return false;
-        const advDate = a.date || (a.createdAt ? a.createdAt.slice(0, 10) : '');
-        if (startDate && advDate && advDate < startDate) return false;
-        if (endDate && advDate && advDate > endDate) return false;
-        return true;
-      });
-      const periodAdv = inRangeAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-      setAdvanceAmount(periodAdv);
-      setAdvanceDate(getTodayDateString());
-      setAdvanceReason('');
-    }
-  }, [selectedRiderId, startDate, endDate, matchingSettlement]);
-
-  // Unpaid entries specifically for the Mark As Paid action
-  const unpaidEntries = useMemo(() => {
-    return filteredEntries.filter((e) => e.status === 'Unpaid');
-  }, [filteredEntries]);
-
-  // Aggregated delivery figures
-  const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
-  const totalBaseAmount = filteredEntries.reduce((sum, e) => sum + e.baseAmount, 0);
-  const totalIncentiveAmount = filteredEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
-  const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
-
-  // RULE 2: BANK-GRADE CARRY-FORWARD LOGIC (OPENING BALANCE)
-  // Calculate Opening Balance from all transactions prior to startDate, factoring in past paid settlements:
+  // Opening Balance prior to selected startDate (Clean Slate: ₹0 if past cycles are settled)
   const openingBalResult = useMemo(() => {
     if (!selectedRider) return null;
     return calculateOpeningBalance(
       selectedRider.id,
       startDate,
       entries,
-      selectedRider.advances || [],
-      selectedRider.incentives || [],
-      settlements || []
+      selectedRider.advances,
+      selectedRider.incentives,
+      settlements
     );
   }, [selectedRider, startDate, entries, settlements]);
 
   const openingBalance = openingBalResult?.openingBalance || 0;
 
-  // Additional bonuses & incentives logged for this rider (festival bonus, performance rewards, surplus credits)
-  // Current Period Unsettled Incentives strictly within [startDate, endDate]
-  const currentPeriodIncentives = useMemo(() => {
-    if (!selectedRider) return 0;
+  // 1. ALL ACTIVE UNSETTLED INCENTIVES (Timeless / State-Scoped)
+  // If an incentive of ₹7,100 or ANY amount exists and is unsettled, it MUST be added to Gross
+  const activeIncentivesList = useMemo(() => {
+    if (!selectedRider) return [];
+    return getActiveIncentives(selectedRider.incentives, settlements, selectedRider.id);
+  }, [selectedRider, settlements]);
+
+  // 2. ALL ACTIVE UNSETTLED ADVANCES (Timeless / State-Scoped)
+  // If an advance of ₹7,489 or ANY cash loan was taken, it MUST be deducted here, regardless of its creation date!
+  const activeAdvancesList = useMemo(() => {
+    if (!selectedRider) return [];
+    return getActiveAdvances(selectedRider.advances, settlements, selectedRider.id);
+  }, [selectedRider, settlements]);
+
+  const totalAdvanceDeduction = useMemo(() => {
     if (matchingSettlement) {
-      // If viewing an already saved historical settlement, reflect settled gross minus delivery
+      return matchingSettlement.advanceAmount || 0;
+    }
+    return calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id);
+  }, [matchingSettlement, selectedRider, settlements]);
+
+  // Auto-populate advance deduction: If viewing already settled, use saved record; otherwise auto-populate active advances
+  useEffect(() => {
+    if (matchingSettlement) {
+      setAdvanceAmount(matchingSettlement.advanceAmount || 0);
+      setAdvanceDate(matchingSettlement.advanceDate || '');
+      setAdvanceReason(matchingSettlement.advanceReason || '');
+    } else {
+      setAdvanceAmount(totalAdvanceDeduction);
+      setAdvanceDate(getTodayDateString());
+      setAdvanceReason('');
+    }
+  }, [selectedRiderId, startDate, endDate, matchingSettlement, totalAdvanceDeduction]);
+
+  // Unpaid entries specifically for the Mark As Paid action
+  const unpaidEntries = useMemo(() => {
+    return filteredEntries.filter((e) => e.status === 'Unpaid');
+  }, [filteredEntries]);
+
+  // a) OPERATIONAL EARNINGS (Scoped strictly to selected [startDate, endDate])
+  const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
+  const totalBaseAmount = filteredEntries.reduce((sum, e) => sum + e.baseAmount, 0);
+  const totalIncentiveAmount = filteredEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
+  const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
+
+  // b) Total Active Incentives added to Gross
+  const totalIncentive = useMemo(() => {
+    if (matchingSettlement) {
       return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
     }
-    if (!Array.isArray(selectedRider.incentives)) return 0;
-    return selectedRider.incentives
-      .filter((inc) => {
-        if (!isUnsettledIncentive(inc)) return false;
-        const incDate = inc.date || (inc.createdAt ? inc.createdAt.slice(0, 10) : '');
-        if (startDate && incDate && incDate < startDate) return false;
-        if (endDate && incDate && incDate > endDate) return false;
-        return true;
-      })
-      .reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
-  }, [selectedRider, matchingSettlement, deliveryGross, startDate, endDate]);
+    return activeIncentivesList.reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
+  }, [matchingSettlement, deliveryGross, activeIncentivesList]);
 
-  const riderBonusIncentives = currentPeriodIncentives;
+  const riderBonusIncentives = totalIncentive;
 
-  // Gross Earning = Sum of daily delivery earnings + logged fleet incentives/bonuses
-  const grossTotal = deliveryGross + riderBonusIncentives;
-
-  // RULE 3: ACCURATE NET PAYABLE CALCULATION (FOR THE ACTIVE CYCLE)
-  // Final Net Payable Formula for Selected Period:
-  // Net Payable = (Opening Balance) 
-  //             + (Current Period Deliveries / Base Earnings) 
-  //             + (Current Period Unsettled Incentives) 
-  //             - (Active Unsettled Advances taken in current period).
+  // d) TRUE NET PAYABLE:
+  // Gross Earnings = DeliveryEarnings + TotalIncentive;
+  // Final Net Payable = Gross Earnings - TotalAdvanceDeduction;
+  const grossTotal = deliveryGross + totalIncentive;
   const numericAdvance = Math.max(0, Number(advanceAmount) || 0);
   const netSettlement = matchingSettlement
     ? matchingSettlement.netTotal
-    : (openingBalance + grossTotal - numericAdvance);
+    : (grossTotal - numericAdvance);
   const netPayableAmount = Math.max(0, netSettlement);
 
   const unpaidGross = filteredEntries
@@ -310,8 +303,10 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       incentiveAmount: totalIncentiveAmount,
       grossTotal,
       advanceReason: advanceReason.trim() || undefined,
-      openingBalance,
-      openingBalanceType: openingBalResult?.status || 'zero',
+      openingBalance: 0,
+      openingBalanceType: 'zero',
+      settledIncentiveIds: activeIncentivesList.map((i) => i.id),
+      settledAdvanceIds: activeAdvancesList.map((a) => a.id),
     } as any);
 
     // Fire celebratory confetti!
@@ -762,7 +757,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                   Deduct Advance Payment (Optional)
                 </h3>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                  कुल एक्टिव एडवांस: {formatINR(calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id))}
+                  कुल एक्टिव एडवांस: {formatINR(calculateActiveAdvanceTotal(selectedRider?.advances))}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
@@ -772,14 +767,14 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id) > 0 && Number(advanceAmount) !== calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id) && (
+            {calculateActiveAdvanceTotal(selectedRider?.advances) > 0 && Number(advanceAmount) !== calculateActiveAdvanceTotal(selectedRider?.advances) && (
               <button
                 type="button"
-                onClick={() => setAdvanceAmount(calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id))}
+                onClick={() => setAdvanceAmount(calculateActiveAdvanceTotal(selectedRider?.advances))}
                 className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-300 hover:text-white bg-indigo-500/20 px-2.5 py-1 rounded-lg border border-indigo-500/30 transition"
                 title="Use entire active advance"
               >
-                <span>कुल एक्टिव एडवांस भरें ({formatINR(calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id))})</span>
+                <span>कुल एक्टिव एडवांस भरें ({formatINR(calculateActiveAdvanceTotal(selectedRider?.advances))})</span>
               </button>
             )}
             {numericAdvance > 0 && (

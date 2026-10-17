@@ -785,7 +785,7 @@ export const RidersTab: React.FC<Props> = ({
     0
   );
   const totalAdvanceAmount = riders.reduce(
-    (sum, r) => sum + (Number(r.totalAdvance) || 0),
+    (sum, r) => sum + calculateActiveAdvanceTotal(r.advances, settlements, r.id),
     0
   );
 
@@ -932,7 +932,7 @@ export const RidersTab: React.FC<Props> = ({
                   <span>कुल एडवांस (Total Advance)</span>
                 </span>
                 <span className="text-[10px] sm:text-[11px] font-semibold text-purple-200 bg-purple-500/25 px-2 py-0.5 rounded-md border border-purple-500/40">
-                  {riders.filter((r) => Number(r.totalAdvance || 0) > 0).length} active
+                  {riders.filter((r) => calculateActiveAdvanceTotal(r.advances, settlements, r.id) > 0).length} active
                 </span>
               </div>
               <div className="text-lg sm:text-2xl font-black text-purple-200 mt-1">
@@ -1412,13 +1412,10 @@ export const RidersTab: React.FC<Props> = ({
               }
               return true;
             });
-            // RULE 1: STRICT INCENTIVE & ADVANCE SETTLEMENT CONSUMPTION (SOLVES 211 BUG)
-            // Double-entry banking grade: zero ghost deductions, honors recoveries and permanent settlement
-            const activeAdvanceBalance = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
-
-            // Active Incentive: ONLY sum active, UNSETTLED incentives (!i.isSettled && !i.isPaid).
-            // If settled or balance is ₹0, this returns 0 (fixes the Shambhu Mahato +₹211 ghost badge).
-            const activeIncentiveBalance = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+            // STANDARD KHATABOOK / BANKING DOUBLE-ENTRY ACCRUALS (Timeless / State-Scoped)
+            const activeAdvanceBalance = calculateActiveAdvanceTotal(rider.advances);
+            const activeIncentiveBalance = calculateActiveIncentiveTotal(rider.incentives);
+            const liveUnpaidPayout = (stats.unpaidAmount + activeIncentiveBalance) - activeAdvanceBalance;
 
             return (
               <div
@@ -1517,20 +1514,28 @@ export const RidersTab: React.FC<Props> = ({
 
                     <div className="text-right">
                       <div className="text-xs text-slate-400">Unpaid Payout</div>
-                      <div className={`text-base font-bold ${stats.unpaidAmount > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
-                        {formatINR(stats.unpaidAmount)}
+                      <div className={`text-base font-bold font-mono ${
+                        liveUnpaidPayout > 0 
+                          ? 'text-amber-400' 
+                          : liveUnpaidPayout < 0 
+                          ? 'text-rose-400' 
+                          : 'text-slate-400'
+                      }`}>
+                        {liveUnpaidPayout > 0
+                          ? formatINR(liveUnpaidPayout)
+                          : liveUnpaidPayout < 0
+                          ? `-₹${formatINR(Math.abs(liveUnpaidPayout))}`
+                          : '₹0'}
                       </div>
                     </div>
 
-                    {/* Advance Balance Badge - Auto-zeros on post-payout */}
-                    {(activeAdvanceBalance > 0 || hasPaidSettlements || Number(rider.totalAdvance || 0) > 0) && (
-                      <div className="text-right">
-                        <div className={`text-xs ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-400'}`}>Advance Balance</div>
-                        <div className={`text-sm font-bold font-mono ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-                          {activeAdvanceBalance > 0 ? formatINR(activeAdvanceBalance) : '₹0'}
-                        </div>
+                    {/* Advance Balance Badge - Strictly active unsettled advances only */}
+                    <div className="text-right">
+                      <div className={`text-xs ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>Advance Balance</div>
+                      <div className={`text-sm font-bold font-mono ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                        {activeAdvanceBalance > 0 ? formatINR(activeAdvanceBalance) : '₹0'}
                       </div>
-                    )}
+                    </div>
 
                     {/* Incentive Total Badge - Strictly active unsettled incentives only (Auto-zeros on post-payout, hides ghost +₹211) */}
                     {activeIncentiveBalance > 0 ? (
@@ -1735,15 +1740,15 @@ export const RidersTab: React.FC<Props> = ({
                   {formatINR(payingRiderData.stats.unpaidAmount)}
                 </span>
               </div>
-              {Number(payingRiderData.rider.totalAdvance || 0) > 0 && (
+              {calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id) > 0 && (
                 <div className="flex justify-between text-rose-400 pt-2 border-t border-slate-800">
                   <span>Available Advance</span>
-                  <span>{formatINR(Number(payingRiderData.rider.totalAdvance) || 0)}</span>
+                  <span>{formatINR(calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id))}</span>
                 </div>
               )}
             </div>
 
-            {Number(payingRiderData.rider.totalAdvance || 0) > 0 && (
+            {calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id) > 0 && (
               <div className="space-y-1.5">
                 <label className="text-xs text-slate-300 font-medium">Deduct Advance from Payout (₹)</label>
                 <input
@@ -1752,7 +1757,7 @@ export const RidersTab: React.FC<Props> = ({
                   onChange={(e) => setAdvanceDeduction(e.target.value)}
                   max={Math.min(
                     payingRiderData.stats.unpaidAmount,
-                    Number(payingRiderData.rider.totalAdvance) || 0
+                    calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id)
                   )}
                   min={0}
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-blue-500"

@@ -12,6 +12,8 @@ export interface RiderAdvanceEntry {
   isSettled?: boolean;
   isDeducted?: boolean;
   settledPayoutId?: string;
+  settledInPayoutId?: string;
+  status?: 'PAID' | 'UNPAID' | string;
   isRecovery?: boolean; // Cash received from rider / advance recovery (Credit)
   type?: 'advance' | 'recovery';
 }
@@ -30,6 +32,8 @@ export interface RiderIncentiveEntry {
   isSettled?: boolean;
   isPaid?: boolean;
   settledPayoutId?: string;
+  settledInPayoutId?: string;
+  status?: 'PAID' | 'UNPAID' | string;
   source?: 'manual' | 'surplus';
 }
 

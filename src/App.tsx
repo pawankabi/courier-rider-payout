@@ -95,7 +95,7 @@ import {
 import {
   calculateActiveAdvanceTotal,
   calculateActiveIncentiveTotal,
-  performRetroactiveDataCleanup
+  reindexAndSanitizeRiderBalances
 } from './utils/payoutCalculations';
 import {
   DailyEntrySkeleton,
@@ -327,12 +327,14 @@ function MainCourierApp() {
   };
   
   // Instant Cache-First initialization: load authentic user data directly from localStorage in 0.0s!
+  const [settlements, setSettlements] = useState<SettlementRecord[]>(() => loadSettlementsFromStorage());
   const [riders, setRiders] = useState<Rider[]>(() => {
     purgeLegacyMockStorage();
-    return loadRidersFromStorage();
+    const rawRiders = loadRidersFromStorage();
+    const rawSettlements = loadSettlementsFromStorage();
+    return reindexAndSanitizeRiderBalances(rawRiders, rawSettlements).updatedRiders;
   });
   const [entries, setEntries] = useState<DeliveryEntry[]>(() => loadDeliveriesFromStorage());
-  const [settlements, setSettlements] = useState<SettlementRecord[]>(() => loadSettlementsFromStorage());
   const [isDataLoading, setIsDataLoading] = useState<boolean>(() => !hasUserCachedData());
   const [isInitialized, setIsInitialized] = useState(true);
 
@@ -378,19 +380,29 @@ function MainCourierApp() {
     if (!viewingLedgerRiderId) return null;
     const r = riders.find((x) => x.id === viewingLedgerRiderId);
     if (!r) return null;
+
+    const riderSettlements = settlements.filter((s) => s.riderId === r.id);
+    const sanitized = reindexAndSanitizeRiderBalances([r], riderSettlements).updatedRiders[0] || r;
+
+    const riderDeliveries = entries.filter((e) => e.riderId === r.id);
+    const unpaidDels = riderDeliveries.filter((e) => e.status === 'Unpaid');
+    const paidDels = riderDeliveries
+      .filter((e) => e.status === 'Paid')
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 100);
+
     return {
-      riderId: r.id,
-      riderName: r.name,
-      riderPhone: r.phone,
-      vehicleType: r.vehicleType,
+      riderId: sanitized.id,
+      riderName: sanitized.name,
+      riderPhone: sanitized.phone,
+      vehicleType: sanitized.vehicleType,
       hubName: userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
       hubSignature: userRateConfig.hubSignature || '',
-      totalAdvance: typeof r.totalAdvance === 'number' ? r.totalAdvance : 0,
-      advances: r.advances || [],
-      totalIncentive: typeof r.totalIncentive === 'number' ? r.totalIncentive : 0,
-      incentives: r.incentives || [],
-      salaries: settlements
-        .filter((s) => s.riderId === r.id)
+      totalAdvance: typeof sanitized.totalAdvance === 'number' ? sanitized.totalAdvance : 0,
+      advances: sanitized.advances || [],
+      totalIncentive: typeof sanitized.totalIncentive === 'number' ? sanitized.totalIncentive : 0,
+      incentives: sanitized.incentives || [],
+      salaries: riderSettlements
         .map((s) => ({
           id: s.id,
           startDate: s.startDate,
@@ -404,17 +416,14 @@ function MainCourierApp() {
           paidAt: s.paidAt,
           status: s.status || 'PAID',
         })),
-      recentDeliveries: entries
-        .filter((e) => e.riderId === r.id)
-        .slice(0, 100)
-        .map((e) => ({
-          id: e.id,
-          date: e.date,
-          parcels: e.parcels,
-          totalEarnings: e.totalEarnings,
-          status: e.status,
-          settlementId: e.settlementId,
-        })),
+      recentDeliveries: [...unpaidDels, ...paidDels].map((e) => ({
+        id: e.id,
+        date: e.date,
+        parcels: e.parcels,
+        totalEarnings: e.totalEarnings,
+        status: e.status,
+        settlementId: e.settlementId,
+      })),
       updatedAt: new Date().toISOString(),
     };
   }, [viewingLedgerRiderId, riders, settlements, entries, userRateConfig]);
@@ -1129,37 +1138,19 @@ function MainCourierApp() {
     };
   }, []);
 
-  // RULE 5: RETROACTIVE DATA CLEANUP (ONE-TIME REPAIR)
-  // Inspect riders with settled September statements (e.g., Shambhu Mahato):
-  // - Mark the September ₹211 incentive as isSettled: true, isPaid: true
-  // - Reset active card Incentive Total to ₹0
-  // - Remove ghost -₹211 advance or negative settle_adj artifacts from October statements
+  // RULE 4: AUTOMATIC RECALCULATION & CACHE INVALIDATION FOR ALL RIDERS
+  // Run a global ledger re-index so every rider's ledger sheet immediately recalculates correctly.
+  // Any rider whose previous settlements are PAID will immediately flip from red "लेना बाकी" to green/neutral "हिसाब चुकता: ₹0".
   useEffect(() => {
-    if (!riders || riders.length === 0) return;
-    const { updatedRiders, cleanedCount } = performRetroactiveDataCleanup(riders, settlements);
-    if (cleanedCount > 0) {
-      const currentUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
-      const ownerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
-      setRiders(updatedRiders);
-      saveRidersToStorage(updatedRiders, currentUid);
-      if (isProUser && currentUid) {
-        updatedRiders.forEach((r) => {
-          saveRiderToFirestore(currentUid, r, ownerEmail).catch(() => {});
-        });
+    if (riders.length > 0 && settlements.length > 0) {
+      const { updatedRiders, hasChanges } = reindexAndSanitizeRiderBalances(riders, settlements);
+      if (hasChanges) {
+        setRiders(updatedRiders);
+        const targetUid = inspectedUser?.uid || currentUser?.uid;
+        saveRidersToStorage(updatedRiders, targetUid);
       }
-      // Re-index public statement ledgers so public statements immediately reflect हिसाब चुकता: ₹0
-      updatedRiders.forEach((r) => {
-        syncPublicRiderStatement(
-          r,
-          r.advances || [],
-          settlements,
-          entries,
-          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
-          userRateConfig.hubSignature
-        ).catch(() => {});
-      });
     }
-  }, [riders.length, settlements.length, inspectedUser, currentUser?.uid]);
+  }, [settlements]);
 
   // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
   useEffect(() => {
@@ -1585,18 +1576,17 @@ function MainCourierApp() {
         updatedRider.totalAdvance = activeAdvTotal;
         updatedRider.advances = updatedAdvances;
 
-        // 2. Incentive settlement: Permanently flag all included incentives:
-        // { isSettled: true, isPaid: true, settledPayoutId: settlementId }
+        // 2. Incentive settlement: Permanently flag ALL active incentives (Timeless / State-Scoped):
+        // { isSettled: true, isPaid: true, settledInPayoutId: settlementId }
         const updatedIncentives = (targetRider.incentives || []).map((inc) => {
           const incAmt = Number(inc.amount) || 0;
           if (incAmt <= 0) return inc;
-          const incDate = inc.date || (inc.createdAt ? inc.createdAt.slice(0, 10) : '');
-          const fallsInRangeOrPrior = !incDate || incDate <= settlementDetails.endDate;
-          if (fallsInRangeOrPrior && (!inc.isSettled || !inc.isPaid || !inc.settlementId)) {
+          if (!inc.isSettled && !inc.isPaid && (inc as any).status !== 'PAID' && !inc.settlementId) {
             return {
               ...inc,
               isSettled: true,
               isPaid: true,
+              settledInPayoutId: settlementId,
               settledPayoutId: settlementId,
               settlementId: settlementId,
             };
