@@ -157,15 +157,10 @@ export function calculateRiderLedger(
     const positiveAmt = Math.abs(amt);
     const dateVal = adv.date || adv.createdAt || '';
     const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
-    const isCoveredByPaidSalary = latestPaidDate !== '' && dateVal !== '' && dateVal.split('T')[0] <= latestPaidDate;
     const isSettled = Boolean(
       adv.isSettled || 
       adv.isDeducted || 
-      (adv as any).status === 'PAID' || 
-      adv.settlementId || 
-      adv.settledInPayoutId || 
-      adv.settledPayoutId ||
-      isCoveredByPaidSalary
+      (adv as any).status === 'PAID'
     );
 
     if (isRec) {
@@ -214,15 +209,10 @@ export function calculateRiderLedger(
     const incAmt = Number(inc.amount) || 0;
     const dateVal = inc.date || inc.createdAt || '';
     const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
-    const isCoveredByPaidSalary = latestPaidDate !== '' && dateVal !== '' && dateVal.split('T')[0] <= latestPaidDate;
     const isSettled = Boolean(
       inc.isSettled || 
       inc.isPaid || 
-      (inc as any).status === 'PAID' || 
-      inc.settlementId || 
-      inc.settledInPayoutId || 
-      inc.settledPayoutId ||
-      isCoveredByPaidSalary
+      (inc as any).status === 'PAID'
     );
 
     rawList.push({
@@ -254,7 +244,8 @@ export function calculateRiderLedger(
     const dateVal = sal.paidAt ? sal.paidAt.split('T')[0] : sal.endDate;
     const timestamp = new Date(sal.paidAt || sal.endDate).getTime() || 0;
     const isPaid = !sal.status || sal.status.trim().toUpperCase() === 'PAID';
-    const netPaid = Number(sal.netTotal) || 0;
+    const netTotal = Number(sal.netTotal) || 0;
+    const netPaid = isPaid ? Math.max(0, netTotal) : 0;
     const advanceDeducted = Number(sal.advanceAmount) || 0;
     const grossTotal = Number(sal.grossTotal) || 0;
 
@@ -262,7 +253,11 @@ export function calculateRiderLedger(
     if (advanceDeducted > 0) {
       subTitle += ` | एडवांस कटौती: ₹${formatINR(advanceDeducted)}`;
     }
-    subTitle += ` | नेट भुगतान: ₹${formatINR(netPaid)} • ${isPaid ? 'भुगतान पूर्ण (PAID)' : 'लंबित (PENDING)'}`;
+    if (netTotal < 0) {
+      subTitle += ` | लेना शेष है: ₹${formatINR(Math.abs(netTotal))} • ${isPaid ? 'सेटलमेंट दर्ज (PARTIALLY SETTLED)' : 'लंबित (PENDING)'}`;
+    } else {
+      subTitle += ` | नेट भुगतान: ₹${formatINR(netPaid)} • ${isPaid ? 'भुगतान पूर्ण (PAID)' : 'लंबित (PENDING)'}`;
+    }
 
     rawList.push({
       id: `sal-${sal.id}`,
@@ -289,7 +284,7 @@ export function calculateRiderLedger(
         status: sal.status,
       },
       paidToRiderCol: isPaid ? netPaid : 0,
-      settledOrEarnedCol: isPaid ? grossTotal : netPaid,
+      settledOrEarnedCol: grossTotal,
     });
   });
 
@@ -301,13 +296,14 @@ export function calculateRiderLedger(
   });
 
   // Compute Standard Bank Running Balance:
-  // Let RunningBalance = 0;
+  // Let RunningBalance = 0; (Positive = Rider gets money, Negative = Rider owes the Hub / "देना है")
   // - INCENTIVE (Credit to Rider): RunningBalance += amount;
-  // - CASH ADVANCE (Debit to Rider): RunningBalance -= amount;
-  // - CASH RECOVERY (Rider repaid hub): RunningBalance += amount;
-  // - PAYOUT SETTLEMENT (PAID) (Disbursement): RunningBalance resets/evaluates to 0 (cycle fully settled);
-  // * AUDIT GUARANTEE: When an account has all deliveries paid and all advances deducted,
-  // every historical settlement row's running balance evaluates cleanly to Bal. ₹0 (Neutral).
+  // - ADVANCE_GIVEN (Debit to Rider): RunningBalance -= amount;
+  // - CASH_RECOVERY (Rider repaid hub): RunningBalance += amount;
+  // - PAYOUT_SETTLEMENT:
+  //   Rider earns delivery gross (+ grossTotal)
+  //   Hub pays net cash to rider (- netPaid)
+  //   If standalone incentives were already entered as separate INCENTIVE rows, avoid double counting
   let running = 0;
   const processedRows: UnifiedTransactionItem[] = rawList.map((entry) => {
     switch (entry.entryKind) {
@@ -323,23 +319,27 @@ export function calculateRiderLedger(
         running += entry.amount;
         break;
 
-      case 'PAYOUT_SETTLEMENT':
-        if (entry.isPaid) {
-          // When a payout settlement is marked PAID:
-          // The cycle's gross earnings, advances deducted, and net paid balance out to exact Net ₹0.
-          running = 0;
-        } else {
-          running += entry.netPaid;
-        }
+      case 'PAYOUT_SETTLEMENT': {
+        // Standalone incentives that were already added as INCENTIVE rows:
+        const settledStandaloneInc = validIncentives
+          .filter((i) => i.settlementId === entry.originalId || i.settledPayoutId === entry.originalId || i.settledInPayoutId === entry.originalId)
+          .reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+        const cycleDeliveryGross = Math.max(0, entry.grossTotal - settledStandaloneInc);
+        const cashDisbursed = entry.isPaid ? entry.netPaid : 0;
+        
+        // Exact commercial Khatabook formula:
+        // Credit the cycle's delivery earnings and debit any actual cash disbursed
+        running += (cycleDeliveryGross - cashDisbursed);
         break;
+      }
     }
 
     const absBal = Math.abs(running);
     let label = 'Bal. ₹0';
-    if (running < 0) {
-      label = isRider ? `जमा करना: ₹${formatINR(absBal)}` : `लेना: ₹${formatINR(absBal)}`;
-    } else if (running > 0) {
-      label = isRider ? `मिलना बाकी: ₹${formatINR(absBal)}` : `देना: ₹${formatINR(absBal)}`;
+    if (running < -0.01) {
+      label = `देना है: ₹${formatINR(absBal)}`;
+    } else if (running > 0.01) {
+      label = `पाना है: ₹${formatINR(absBal)}`;
     }
 
     return {
@@ -362,47 +362,58 @@ export function calculateRiderLedger(
   const totalPaidToRider = processedRows.reduce((acc, row) => acc + row.paidToRider, 0);
   const totalSettledOrEarned = processedRows.reduce((acc, row) => acc + row.settledOrEarned, 0);
 
-  // Unsettled items strictly computed on-the-fly (Timeless / State-Scoped)
+  // Lifetime unrecovered advance debt check (Guarantees double-entry integrity)
+  const totalAdvancesTaken = validAdvances
+    .filter((a) => !a.isRecovery && a.type !== 'recovery')
+    .reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+
+  const totalRecoveries = validAdvances
+    .filter((a) => a.isRecovery || a.type === 'recovery')
+    .reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
+
+  const totalGrossEarned = paidSalaries.reduce((sum, s) => sum + (Number(s.grossTotal) || 0), 0);
+  const totalCashDisbursed = paidSalaries.reduce((sum, s) => sum + Math.max(0, Number(s.netTotal) || 0), 0);
+  const totalAdvanceCoveredByEarnings = Math.max(0, totalGrossEarned - totalCashDisbursed);
+
+  const trueUnrecoveredAdvanceDebt = Math.max(0, totalAdvancesTaken - totalAdvanceCoveredByEarnings - totalRecoveries);
+
+  // Active unsettled advances in statement
   const rawUnsettledAdvances = validAdvances.filter((adv) => {
     if (adv.isRecovery || adv.type === 'recovery') return false;
-    const advDate = (adv.date || adv.createdAt || '').split('T')[0];
-    const isCoveredByPaidSalary = latestPaidDate !== '' && advDate !== '' && advDate <= latestPaidDate;
-    if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID' || adv.settlementId || adv.settledInPayoutId || adv.settledPayoutId || isCoveredByPaidSalary) return false;
+    if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID') return false;
     return true;
   });
-  const totalRawAdvances = rawUnsettledAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-  const totalRecoveries = validAdvances
-    .filter((a) => (a.isRecovery || a.type === 'recovery') && !a.isSettled)
-    .reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
-  const unsettledAdvances = Math.max(0, totalRawAdvances - totalRecoveries);
+  const sumRawUnsettledAdvances = rawUnsettledAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const unsettledAdvances = Math.max(sumRawUnsettledAdvances, trueUnrecoveredAdvanceDebt);
 
+  // Active unsettled incentives
   const rawUnsettledIncentives = validIncentives.filter((inc) => {
-    const incDate = (inc.date || inc.createdAt || '').split('T')[0];
-    const isCoveredByPaidSalary = latestPaidDate !== '' && incDate !== '' && incDate <= latestPaidDate;
-    if (inc.isSettled || inc.isPaid || (inc as any).status === 'PAID' || inc.settlementId || inc.settledInPayoutId || inc.settledPayoutId || isCoveredByPaidSalary) return false;
+    if (inc.isSettled || inc.isPaid || (inc as any).status === 'PAID') return false;
     return true;
   });
   const unsettledIncentives = rawUnsettledIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
 
   const unpaidSalary = unpaidSalaries.reduce((sum, s) => sum + s.netTotal, 0);
 
-  // Overall account net balance (Financial transactions only: Unsettled Incentives + Unpaid Salaries - Unsettled Advances)
-  // When all settlements are paid and no advances/incentives are active, finalRawDifference is strictly 0 ("⚪ हिसाब चुकता: ₹0")
-  const finalRawDifference = (unsettledIncentives + unpaidSalary) - unsettledAdvances;
+  // Chronological traversal terminal balance is the source of truth
+  const finalRawDifference = processedRows.length > 0
+    ? (sortOrder === 'desc' ? processedRows[0].runningBalance : processedRows[processedRows.length - 1].runningBalance)
+    : ((unsettledIncentives + unpaidSalary) - unsettledAdvances);
   const netBalance = Math.abs(finalRawDifference);
 
+  // RULE 2: State-driven header: ONLY show "⚪ हिसाब चुकता: ₹0" if Math.abs(currentActiveBalance) < 1
   let balanceStatus: 'rider_due' | 'payable' | 'settled' = 'settled';
   let adminBalanceLabel = '⚪ हिसाब चुकता: ₹0';
   let riderBalanceLabel = '⚪ हिसाब चुकता: ₹0';
 
-  if (finalRawDifference < 0) {
+  if (finalRawDifference < -0.99) {
     balanceStatus = 'rider_due';
-    adminBalanceLabel = `🔴 लेना बाकी / रिकवरी: ₹${formatINR(netBalance)}`;
-    riderBalanceLabel = `🔴 हब में जमा करना बाकी है (आपको हब को देना होगा): ₹${formatINR(netBalance)}`;
-  } else if (finalRawDifference > 0) {
+    adminBalanceLabel = `🔴 आपसे बकाया (You owe the Hub): ₹${formatINR(netBalance)}`;
+    riderBalanceLabel = `🔴 आपसे बकाया (You owe the Hub): ₹${formatINR(netBalance)}`;
+  } else if (finalRawDifference > 0.99) {
     balanceStatus = 'payable';
     adminBalanceLabel = `🟢 देना बाकी: ₹${formatINR(netBalance)}`;
-    riderBalanceLabel = `🟢 आपको मिलना बाकी है (हब से प्राप्त होगा): ₹${formatINR(netBalance)}`;
+    riderBalanceLabel = `🟢 आपको मिलना बाकी है: ₹${formatINR(netBalance)}`;
   } else {
     balanceStatus = 'settled';
     adminBalanceLabel = '⚪ हिसाब चुकता: ₹0';

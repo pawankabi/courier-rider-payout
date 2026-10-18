@@ -4,7 +4,7 @@ export interface RiderAdvanceEntry {
   amount: number;
   date?: string; // Optional date (YYYY-MM-DD or empty)
   reason?: string; // e.g. "Bike repair", "Fuel", "Festival emergency"
-  runningBalance: number; // previousAdvanceTotal + newAdvanceAmount = currentTotalAdvance
+  runningBalance?: number; // previousAdvanceTotal + newAdvanceAmount = currentTotalAdvance
   createdAt: string; // ISO string
   updatedAt?: string; // Optional update timestamp
   createdBy?: string;

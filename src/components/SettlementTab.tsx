@@ -218,8 +218,10 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     if (matchingSettlement) {
       return matchingSettlement.advanceAmount || 0;
     }
-    return calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id);
-  }, [matchingSettlement, selectedRider, settlements]);
+    const activeAdv = calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id);
+    const prevDebt = (openingBalResult && openingBalResult.status === 'rider_debt') ? Math.abs(openingBalResult.openingBalance) : 0;
+    return Math.max(activeAdv, prevDebt);
+  }, [matchingSettlement, selectedRider, settlements, openingBalResult]);
 
   // Auto-populate advance deduction: If viewing already settled, use saved record; otherwise auto-populate active advances
   useEffect(() => {
@@ -230,9 +232,13 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     } else {
       setAdvanceAmount(totalAdvanceDeduction);
       setAdvanceDate(getTodayDateString());
-      setAdvanceReason('');
+      if (openingBalResult && openingBalResult.status === 'rider_debt') {
+        setAdvanceReason('पहले का बकाया (Previous Debt Carry-Forward)');
+      } else {
+        setAdvanceReason('');
+      }
     }
-  }, [selectedRiderId, startDate, endDate, matchingSettlement, totalAdvanceDeduction]);
+  }, [selectedRiderId, startDate, endDate, matchingSettlement, totalAdvanceDeduction, openingBalResult]);
 
   // Unpaid entries specifically for the Mark As Paid action
   const unpaidEntries = useMemo(() => {
@@ -303,8 +309,8 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       incentiveAmount: totalIncentiveAmount,
       grossTotal,
       advanceReason: advanceReason.trim() || undefined,
-      openingBalance: 0,
-      openingBalanceType: 'zero',
+      openingBalance: openingBalResult?.openingBalance || 0,
+      openingBalanceType: openingBalResult?.status || 'zero',
       settledIncentiveIds: activeIncentivesList.map((i) => i.id),
       settledAdvanceIds: activeAdvancesList.map((a) => a.id),
     } as any);

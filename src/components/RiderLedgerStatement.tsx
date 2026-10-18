@@ -824,18 +824,22 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                               </div>
                             )}
 
-                            {/* PART 2: In-Row Balance Badge (Bal. ₹...) directly beneath timestamp & details */}
+                            {/* PART 2: In-Row Balance Badge directly beneath timestamp & details */}
                             <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                               <span 
                                 className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight ${
-                                  row.runningBalance < 0
+                                  row.runningBalance < -0.01
                                     ? 'bg-red-50 text-[#B91C1C] border border-red-200'
-                                    : row.runningBalance > 0
+                                    : row.runningBalance > 0.01
                                     ? 'bg-emerald-50 text-[#047857] border border-emerald-200'
                                     : 'bg-slate-100 text-slate-600 border border-slate-200'
                                 }`}
                               >
-                                Bal. ₹{formatINR(Math.abs(row.runningBalance))}
+                                {row.runningBalance < -0.01
+                                  ? `देना है: ₹${formatINR(Math.abs(row.runningBalance))}`
+                                  : row.runningBalance > 0.01
+                                  ? `पाना है: ₹${formatINR(row.runningBalance)}`
+                                  : '⚪ Bal. ₹0'}
                               </span>
                             </div>
                           </div>

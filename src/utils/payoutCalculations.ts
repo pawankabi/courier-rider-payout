@@ -77,12 +77,8 @@ export function isUnsettledIncentive(
   if (amt <= 0) return false;
 
   if (settlements && settlements.length > 0) {
-    const { settledIncIds, latestPaidDate } = getSettlementContext(settlements, riderId || (inc as any).riderId);
+    const { settledIncIds } = getSettlementContext(settlements, riderId || (inc as any).riderId);
     if (settledIncIds.has(inc.id)) return false;
-    if (latestPaidDate) {
-      const incDate = inc.date || (inc.createdAt ? inc.createdAt.split('T')[0] : '');
-      if (incDate && incDate <= latestPaidDate) return false;
-    }
   }
 
   return true;
@@ -126,19 +122,21 @@ export function isUnsettledAdvance(
 ): boolean {
   if (adv.isSettled === true || adv.isDeducted === true) return false;
   if ((adv as any).status === 'PAID') return false;
-  if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
   if (adv.isRecovery || adv.type === 'recovery') return false;
   if (adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
   const amt = Number(adv.amount) || 0;
   if (amt <= 0) return false;
 
+  // If advance is explicitly marked UNPAID/unsettled (e.g. carry forward debt), it stays active!
+  if (adv.isSettled === false || (adv as any).status === 'UNPAID') {
+    return true;
+  }
+
+  if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
+
   if (settlements && settlements.length > 0) {
-    const { settledAdvIds, latestPaidDate } = getSettlementContext(settlements, riderId || adv.riderId);
+    const { settledAdvIds } = getSettlementContext(settlements, riderId || adv.riderId);
     if (settledAdvIds.has(adv.id)) return false;
-    if (latestPaidDate) {
-      const advDate = adv.date || (adv.createdAt ? adv.createdAt.split('T')[0] : '');
-      if (advDate && advDate <= latestPaidDate) return false;
-    }
   }
 
   return true;
@@ -173,15 +171,11 @@ export function calculateActiveAdvanceTotal(
   const totalAdvances = validAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
 
   // 2. Total active un-settled cash recoveries
-  const { settledAdvIds, latestPaidDate } = getSettlementContext(settlements, riderId);
+  const { settledAdvIds } = getSettlementContext(settlements, riderId);
   const recoveries = advances.filter((a) => {
     if (a.isSettled === true || a.isDeducted === true || (a as any).status === 'PAID' || a.settlementId) return false;
     if (settledAdvIds.has(a.id)) return false;
-    if (latestPaidDate) {
-      const recDate = a.date || (a.createdAt ? a.createdAt.split('T')[0] : '');
-      if (recDate && recDate <= latestPaidDate) return false;
-    }
-    return (a.isRecovery || a.type === 'recovery') && !a.id?.startsWith('settle_adj');
+    return (a.isRecovery || a.type === 'recovery') && !a.id?.startsWith('settle_adj') && (Number(a.amount) || 0) !== 0;
   });
   const totalRecoveries = recoveries.reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
 
@@ -276,8 +270,7 @@ export function calculateOpeningBalance(
   incentives: RiderIncentiveEntry[] = [],
   settlements: SettlementRecord[] = []
 ): OpeningBalanceResult {
-  // In pure Khatabook formula: active advances and active incentives are resolved timelessly.
-  // Delivery earnings before startDate that remain Unpaid:
+  // 1. Unpaid operational deliveries strictly dated before startDate that are not in any settlement
   const pastPaidSettlementDates = (settlements || [])
     .filter((s) => s.riderId === riderId && (!s.status || s.status.trim().toUpperCase() === 'PAID'))
     .map((s) => s.endDate)
@@ -293,19 +286,53 @@ export function calculateOpeningBalance(
   });
   const pastUnpaidEarnings = pastUnpaidEntries.reduce((sum, e) => sum + (Number(e.totalEarnings) || 0), 0);
 
-  const pastUnsettledIncentives = 0; // Handled directly via timeless ActiveIncentives
-  const pastUnrecoveredAdvances = 0; // Handled directly via timeless ActiveAdvances
-  const openingBalance = pastUnpaidEarnings;
+  // 2. Prior negative net settlements (where earnings were insufficient to cover advances)
+  const priorSettlements = (settlements || []).filter(
+    (s) => s.riderId === riderId && (!s.status || s.status.trim().toUpperCase() === 'PAID') && (!startDate || s.endDate < startDate)
+  );
+  let priorUnrecoveredSettlementDebt = 0;
+  priorSettlements.forEach((s) => {
+    const net = Number(s.netTotal) || 0;
+    if (net < 0) {
+      priorUnrecoveredSettlementDebt += Math.abs(net);
+    }
+  });
 
-  if (openingBalance > 0) {
+  // 3. Active unsettled advances originating before startDate
+  const priorActiveAdvances = (advances || []).filter((a) => {
+    if (a.isSettled || a.isDeducted || (a as any).status === 'PAID' || a.settlementId) return false;
+    if (a.isRecovery || a.type === 'recovery') return false;
+    const advDate = (a.date || a.createdAt || '').split('T')[0];
+    if (startDate && advDate && advDate >= startDate) return false;
+    return (Number(a.amount) || 0) > 0;
+  });
+  const pastUnrecoveredAdvances = Math.max(
+    priorActiveAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0),
+    priorUnrecoveredSettlementDebt
+  );
+
+  const openingBalance = pastUnpaidEarnings - pastUnrecoveredAdvances;
+
+  if (openingBalance > 0.01) {
     return {
       openingBalance,
       pastUnpaidEarnings,
-      pastUnsettledIncentives,
-      pastUnrecoveredAdvances,
+      pastUnsettledIncentives: 0,
+      pastUnrecoveredAdvances: 0,
       status: 'payable',
       label: `पिछला बकाया पाना बाकी (Opening Balance: +₹${formatINR(openingBalance)})`,
       hindiDescription: `पिछला बकाया पाना बाकी (+₹${formatINR(openingBalance)})`,
+    };
+  } else if (openingBalance < -0.01) {
+    const debt = Math.abs(openingBalance);
+    return {
+      openingBalance,
+      pastUnpaidEarnings,
+      pastUnsettledIncentives: 0,
+      pastUnrecoveredAdvances: debt,
+      status: 'rider_debt',
+      label: `पहले का बकाया (Previous Debt): -₹${formatINR(debt)}`,
+      hindiDescription: `पहले का बकाया (Previous Debt): -₹${formatINR(debt)} (हब को वसूली योग्य)`,
     };
   }
 
@@ -365,8 +392,9 @@ export function calculateActiveCycleNetPayable(
 /**
  * 4. AUTOMATIC RECALCULATION & CACHE INVALIDATION FOR ALL RIDERS:
  * Run a global ledger re-index on app load so every rider's ledger sheet immediately recalculates correctly.
- * Any rider whose previous settlements are PAID will immediately flip from red "लेना बाकी" to green/neutral "हिसाब चुकता: ₹0".
- * Ensure all historical incentives and advances included in past PAID payouts are marked isSettled: true across all riders.
+ * NEVER wipe out unrecovered advances:
+ * Lifetime unrecovered debt = totalAdvancesTaken - totalAdvanceCoveredByEarnings - totalRecoveries.
+ * If a rider owes ₹2,635, it stays active as an unrecovered advance across ALL cycles until fully paid!
  */
 export function reindexAndSanitizeRiderBalances(
   riders: Rider[],
@@ -384,84 +412,154 @@ export function reindexAndSanitizeRiderBalances(
       (s) => s.riderId === rider.id && (!s.status || s.status.trim().toUpperCase() === 'PAID')
     );
 
-    const settledAdvIds = new Set<string>();
-    const settledIncIds = new Set<string>();
-    let latestPaidDate = '';
+    // 1. Lifetime earnings and cash disbursed from paid settlements
+    const totalGrossEarned = riderPaidSettlements.reduce((sum, s) => sum + (Number(s.grossTotal) || 0), 0);
+    const totalCashDisbursed = riderPaidSettlements.reduce((sum, s) => sum + Math.max(0, Number(s.netTotal) || 0), 0);
+    // Lifetime earnings used towards advances:
+    const totalAdvanceCoveredByEarnings = Math.max(0, totalGrossEarned - totalCashDisbursed);
 
-    riderPaidSettlements.forEach((s) => {
-      (s.settledAdvanceIds || []).forEach((id) => settledAdvIds.add(id));
-      (s.settledIncentiveIds || []).forEach((id) => settledIncIds.add(id));
-      const d = s.endDate || (s.paidAt ? s.paidAt.split('T')[0] : '');
-      if (d > latestPaidDate) latestPaidDate = d;
+    // Lifetime advances taken & recoveries
+    const originalAdvances = (rider.advances || []).filter(
+      (a) => !a.id?.startsWith('settle_adj') && !a.reason?.includes('सेटलमेंट समायोजन') && (Number(a.amount) || 0) > 0
+    );
+    const regularAdvances = originalAdvances.filter((a) => !a.isRecovery && a.type !== 'recovery');
+    const recoveries = originalAdvances.filter((a) => a.isRecovery || a.type === 'recovery');
+
+    const totalAdvancesTaken = regularAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+    const totalRecoveries = recoveries.reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
+
+    // True mathematical unrecovered advance debt
+    const netUnrecoveredDebt = Math.max(0, totalAdvancesTaken - totalAdvanceCoveredByEarnings - totalRecoveries);
+
+    // Sort regular advances chronologically oldest to newest
+    const sortedRegular = [...regularAdvances].sort((a, b) => {
+      const timeA = new Date(a.date || a.createdAt || 0).getTime();
+      const timeB = new Date(b.date || b.createdAt || 0).getTime();
+      return timeA - timeB;
     });
 
-    // 1. Sanitize & settle advances
-    const originalAdvances = rider.advances || [];
+    let allowanceToSettle = totalAdvanceCoveredByEarnings + totalRecoveries;
     const sanitizedAdvances: RiderAdvanceEntry[] = [];
 
-    for (const adv of originalAdvances) {
-      // Purge ghost settle_adj entries
+    sortedRegular.forEach((adv) => {
       const amt = Number(adv.amount) || 0;
-      const isGhost = adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन') || amt <= 0;
-      if (isGhost) {
-        riderChanged = true;
-        continue;
-      }
-
-      const advDate = adv.date || (adv.createdAt ? adv.createdAt.split('T')[0] : '');
-      const shouldBeSettled = 
-        adv.isSettled === true || 
-        adv.isDeducted === true || 
-        (adv as any).status === 'PAID' ||
-        Boolean(adv.settlementId) ||
-        settledAdvIds.has(adv.id) ||
-        (latestPaidDate !== '' && advDate !== '' && advDate <= latestPaidDate);
-
-      if (shouldBeSettled && (!adv.isSettled || !adv.isDeducted || (adv as any).status !== 'PAID')) {
+      if (allowanceToSettle >= amt) {
+        // Fully covered by lifetime earnings
+        allowanceToSettle -= amt;
+        if (!adv.isSettled || !adv.isDeducted || (adv as any).status !== 'PAID') {
+          riderChanged = true;
+        }
         sanitizedAdvances.push({
           ...adv,
           isSettled: true,
           isDeducted: true,
           status: 'PAID',
         });
+      } else if (allowanceToSettle > 0) {
+        // Partially covered!
+        const coveredAmt = allowanceToSettle;
+        const unrecoveredAmt = amt - coveredAmt;
+        allowanceToSettle = 0;
         riderChanged = true;
+
+        // 1. Covered portion
+        sanitizedAdvances.push({
+          ...adv,
+          amount: coveredAmt,
+          isSettled: true,
+          isDeducted: true,
+          status: 'PAID',
+        });
+        // 2. Active unrecovered portion
+        sanitizedAdvances.push({
+          id: `${adv.id}_rem`,
+          riderId: rider.id,
+          amount: unrecoveredAmt,
+          date: adv.date,
+          createdAt: adv.createdAt || new Date().toISOString(),
+          reason: adv.reason || 'बकाया एडवांस (Carry Forward Debt)',
+          isSettled: false,
+          isDeducted: false,
+          status: 'UNPAID',
+          runningBalance: unrecoveredAmt,
+        });
       } else {
-        sanitizedAdvances.push(adv);
+        // Not covered at all: stays ACTIVE!
+        if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID') {
+          riderChanged = true;
+        }
+        sanitizedAdvances.push({
+          ...adv,
+          isSettled: false,
+          isDeducted: false,
+          status: 'UNPAID',
+        });
       }
+    });
+
+    // Also include recoveries in sanitizedAdvances
+    recoveries.forEach((rec) => {
+      sanitizedAdvances.push(rec);
+    });
+
+    // Double-check: If netUnrecoveredDebt > 0 and current active total does not match netUnrecoveredDebt
+    const currentActiveTotal = calculateActiveAdvanceTotal(sanitizedAdvances, settlements, rider.id);
+    if (netUnrecoveredDebt > 0 && currentActiveTotal < netUnrecoveredDebt) {
+      const diffDebt = netUnrecoveredDebt - currentActiveTotal;
+      riderChanged = true;
+      sanitizedAdvances.push({
+        id: `adv_cf_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        riderId: rider.id,
+        amount: diffDebt,
+        date: new Date().toISOString().slice(0, 10),
+        createdAt: new Date().toISOString(),
+        reason: 'बकाया एडवांस (Unrecovered Advance Carry-Forward)',
+        isSettled: false,
+        isDeducted: false,
+        status: 'UNPAID',
+        runningBalance: diffDebt,
+      });
     }
 
-    // 2. Sanitize & settle incentives
-    const originalIncentives = rider.incentives || [];
+    // 2. Sanitize Incentives with lifetime double-entry math
+    const totalIncentivesEarned = (rider.incentives || []).reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+    const totalIncentivesSettledInPayouts = riderPaidSettlements.reduce((sum, s) => sum + (Number(s.incentiveAmount) || 0), 0);
+    let allowanceToPayIncentive = totalIncentivesSettledInPayouts;
+
+    const sortedIncentives = [...(rider.incentives || [])].sort((a, b) => {
+      const timeA = new Date(a.date || a.createdAt || 0).getTime();
+      const timeB = new Date(b.date || b.createdAt || 0).getTime();
+      return timeA - timeB;
+    });
+
     const sanitizedIncentives: RiderIncentiveEntry[] = [];
-
-    for (const inc of originalIncentives) {
+    sortedIncentives.forEach((inc) => {
       const amt = Number(inc.amount) || 0;
-      if (amt <= 0) {
-        riderChanged = true;
-        continue;
-      }
+      if (amt <= 0) return;
 
-      const incDate = inc.date || (inc.createdAt ? inc.createdAt.split('T')[0] : '');
-      const shouldBeSettled =
-        inc.isSettled === true ||
-        inc.isPaid === true ||
-        (inc as any).status === 'PAID' ||
-        Boolean(inc.settlementId) ||
-        settledIncIds.has(inc.id) ||
-        (latestPaidDate !== '' && incDate !== '' && incDate <= latestPaidDate);
-
-      if (shouldBeSettled && (!inc.isSettled || !inc.isPaid || (inc as any).status !== 'PAID')) {
+      if (allowanceToPayIncentive >= amt) {
+        allowanceToPayIncentive -= amt;
+        if (!inc.isSettled || !inc.isPaid || (inc as any).status !== 'PAID') {
+          riderChanged = true;
+        }
         sanitizedIncentives.push({
           ...inc,
           isSettled: true,
           isPaid: true,
           status: 'PAID',
         });
-        riderChanged = true;
       } else {
-        sanitizedIncentives.push(inc);
+        if (inc.isSettled || inc.isPaid || (inc as any).status === 'PAID') {
+          riderChanged = true;
+        }
+        sanitizedIncentives.push({
+          ...inc,
+          isSettled: false,
+          isPaid: false,
+          status: 'UNPAID',
+        });
       }
-    }
+    });
 
     const newActiveAdv = calculateActiveAdvanceTotal(sanitizedAdvances, settlements, rider.id);
     const newActiveInc = calculateActiveIncentiveTotal(sanitizedIncentives, settlements, rider.id);

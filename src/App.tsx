@@ -1536,40 +1536,79 @@ function MainCourierApp() {
       if (targetRider) {
         let updatedRider: Rider = { ...targetRider };
 
-        // 1. Advance settlement: Permanently flag all deducted advances:
-        // { isSettled: true, isDeducted: true, settledPayoutId: settlementId }
-        let remainingDeduction = advanceAmount;
-        const updatedAdvances = (targetRider.advances || []).map((adv) => {
-          if (remainingDeduction <= 0) return adv;
-          if (adv.isSettled || adv.isDeducted || adv.settlementId) return adv;
-          if (adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन')) return adv;
+        // 1. Advance settlement: An advance is ONLY settled if covered by actual gross earnings!
+        // If earnings are less than advanceAmount, only the covered portion is settled.
+        // The remaining unrecovered amount stays ACTIVE with isSettled: false, status: 'UNPAID'.
+        const maxCoverableByEarnings = Math.min(settlementDetails.grossTotal, advanceAmount);
+        let remainingDeduction = maxCoverableByEarnings;
+
+        const updatedAdvances: RiderAdvanceEntry[] = [];
+        (targetRider.advances || []).forEach((adv) => {
+          const isNegativeGhost = (Number(adv.amount) || 0) < 0 || adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन');
+          if (isNegativeGhost) return;
+
+          if (adv.isRecovery || adv.type === 'recovery') {
+            updatedAdvances.push(adv);
+            return;
+          }
+          if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID') {
+            updatedAdvances.push(adv);
+            return;
+          }
 
           const advAmt = Number(adv.amount) || 0;
-          if (advAmt <= 0) return adv;
+          if (advAmt <= 0) return;
 
-          if (advAmt <= remainingDeduction) {
+          if (remainingDeduction >= advAmt) {
+            // Fully covered by earnings in this settlement
             remainingDeduction -= advAmt;
-            return {
+            updatedAdvances.push({
               ...adv,
               isSettled: true,
               isDeducted: true,
+              status: 'PAID',
               settledPayoutId: settlementId,
               settlementId: settlementId,
-            };
-          } else {
+            });
+          } else if (remainingDeduction > 0) {
+            // Partially covered by earnings!
+            const coveredAmt = remainingDeduction;
+            const uncoveredAmt = advAmt - coveredAmt;
             remainingDeduction = 0;
-            return {
+
+            // Covered portion
+            updatedAdvances.push({
               ...adv,
+              amount: coveredAmt,
               isSettled: true,
               isDeducted: true,
+              status: 'PAID',
               settledPayoutId: settlementId,
               settlementId: settlementId,
-            };
+            });
+
+            // Uncovered portion remains ACTIVE debit carry forward
+            updatedAdvances.push({
+              id: `${adv.id}_rem`,
+              riderId: targetRider.id,
+              amount: uncoveredAmt,
+              date: adv.date,
+              createdAt: adv.createdAt || nowIso,
+              reason: adv.reason ? `${adv.reason} (बकाया शेष)` : 'बकाया एडवांस (Carry Forward Debt)',
+              isSettled: false,
+              isDeducted: false,
+              status: 'UNPAID',
+              runningBalance: uncoveredAmt,
+            });
+          } else {
+            // Not covered at all: stays ACTIVE!
+            updatedAdvances.push({
+              ...adv,
+              isSettled: false,
+              isDeducted: false,
+              status: 'UNPAID',
+            });
           }
-        }).filter((adv) => {
-          // Zero ghost deductions: purge legacy negative settle_adj artifacts
-          const isNegativeGhost = (Number(adv.amount) || 0) < 0 || adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन');
-          return !isNegativeGhost;
         });
 
         const activeAdvTotal = calculateActiveAdvanceTotal(updatedAdvances);
