@@ -1199,6 +1199,7 @@ export const CodManagementModal: React.FC<Props> = ({
                   selectedDate={selectedDate}
                   hubName={hubName || 'सरायकेला कूरियर हब'}
                   isDarkTheme={true}
+                  hubId={userId}
                 />
               </div>
             </div>

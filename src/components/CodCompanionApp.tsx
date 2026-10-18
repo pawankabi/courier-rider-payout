@@ -2558,6 +2558,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               selectedDate={selectedDate}
               hubName={currentHubId || 'सरायकेला कूरियर हब'}
               isDarkTheme={false}
+              hubId={currentHubId}
+              adminName={authUser?.name || 'हब एडमिन'}
             />
           </div>
         </div>

@@ -2246,8 +2246,10 @@ export const CodStandaloneApp: React.FC<Props> = ({
               <DailyConsolidatedDenominationSummary
                 entries={filteredRows}
                 selectedDate={selectedDate}
-                hubName={settings.company1Name ? `${settings.company1Name} Hub` : 'सरायकेला कूरियर हब'}
+                hubName={hubName || (settings.company1Name ? `${settings.company1Name} Hub` : 'सरायकेला कूरियर हब')}
                 isDarkTheme={true}
+                hubId={userId}
+                adminName={activeUser?.name || 'हब एडमिन'}
               />
             </div>
 

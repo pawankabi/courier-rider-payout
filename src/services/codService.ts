@@ -5,7 +5,8 @@ import {
   CodSettings, 
   CodStaffRole,
   DailyCodSheetData,
-  Rider 
+  Rider,
+  RiderAdvanceEntry
 } from '../types';
 import { db } from '../firebase';
 import { 
@@ -21,8 +22,20 @@ import {
   where,
   Unsubscribe 
 } from 'firebase/firestore';
-import { cleanForFirestore, isSuperAdmin, SUPER_ADMIN_EMAIL, normalizeUserPermissions } from './firestoreSync';
-import { getTodayDateString } from '../utils/formatters';
+import { 
+  cleanForFirestore, 
+  isSuperAdmin, 
+  SUPER_ADMIN_EMAIL, 
+  normalizeUserPermissions,
+  writeAdvanceEntryToFirestore,
+  saveRiderToFirestore,
+  syncPublicRiderStatement
+} from './firestoreSync';
+import { getTodayDateString, formatINR } from '../utils/formatters';
+import { dispatchAutomatedSms, getRiderStatementUrl } from './smsService';
+import { isNativeAndroid, sendNativeBackgroundSms } from './nativeSms';
+import { loadRidersFromStorage, saveRidersToStorage } from '../utils/storage';
+import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
 
 const DEFAULT_COMPANY_1 = 'Valmo COD';
 const DEFAULT_COMPANY_2 = 'Xpressbees COD';
@@ -1916,5 +1929,181 @@ export async function toggleDayEndLockForSheet(
     } catch (err) {
       console.warn('Failed to toggle Day-End lock in hubs daily_cod_sheets:', err);
     }
+  }
+}
+
+/**
+ * 2. 1-Click "Convert to Advance" Service with SMS Trigger
+ * Converts a COD Shortage to an official Rider Advance record:
+ * a) Automatically creates a new Advance Entry:
+ *    - riderId: rider.id
+ *    - amount: shortageAmount
+ *    - date: currentDate
+ *    - reason: `COD Shortage Deduction (${currentDate})`
+ *    - isSettled: false
+ *    - status: 'UNPAID'
+ * b) Marks COD shortage record as `shortageStatus: 'CONVERTED_TO_ADVANCE'`.
+ * c) Triggers standard Rider SMS notification:
+ *    "Hub Alert: Aapke aaj ke COD shortage ka ₹{shortageAmount} advance account me jod diya gaya hai."
+ */
+export async function convertCodShortageToAdvance(
+  userId: string,
+  entry: CodDailyEntry,
+  date?: string,
+  adminName: string = 'Hub Admin',
+  hubId?: string
+): Promise<{ success: boolean; advanceId?: string; shortageAmount: number; error?: string }> {
+  try {
+    const shortageAmount = entry.shortageAmount && entry.shortageAmount > 0
+      ? entry.shortageAmount
+      : Math.max(0, (Number(entry.totalCod) || 0) - (Number(entry.totalDeposit) || 0));
+
+    if (shortageAmount <= 0) {
+      return { success: false, shortageAmount: 0, error: 'कोई शॉर्टेज राशि नहीं है।' };
+    }
+
+    const currentDate = (date || entry.date || getTodayDateString()).slice(0, 10);
+    const advanceId = `adv_cod_short_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const reasonText = `COD Shortage Deduction (${currentDate})`;
+
+    // 1. Fetch riders from storage and locate the target rider
+    const allRiders = loadRidersFromStorage(userId);
+    const cleanEntryPhone = (entry.riderPhone || '').replace(/\D/g, '').slice(-10);
+    const targetRider = allRiders.find(
+      (r) => r.id === entry.riderId || (cleanEntryPhone && (r.phone || '').replace(/\D/g, '').slice(-10) === cleanEntryPhone)
+    );
+
+    const riderName = targetRider ? targetRider.name : entry.riderName;
+    const riderPhone = targetRider ? targetRider.phone : (entry.riderPhone || '');
+    const cleanPhone = (riderPhone || '').replace(/\D/g, '').slice(-10);
+
+    // 2. Create the exact standard double-entry Advance Record
+    const newAdvance: RiderAdvanceEntry = {
+      id: advanceId,
+      riderId: entry.riderId,
+      amount: shortageAmount,
+      date: currentDate,
+      reason: reasonText,
+      runningBalance: shortageAmount,
+      isSettled: false,
+      isDeducted: false,
+      status: 'UNPAID',
+      createdAt: new Date().toISOString(),
+      createdBy: adminName,
+    };
+
+    // 3. Update Rider's advances array & active advance total
+    if (targetRider) {
+      const updatedAdvances = [newAdvance, ...(targetRider.advances || []).filter((a) => a.id !== advanceId)];
+      const newTotalAdvance = calculateActiveAdvanceTotal(updatedAdvances);
+      const updatedRider: Rider = {
+        ...targetRider,
+        advances: updatedAdvances,
+        totalAdvance: newTotalAdvance,
+      };
+
+      const updatedRiderList = allRiders.map((r) => (r.id === targetRider.id ? updatedRider : r));
+      saveRidersToStorage(updatedRiderList, userId);
+
+      if (db && userId && userId !== 'guest') {
+        saveRiderToFirestore(userId, updatedRider).catch(() => {});
+        writeAdvanceEntryToFirestore(userId, {
+          id: advanceId,
+          riderId: targetRider.id,
+          riderName: targetRider.name,
+          riderPhone: targetRider.phone,
+          amount: shortageAmount,
+          date: currentDate,
+          reason: reasonText,
+          runningBalance: newTotalAdvance,
+        }).catch(() => {});
+        syncPublicRiderStatement(updatedRider, updatedAdvances).catch(() => {});
+      }
+    }
+
+    // 4. Mark COD record as CONVERTED_TO_ADVANCE
+    const effectiveHubId = (hubId || getActiveCompanionHubId() || userId || '').trim();
+    if (effectiveHubId) {
+      const targetDate = currentDate;
+      const localSheetKey = `cp_cod_sheet_${effectiveHubId}_${targetDate}`;
+      try {
+        const rawSheet = localStorage.getItem(localSheetKey);
+        if (rawSheet) {
+          const parsed = JSON.parse(rawSheet) as DailyCodSheetData;
+          if (parsed && Array.isArray(parsed.entries)) {
+            const nextEntries = parsed.entries.map((e) => {
+              if (e.riderId === entry.riderId || e.id === entry.id) {
+                return {
+                  ...e,
+                  shortageAmount,
+                  shortageStatus: 'CONVERTED_TO_ADVANCE',
+                  shortageConvertedAt: new Date().toISOString(),
+                  shortageConvertedBy: adminName,
+                  shortageAdvanceId: advanceId,
+                  updatedAt: new Date().toISOString(),
+                  updatedBy: adminName,
+                };
+              }
+              return e;
+            });
+            parsed.entries = nextEntries;
+            localStorage.setItem(localSheetKey, JSON.stringify(parsed));
+          }
+        }
+      } catch (err) {
+        console.warn('Local cod sheet update notice:', err);
+      }
+
+      // Update Firestore daily_cod_sheets document
+      if (db) {
+        try {
+          const targetDocRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate);
+          const snap = await getDoc(targetDocRef);
+          if (snap.exists()) {
+            const data = snap.data() as DailyCodSheetData;
+            const updatedEntries = (data.entries || []).map((e) => {
+              if (e.riderId === entry.riderId || e.id === entry.id) {
+                return {
+                  ...e,
+                  shortageAmount,
+                  shortageStatus: 'CONVERTED_TO_ADVANCE',
+                  shortageConvertedAt: new Date().toISOString(),
+                  shortageConvertedBy: adminName,
+                  shortageAdvanceId: advanceId,
+                  updatedAt: new Date().toISOString(),
+                  updatedBy: adminName,
+                };
+              }
+              return e;
+            });
+            await setDoc(targetDocRef, cleanForFirestore({ entries: updatedEntries, updatedAt: new Date().toISOString() }), { merge: true });
+          }
+        } catch (err) {
+          console.warn('Firestore daily_cod_sheets update notice:', err);
+        }
+      }
+    }
+
+    // 5. Trigger standard Rider SMS notification:
+    // "Hub Alert: Aapke aaj ke COD shortage ka ₹{shortageAmount} advance account me jod diya gaya hai."
+    const smsMessage = `Hub Alert: Aapke aaj ke COD shortage ka ₹${shortageAmount} advance account me jod diya gaya hai.`;
+    if (cleanPhone) {
+      if (isNativeAndroid()) {
+        sendNativeBackgroundSms(cleanPhone, smsMessage).catch(() => {});
+      }
+      dispatchAutomatedSms({
+        riderPhone: cleanPhone,
+        riderName,
+        message: smsMessage,
+        type: 'advance',
+        amount: shortageAmount,
+        statementUrl: getRiderStatementUrl(entry.riderId),
+      }).catch((err) => console.warn('Shortage SMS dispatch notice:', err));
+    }
+
+    return { success: true, advanceId, shortageAmount };
+  } catch (err: any) {
+    console.error('Error in convertCodShortageToAdvance:', err);
+    return { success: false, shortageAmount: 0, error: err?.message || 'शॉर्टेज कनवर्ट करने में त्रुटि' };
   }
 }

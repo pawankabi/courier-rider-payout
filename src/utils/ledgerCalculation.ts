@@ -127,15 +127,15 @@ export function calculateRiderLedger(
     if (d > latestPaidDate) latestPaidDate = d;
   });
 
-  // 4. Assemble Draft Items
+  // 4. Assemble Draft Items (Real Financial Transactions Only: Settlements, Advances, Incentives, Recoveries)
   interface DraftLedgerEntry {
     id: string;
     originalId: string;
     rawDate: string;
     sortTimestamp: number;
     formattedDate: string;
-    type: 'advance' | 'incentive' | 'salary' | 'delivery';
-    entryKind: 'ADVANCE_GIVEN' | 'CASH_RECOVERY' | 'INCENTIVE' | 'DELIVERY_EARNING' | 'PAYOUT_SETTLEMENT';
+    type: 'advance' | 'incentive' | 'salary';
+    entryKind: 'ADVANCE_GIVEN' | 'CASH_RECOVERY' | 'INCENTIVE' | 'PAYOUT_SETTLEMENT';
     title: string;
     subTitle?: string;
     amount: number;
@@ -249,33 +249,6 @@ export function calculateRiderLedger(
     });
   });
 
-  // C. Unsettled Daily Deliveries (Operational Activity)
-  (statement.recentDeliveries || []).forEach((del) => {
-    if (del.status !== 'Unpaid' || del.settlementId) return;
-    const delEarnings = Number(del.totalEarnings) || 0;
-    if (delEarnings <= 0) return;
-    const timestamp = del.date ? new Date(del.date).getTime() : 0;
-
-    rawList.push({
-      id: `del-${del.id}`,
-      originalId: del.id,
-      rawDate: del.date,
-      sortTimestamp: timestamp,
-      formattedDate: formatDateDisplay(del.date),
-      type: 'delivery',
-      entryKind: 'DELIVERY_EARNING',
-      title: `डिलीवरी आय (${del.parcels || 0} पार्सल)`,
-      subTitle: 'सक्रिय दैनिक डिलीवरी उपार्जन (लंबित पे-आउट)',
-      amount: delEarnings,
-      netPaid: 0,
-      advanceDeducted: 0,
-      grossTotal: delEarnings,
-      isPaid: false,
-      paidToRiderCol: 0,
-      settledOrEarnedCol: delEarnings,
-    });
-  });
-
   // D. Salary Settlements
   salaries.forEach((sal) => {
     const dateVal = sal.paidAt ? sal.paidAt.split('T')[0] : sal.endDate;
@@ -323,25 +296,21 @@ export function calculateRiderLedger(
   // Sort strictly oldest first (ascending) to compute chronological running balance
   rawList.sort((a, b) => {
     if (a.sortTimestamp !== b.sortTimestamp) return a.sortTimestamp - b.sortTimestamp;
-    const typeOrder = { ADVANCE_GIVEN: 1, INCENTIVE: 2, DELIVERY_EARNING: 3, CASH_RECOVERY: 4, PAYOUT_SETTLEMENT: 5 };
+    const typeOrder = { ADVANCE_GIVEN: 1, INCENTIVE: 2, CASH_RECOVERY: 3, PAYOUT_SETTLEMENT: 4 };
     return (typeOrder[a.entryKind] || 0) - (typeOrder[b.entryKind] || 0);
   });
 
   // Compute Standard Bank Running Balance:
   // Let RunningBalance = 0;
-  // - DELIVERY / INCENTIVE (Credit to Rider): RunningBalance += amount;
+  // - INCENTIVE (Credit to Rider): RunningBalance += amount;
   // - CASH ADVANCE (Debit to Rider): RunningBalance -= amount;
-  // - PAYOUT SETTLEMENT (PAID) (Disbursement): RunningBalance -= (netPaid + advanceDeducted);
   // - CASH RECOVERY (Rider repaid hub): RunningBalance += amount;
+  // - PAYOUT SETTLEMENT (PAID) (Disbursement): RunningBalance resets/evaluates to 0 (cycle fully settled);
   // * AUDIT GUARANTEE: When an account has all deliveries paid and all advances deducted,
   // every historical settlement row's running balance evaluates cleanly to Bal. ₹0 (Neutral).
   let running = 0;
   const processedRows: UnifiedTransactionItem[] = rawList.map((entry) => {
     switch (entry.entryKind) {
-      case 'DELIVERY_EARNING':
-        running += entry.amount;
-        break;
-
       case 'INCENTIVE':
         running += entry.amount;
         break;
@@ -357,10 +326,7 @@ export function calculateRiderLedger(
       case 'PAYOUT_SETTLEMENT':
         if (entry.isPaid) {
           // When a payout settlement is marked PAID:
-          // (Earnings in Settlement) = (Advances Deducted + Net Paid to Rider)
-          // Delivery earnings covered by settlement (+grossTotal) and disbursement (-grossTotal) balance out.
-          // Advances deducted clear previous advance debt.
-          // Therefore, running balance at this settled row cleanly evaluates to 0 (unless an unpaid advance outside this cycle exists).
+          // The cycle's gross earnings, advances deducted, and net paid balance out to exact Net ₹0.
           running = 0;
         } else {
           running += entry.netPaid;
@@ -419,12 +385,10 @@ export function calculateRiderLedger(
   const unsettledIncentives = rawUnsettledIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
 
   const unpaidSalary = unpaidSalaries.reduce((sum, s) => sum + s.netTotal, 0);
-  const unpaidDeliveries = (statement.recentDeliveries || [])
-    .filter((d) => d.status === 'Unpaid' && !d.settlementId)
-    .reduce((sum, d) => sum + (Number(d.totalEarnings) || 0), 0);
 
-  // Overall account net balance
-  const finalRawDifference = (unsettledIncentives + unpaidSalary + unpaidDeliveries) - unsettledAdvances;
+  // Overall account net balance (Financial transactions only: Unsettled Incentives + Unpaid Salaries - Unsettled Advances)
+  // When all settlements are paid and no advances/incentives are active, finalRawDifference is strictly 0 ("⚪ हिसाब चुकता: ₹0")
+  const finalRawDifference = (unsettledIncentives + unpaidSalary) - unsettledAdvances;
   const netBalance = Math.abs(finalRawDifference);
 
   let balanceStatus: 'rider_due' | 'payable' | 'settled' = 'settled';

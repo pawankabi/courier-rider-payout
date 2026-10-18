@@ -2,7 +2,8 @@ import {
   DenominationValue, 
   STANDARD_DENOMINATIONS, 
   CashDenomination, 
-  CodDailyEntry 
+  CodDailyEntry,
+  CashWithdrawalRecord
 } from '../types';
 import { formatINR } from './formatters';
 
@@ -159,3 +160,148 @@ export function formatDenominationShareText(
   text += `\n_Generated via Courier Payout Pro_`;
   return text;
 }
+
+export interface VaultRemainingBreakdownItem {
+  value: DenominationValue;
+  inwardCount: number;
+  inwardAmount: number;
+  withdrawnCount: number;
+  withdrawnAmount: number;
+  remainingCount: number;
+  remainingAmount: number;
+}
+
+export interface VaultRemainingSummary {
+  inwardTotalNotes: number;
+  inwardTotalAmount: number;
+  withdrawnTotalNotes: number;
+  withdrawnTotalAmount: number;
+  netRemainingNotes: number;
+  netRemainingCash: number;
+  breakdown: VaultRemainingBreakdownItem[];
+  activeBreakdown: VaultRemainingBreakdownItem[];
+}
+
+/**
+ * Aggregates all cash withdrawal entries for a given date.
+ */
+export function aggregateCashWithdrawals(withdrawals: CashWithdrawalRecord[]): {
+  withdrawnBreakdown: Record<DenominationValue, number>;
+  totalNotesWithdrawn: number;
+  totalAmountWithdrawn: number;
+} {
+  const withdrawnBreakdown: Record<DenominationValue, number> = {
+    2000: 0,
+    500: 0,
+    200: 0,
+    100: 0,
+    50: 0,
+    20: 0,
+    10: 0,
+    5: 0,
+    2: 0,
+    1: 0,
+  };
+  let totalNotesWithdrawn = 0;
+  let totalAmountWithdrawn = 0;
+
+  withdrawals.forEach((w) => {
+    STANDARD_DENOMINATIONS.forEach((val) => {
+      const cnt = Number(w.notesBreakdown?.[val]) || 0;
+      if (cnt > 0) {
+        withdrawnBreakdown[val] += cnt;
+        totalNotesWithdrawn += cnt;
+        totalAmountWithdrawn += cnt * val;
+      }
+    });
+  });
+
+  return { withdrawnBreakdown, totalNotesWithdrawn, totalAmountWithdrawn };
+}
+
+/**
+ * Computes net remaining notes and cash in the vault after all withdrawals:
+ * Net Remaining Notes = (Total Inward Notes - Total Outward Notes)
+ * Net Remaining Cash = (Total Inward Cash - Total Outward Cash)
+ */
+export function calculateVaultRemainingSummary(
+  inwardSummary: AggregatedDenominationResult,
+  withdrawals: CashWithdrawalRecord[]
+): VaultRemainingSummary {
+  const { withdrawnBreakdown, totalNotesWithdrawn, totalAmountWithdrawn } = aggregateCashWithdrawals(withdrawals);
+
+  const breakdown: VaultRemainingBreakdownItem[] = STANDARD_DENOMINATIONS.map((val) => {
+    const inwardCount = inwardSummary.breakdown[val] || 0;
+    const inwardAmount = inwardCount * val;
+    const withdrawnCount = withdrawnBreakdown[val] || 0;
+    const withdrawnAmount = withdrawnCount * val;
+    const remainingCount = Math.max(0, inwardCount - withdrawnCount);
+    const remainingAmount = remainingCount * val;
+
+    return {
+      value: val,
+      inwardCount,
+      inwardAmount,
+      withdrawnCount,
+      withdrawnAmount,
+      remainingCount,
+      remainingAmount,
+    };
+  });
+
+  const activeBreakdown = breakdown.filter((item) => item.inwardCount > 0 || item.withdrawnCount > 0);
+  const netRemainingNotes = Math.max(0, inwardSummary.totalNotes - totalNotesWithdrawn);
+  const netRemainingCash = Math.max(0, inwardSummary.totalAmount - totalAmountWithdrawn);
+
+  return {
+    inwardTotalNotes: inwardSummary.totalNotes,
+    inwardTotalAmount: inwardSummary.totalAmount,
+    withdrawnTotalNotes: totalNotesWithdrawn,
+    withdrawnTotalAmount: totalAmountWithdrawn,
+    netRemainingNotes,
+    netRemainingCash,
+    breakdown,
+    activeBreakdown,
+  };
+}
+
+/**
+ * Formats a comprehensive share text including Inward, Withdrawn, and Remaining Vault Balance.
+ */
+export function formatVaultSummaryShareText(
+  date: string,
+  vaultSummary: VaultRemainingSummary,
+  withdrawals: CashWithdrawalRecord[],
+  hubName: string = 'कूरियर डिलीवरी हब'
+): string {
+  let text = `🏦 *हब तिजोरी व कैश निकासी रिपोर्ट (Hub Vault & Cash Outward)*\n`;
+  text += `🏢 *हब:* ${hubName}\n`;
+  text += `📅 *तारीख:* ${date}\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `📥 *कुल इनवर्ड कैश (Rider COD Inward):*\n`;
+  text += `  • कुल नोट: ${vaultSummary.inwardTotalNotes} | कुल कैश: ₹${formatINR(vaultSummary.inwardTotalAmount)}\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `📤 *कुल निकासी (Cash Outward / Bank / Expense):*\n`;
+  text += `  • कुल निकासी नोट: ${vaultSummary.withdrawnTotalNotes} | कुल निकासी कैश: ₹${formatINR(vaultSummary.withdrawnTotalAmount)}\n`;
+  
+  if (withdrawals.length > 0) {
+    withdrawals.forEach((w, idx) => {
+      text += `    ${idx + 1}. ${w.recipientOrPurpose} (${w.dateTime}): ₹${formatINR(w.totalAmount)} (${w.totalNotes} नोट)\n`;
+    });
+  }
+
+  text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `🏛️ *तिजोरी में शेष शुद्ध बैलेंस (Remaining Vault Balance):*\n`;
+  text += `  • शेष शुद्ध नोट: ${vaultSummary.netRemainingNotes}\n`;
+  text += `  • शेष शुद्ध कैश: *₹${formatINR(vaultSummary.netRemainingCash)}*\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `📊 *नोट अनुसार शेष विवरण:*\n`;
+
+  vaultSummary.activeBreakdown.forEach((item) => {
+    text += `  • ₹${item.value} : कुल ${item.inwardCount} - निकासी ${item.withdrawnCount} = *शेष ${item.remainingCount} नोट* (₹${formatINR(item.remainingAmount)})\n`;
+  });
+
+  text += `\n_Generated via Courier Payout Pro_`;
+  return text;
+}
+

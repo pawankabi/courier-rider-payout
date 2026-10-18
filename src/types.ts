@@ -481,6 +481,13 @@ export interface CodDailyEntry {
   totalDeposit: number; // Auto-calculated: cashDeposit + onlineDeposit
   balance: number; // Total COD - Total Deposit (positive = shortage/due, 0 = settled, negative = surplus)
   
+  // COD Shortage Auto-Calculation & 1-Click Advance Conversion
+  shortageAmount?: number;
+  shortageStatus?: 'PENDING' | 'CLEARED' | 'CONVERTED_TO_ADVANCE' | string;
+  shortageConvertedAt?: string;
+  shortageConvertedBy?: string;
+  shortageAdvanceId?: string;
+
   // Per-Field Discrepancy & Shortage Tracking
   company1Shortage?: number; // Short amount
   company1ActualReceived?: number; // Actual amount collected/received
@@ -529,6 +536,20 @@ export interface CodSettings {
   updatedAt: string;
 }
 
+export interface CashWithdrawalRecord {
+  id: string; // unique id e.g. wth_1712345678_abcd
+  date: string; // YYYY-MM-DD
+  time?: string; // HH:mm
+  dateTime: string; // Display date & time string e.g. "2026-10-18 14:30"
+  recipientOrPurpose: string; // e.g. "Bank Deposit (SBI)", "Hub Fuel", "Vendor Payment"
+  withdrawnBy?: string; // Admin / Staff name
+  notesBreakdown: Partial<Record<DenominationValue, number>>; // e.g. { 500: 100, 200: 50 }
+  totalNotes: number; // Sum of withdrawn notes
+  totalAmount: number; // Total cash withdrawn in ₹
+  notes?: string;
+  createdAt: string; // ISO string
+}
+
 export interface DailyCodSheetData {
   date: string;
   entries: CodDailyEntry[];
@@ -541,6 +562,8 @@ export interface DailyCodSheetData {
   hubId?: string; // Hub / Owner account UID for multi-tenant isolation
   ownerUid?: string; // Owner UID
   consolidatedDenominations?: CashDenomination; // Aggregated daily cash note denomination summary
+  cashWithdrawals?: CashWithdrawalRecord[]; // Cash Outward & Vault Withdrawal logs
   updatedAt?: string;
 }
+
 

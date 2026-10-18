@@ -26,7 +26,7 @@ export interface SmsDispatchResult {
   whatsappUrl?: string;
 }
 
-export { PRODUCTION_DOMAIN };
+export { PRODUCTION_DOMAIN, getRiderStatementUrl };
 
 /**
  * Generate canonical public ledger link for a rider dynamically.
