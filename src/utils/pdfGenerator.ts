@@ -177,13 +177,17 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     }
 
     // KPI Summary Card Block
+    const rawNet = grandTotal - advanceAmount;
+    const isRiderDeficit = rawNet < 0;
     const startY = advanceAmount > 0 ? 146 : 138;
     const kpis = advanceAmount > 0
       ? [
           { label: 'TOTAL PARCELS', value: `${totalParcels.toLocaleString('en-IN')}`, color: [15, 23, 42] as [number, number, number] },
           { label: 'GROSS TOTAL', value: `Rs. ${grandTotal.toLocaleString('en-IN')}`, color: [15, 23, 42] as [number, number, number] },
           { label: 'ADVANCE DEDUCTED', value: `-Rs. ${advanceAmount.toLocaleString('en-IN')}`, color: [185, 28, 28] as [number, number, number] },
-          { label: 'FINAL NET TOTAL', value: `Rs. ${finalNetTotal.toLocaleString('en-IN')}`, color: [16, 122, 68] as [number, number, number] },
+          isRiderDeficit
+            ? { label: 'YOU OWE HUB / DEBT', value: `-Rs. ${Math.abs(rawNet).toLocaleString('en-IN')}`, color: [185, 28, 28] as [number, number, number] }
+            : { label: 'FINAL NET TOTAL', value: `Rs. ${rawNet.toLocaleString('en-IN')}`, color: [16, 122, 68] as [number, number, number] },
         ]
       : showIncentiveCol
       ? [
@@ -223,11 +227,10 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(71, 85, 105);
-    doc.text(
-      `Settlement Status: Paid Rs. ${totalPaid.toLocaleString('en-IN')}  |  Unpaid Rs. ${totalUnpaid.toLocaleString('en-IN')}  |  Total Delivery Days: ${entries.length}`,
-      36,
-      startY + cardH + 18
-    );
+    const statusText = isRiderDeficit
+      ? `Settlement Status: Advance deficit of Rs. ${Math.abs(rawNet).toLocaleString('en-IN')} remaining due to Hub  |  Total Delivery Days: ${entries.length}`
+      : `Settlement Status: Paid Rs. ${totalPaid.toLocaleString('en-IN')}  |  Unpaid Rs. ${totalUnpaid.toLocaleString('en-IN')}  |  Total Delivery Days: ${entries.length}`;
+    doc.text(statusText, 36, startY + cardH + 18);
 
     // SORT ASCENDING CHRONOLOGICALLY: Oldest to Newest
     const sortedEntries = [...entries].sort((a, b) => a.date.localeCompare(b.date));

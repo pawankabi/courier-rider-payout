@@ -288,6 +288,36 @@ export function calculateRiderLedger(
     });
   });
 
+  // 1b. If settlements deducted advances that are not present as individual advance entries,
+  // inject the difference so the ledger debits accurately match the settlement deductions
+  const totalAdvancesInList = validAdvances
+    .filter((a) => !a.isRecovery && a.type !== 'recovery')
+    .reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const totalAdvanceDeductedInSalaries = paidSalaries.reduce((sum, s) => sum + (Number(s.advanceAmount) || 0), 0);
+
+  if (totalAdvancesInList < totalAdvanceDeductedInSalaries) {
+    const missingAdvanceAmount = totalAdvanceDeductedInSalaries - totalAdvancesInList;
+    const earliestSalDate = paidSalaries[0]?.startDate || '2026-01-01';
+    rawList.push({
+      id: 'adv-settlement-implicit',
+      originalId: 'adv-settlement-implicit',
+      rawDate: earliestSalDate,
+      sortTimestamp: new Date(earliestSalDate).getTime() - 1000,
+      formattedDate: formatDateDisplay(earliestSalDate),
+      type: 'advance',
+      entryKind: 'ADVANCE_GIVEN',
+      title: 'एडवांस भुगतान (सेटलमेंट कटौती)',
+      subTitle: 'पे-आउट सेटलमेंट में समायोजित अग्रिम राशि',
+      amount: missingAdvanceAmount,
+      netPaid: 0,
+      advanceDeducted: 0,
+      grossTotal: 0,
+      isPaid: false,
+      paidToRiderCol: missingAdvanceAmount,
+      settledOrEarnedCol: 0,
+    });
+  }
+
   // Sort strictly oldest first (ascending) to compute chronological running balance
   rawList.sort((a, b) => {
     if (a.sortTimestamp !== b.sortTimestamp) return a.sortTimestamp - b.sortTimestamp;
@@ -363,9 +393,10 @@ export function calculateRiderLedger(
   const totalSettledOrEarned = processedRows.reduce((acc, row) => acc + row.settledOrEarned, 0);
 
   // Lifetime unrecovered advance debt check (Guarantees double-entry integrity)
-  const totalAdvancesTaken = validAdvances
-    .filter((a) => !a.isRecovery && a.type !== 'recovery')
-    .reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const totalAdvancesTaken = Math.max(
+    validAdvances.filter((a) => !a.isRecovery && a.type !== 'recovery').reduce((sum, a) => sum + (Number(a.amount) || 0), 0),
+    totalAdvanceDeductedInSalaries
+  );
 
   const totalRecoveries = validAdvances
     .filter((a) => a.isRecovery || a.type === 'recovery')
@@ -395,9 +426,9 @@ export function calculateRiderLedger(
 
   const unpaidSalary = unpaidSalaries.reduce((sum, s) => sum + s.netTotal, 0);
 
-  // Chronological traversal terminal balance is the source of truth
+  // Chronological traversal terminal balance is the cumulative running balance after all events
   const finalRawDifference = processedRows.length > 0
-    ? (sortOrder === 'desc' ? processedRows[0].runningBalance : processedRows[processedRows.length - 1].runningBalance)
+    ? running
     : ((unsettledIncentives + unpaidSalary) - unsettledAdvances);
   const netBalance = Math.abs(finalRawDifference);
 

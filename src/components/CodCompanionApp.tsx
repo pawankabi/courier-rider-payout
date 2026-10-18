@@ -127,6 +127,23 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   // Purge any legacy cached keys in localStorage/sessionStorage related to mock riders on mount
   useEffect(() => {
     purgeLegacyMockStorage();
+
+    // Dynamically set Rider Companion favicon, PWA manifest, and page title
+    const iconLink = document.querySelector("link[rel*='icon']") as HTMLLinkElement;
+    const manifestLink = document.querySelector("link[rel='manifest']") as HTMLLinkElement;
+    const prevIcon = iconLink?.href;
+    const prevManifest = manifestLink?.href;
+    const prevTitle = document.title;
+
+    if (iconLink) iconLink.href = '/rider-logo.svg';
+    if (manifestLink) manifestLink.href = '/manifest-rider.json';
+    document.title = 'Rider Companion (COD Entry & हिसाब किताब)';
+
+    return () => {
+      if (iconLink && prevIcon) iconLink.href = prevIcon;
+      if (manifestLink && prevManifest) manifestLink.href = prevManifest;
+      document.title = prevTitle;
+    };
   }, []);
 
   // 1. INDEPENDENT FIREBASE AUTH & SESSION LIFECYCLE:
@@ -1240,8 +1257,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         <div className="relative w-full max-w-md bg-white border border-slate-200/90 rounded-2xl shadow-xl p-6 sm:p-8 z-10">
           {/* Logo & Title */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-600 text-white shadow-md shadow-emerald-600/20 mb-4 animate-in zoom-in-95">
-              <Bike className="w-8 h-8" />
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-slate-950 border border-sky-500/40 p-1 shadow-lg shadow-sky-950/40 mb-4 animate-in zoom-in-95">
+              <img src="/rider-logo.svg" alt="Rider Logo" className="w-14 h-14 rounded-xl object-contain" />
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 flex items-center justify-center gap-2">
               <span>COD Entry</span>
@@ -1556,8 +1573,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           {/* Brand & Active User Info */}
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-              <Bike className="w-5 h-5" />
+            <div className="w-9 h-9 rounded-xl bg-slate-950 border border-sky-500/40 p-0.5 flex items-center justify-center shrink-0 shadow-sm">
+              <img src="/rider-logo.svg" alt="Rider App Logo" className="w-8 h-8 rounded-lg object-contain" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">

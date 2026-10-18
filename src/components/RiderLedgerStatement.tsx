@@ -201,11 +201,11 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     };
   }, [onBackToApp]);
 
-  // Fetch statement data from Firestore if not provided or to refresh live
+  // Fetch statement data from Firestore only if initialStatement is NOT provided
   useEffect(() => {
     let isMounted = true;
-    if (resolvedRiderId) {
-      if (!statement) setLoading(true);
+    if (resolvedRiderId && !initialStatement) {
+      setLoading(true);
       fetchPublicRiderStatement(resolvedRiderId)
         .then((data) => {
           if (isMounted) {
@@ -219,13 +219,16 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
           console.error('Failed to load statement from Firestore:', err);
           if (isMounted) setLoading(false);
         });
+    } else if (initialStatement) {
+      setStatement(initialStatement);
+      setLoading(false);
     } else {
       setLoading(false);
     }
     return () => {
       isMounted = false;
     };
-  }, [resolvedRiderId]);
+  }, [resolvedRiderId, initialStatement]);
 
   // Statement URL strictly resolved to production Vercel domain or current vercel.app origin
   const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')

@@ -2313,8 +2313,8 @@ function MainCourierApp() {
         <div className="max-w-6xl mx-auto px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3">
           {/* Brand Logo & Name */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 p-0.5 shadow-md flex items-center justify-center shrink-0">
-              <img src="/icon.svg" alt="Courier App Logo" className="w-7 h-7 rounded-lg" />
+            <div className="w-9 h-9 rounded-xl bg-slate-950 border border-cyan-500/30 p-0.5 shadow-md flex items-center justify-center shrink-0">
+              <img src="/admin-logo.svg" alt="Courier App Logo" className="w-8 h-8 rounded-lg object-contain" />
             </div>
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
