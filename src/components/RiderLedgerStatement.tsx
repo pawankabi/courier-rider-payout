@@ -245,7 +245,11 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   };
 
   const handlePrint = () => {
-    window.print();
+    try {
+      window.print();
+    } catch (err) {
+      console.warn('Native window.print notice:', err);
+    }
   };
 
   const isRider = !isAdmin;

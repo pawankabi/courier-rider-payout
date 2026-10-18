@@ -46,3 +46,83 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+/* =========================================================================
+   ROBUST NATIVE PRINT / PDF STYLING (100% Offline, Zero Library Dependencies)
+   ========================================================================= */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 8mm 12mm 8mm;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Break out of fixed full-screen modal overlays so multi-page tables print unclipped */
+  .fixed,
+  .overflow-y-auto,
+  [class*="overflow-"] {
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    background: #ffffff !important;
+  }
+
+  /* Hide all non-printable application controls */
+  .print\:hidden,
+  button,
+  header.sticky,
+  nav,
+  .no-print,
+  #aistudio-chat,
+  ::-webkit-scrollbar {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Printable Table Formatting */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+
+  th,
+  td {
+    border-color: #e2e8f0 !important;
+  }
+
+  /* Preserve sharp contrast for status badges during printing */
+  .print-card,
+  [class*="border"] {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+

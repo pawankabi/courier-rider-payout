@@ -92,7 +92,11 @@ export function calculateRiderLedger(
   // 1. Filter valid advances (never filter by date; state-scoped only)
   const validAdvances: RiderAdvanceEntry[] = (statement.advances || []).filter((a) => {
     const amt = Number(a.amount) || 0;
-    const isGhost = amt < 0 || a.id?.startsWith('settle_adj') || a.reason?.includes('सेटलमेंट समायोजन');
+    const isGhost =
+      amt <= 0 ||
+      a.id?.startsWith('settle_adj') ||
+      a.id?.startsWith('adv_cf_') ||
+      a.reason?.includes('सेटलमेंट समायोजन');
     if (isGhost) return false;
     if (a.isRecovery || a.type === 'recovery') return true;
     return amt > 0;
@@ -288,15 +292,15 @@ export function calculateRiderLedger(
     });
   });
 
-  // 1b. If settlements deducted advances that are not present as individual advance entries,
-  // inject the difference so the ledger debits accurately match the settlement deductions
+  // 1b. Only if settlements deducted advances that are completely absent from individual advance entries
+  // (e.g. legacy system with zero advance rows), inject the difference so the ledger debits match
   const totalAdvancesInList = validAdvances
     .filter((a) => !a.isRecovery && a.type !== 'recovery')
     .reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
   const totalAdvanceDeductedInSalaries = paidSalaries.reduce((sum, s) => sum + (Number(s.advanceAmount) || 0), 0);
 
-  if (totalAdvancesInList < totalAdvanceDeductedInSalaries) {
-    const missingAdvanceAmount = totalAdvanceDeductedInSalaries - totalAdvancesInList;
+  if (validAdvances.length === 0 && totalAdvanceDeductedInSalaries > 0) {
+    const missingAdvanceAmount = totalAdvanceDeductedInSalaries;
     const earliestSalDate = paidSalaries[0]?.startDate || '2026-01-01';
     rawList.push({
       id: 'adv-settlement-implicit',

@@ -123,20 +123,21 @@ export function isUnsettledAdvance(
   if (adv.isSettled === true || adv.isDeducted === true) return false;
   if ((adv as any).status === 'PAID') return false;
   if (adv.isRecovery || adv.type === 'recovery') return false;
-  if (adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+  if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
   const amt = Number(adv.amount) || 0;
   if (amt <= 0) return false;
 
-  // If advance is explicitly marked UNPAID/unsettled (e.g. carry forward debt), it stays active!
-  if (adv.isSettled === false || (adv as any).status === 'UNPAID') {
-    return true;
-  }
-
+  // Check if explicitly recorded in a settlement
   if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
 
   if (settlements && settlements.length > 0) {
     const { settledAdvIds } = getSettlementContext(settlements, riderId || adv.riderId);
     if (settledAdvIds.has(adv.id)) return false;
+  }
+
+  // If advance is explicitly marked UNPAID/unsettled (e.g. carry forward remainder debt), it stays active
+  if (adv.isSettled === false || (adv as any).status === 'UNPAID') {
+    return true;
   }
 
   return true;
@@ -418,9 +419,14 @@ export function reindexAndSanitizeRiderBalances(
     // Lifetime earnings used towards advances:
     const totalAdvanceCoveredByEarnings = Math.max(0, totalGrossEarned - totalCashDisbursed);
 
-    // Lifetime advances taken & recoveries
+    // Lifetime advances taken & recoveries:
+    // Strictly filter out any synthetic/phantom duplicates (adv_cf_, settle_adj)
     const originalAdvances = (rider.advances || []).filter(
-      (a) => !a.id?.startsWith('settle_adj') && !a.reason?.includes('सेटलमेंट समायोजन') && (Number(a.amount) || 0) > 0
+      (a) =>
+        !a.id?.startsWith('settle_adj') &&
+        !a.id?.startsWith('adv_cf_') &&
+        !a.reason?.includes('सेटलमेंट समायोजन') &&
+        (Number(a.amount) || 0) > 0
     );
     const regularAdvances = originalAdvances.filter((a) => !a.isRecovery && a.type !== 'recovery');
     const recoveries = originalAdvances.filter((a) => a.isRecovery || a.type === 'recovery');
@@ -441,11 +447,9 @@ export function reindexAndSanitizeRiderBalances(
     let allowanceToSettle = totalAdvanceCoveredByEarnings + totalRecoveries;
     const sanitizedAdvances: RiderAdvanceEntry[] = [];
 
-    sortedRegular.forEach((adv) => {
-      const amt = Number(adv.amount) || 0;
-      if (allowanceToSettle >= amt) {
-        // Fully covered by lifetime earnings
-        allowanceToSettle -= amt;
+    // If net debt is zero, ALL advances are completely settled (Clean slate: 0)
+    if (netUnrecoveredDebt === 0) {
+      sortedRegular.forEach((adv) => {
         if (!adv.isSettled || !adv.isDeducted || (adv as any).status !== 'PAID') {
           riderChanged = true;
         }
@@ -455,70 +459,75 @@ export function reindexAndSanitizeRiderBalances(
           isDeducted: true,
           status: 'PAID',
         });
-      } else if (allowanceToSettle > 0) {
-        // Partially covered!
-        const coveredAmt = allowanceToSettle;
-        const unrecoveredAmt = amt - coveredAmt;
-        allowanceToSettle = 0;
-        riderChanged = true;
-
-        // 1. Covered portion
-        sanitizedAdvances.push({
-          ...adv,
-          amount: coveredAmt,
-          isSettled: true,
-          isDeducted: true,
-          status: 'PAID',
-        });
-        // 2. Active unrecovered portion
-        sanitizedAdvances.push({
-          id: `${adv.id}_rem`,
-          riderId: rider.id,
-          amount: unrecoveredAmt,
-          date: adv.date,
-          createdAt: adv.createdAt || new Date().toISOString(),
-          reason: adv.reason || 'बकाया एडवांस (Carry Forward Debt)',
-          isSettled: false,
-          isDeducted: false,
-          status: 'UNPAID',
-          runningBalance: unrecoveredAmt,
-        });
-      } else {
-        // Not covered at all: stays ACTIVE!
-        if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID') {
+      });
+    } else {
+      // Partially unrecovered debt: Settle up to allowance, keep remainder strictly active
+      sortedRegular.forEach((adv) => {
+        const amt = Number(adv.amount) || 0;
+        if (allowanceToSettle >= amt) {
+          allowanceToSettle -= amt;
+          if (!adv.isSettled || !adv.isDeducted || (adv as any).status !== 'PAID') {
+            riderChanged = true;
+          }
+          sanitizedAdvances.push({
+            ...adv,
+            isSettled: true,
+            isDeducted: true,
+            status: 'PAID',
+          });
+        } else if (allowanceToSettle > 0) {
+          const coveredAmt = allowanceToSettle;
+          const unrecoveredAmt = amt - coveredAmt;
+          allowanceToSettle = 0;
           riderChanged = true;
-        }
-        sanitizedAdvances.push({
-          ...adv,
-          isSettled: false,
-          isDeducted: false,
-          status: 'UNPAID',
-        });
-      }
-    });
 
-    // Also include recoveries in sanitizedAdvances
+          // 1. Covered portion marked settled
+          sanitizedAdvances.push({
+            ...adv,
+            amount: coveredAmt,
+            isSettled: true,
+            isDeducted: true,
+            status: 'PAID',
+          });
+          // 2. Active unrecovered portion
+          sanitizedAdvances.push({
+            id: `${adv.id}_rem`,
+            riderId: rider.id,
+            amount: unrecoveredAmt,
+            date: adv.date,
+            createdAt: adv.createdAt || new Date().toISOString(),
+            reason: adv.reason || 'बकाया एडवांस (Carry Forward Debt)',
+            isSettled: false,
+            isDeducted: false,
+            status: 'UNPAID',
+            runningBalance: unrecoveredAmt,
+          });
+        } else {
+          // Entirely active unrecovered advance
+          if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID') {
+            riderChanged = true;
+          }
+          sanitizedAdvances.push({
+            ...adv,
+            isSettled: false,
+            isDeducted: false,
+            status: 'UNPAID',
+          });
+        }
+      });
+    }
+
+    // Include recoveries in sanitizedAdvances
     recoveries.forEach((rec) => {
       sanitizedAdvances.push(rec);
     });
 
-    // Double-check: If netUnrecoveredDebt > 0 and current active total does not match netUnrecoveredDebt
-    const currentActiveTotal = calculateActiveAdvanceTotal(sanitizedAdvances, settlements, rider.id);
-    if (netUnrecoveredDebt > 0 && currentActiveTotal < netUnrecoveredDebt) {
-      const diffDebt = netUnrecoveredDebt - currentActiveTotal;
+    // Check if rider's advances list or totalAdvance changed
+    if (rider.advances?.length !== sanitizedAdvances.length) {
       riderChanged = true;
-      sanitizedAdvances.push({
-        id: `adv_cf_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        riderId: rider.id,
-        amount: diffDebt,
-        date: new Date().toISOString().slice(0, 10),
-        createdAt: new Date().toISOString(),
-        reason: 'बकाया एडवांस (Unrecovered Advance Carry-Forward)',
-        isSettled: false,
-        isDeducted: false,
-        status: 'UNPAID',
-        runningBalance: diffDebt,
-      });
+    }
+    if (rider.totalAdvance !== netUnrecoveredDebt) {
+      riderChanged = true;
     }
 
     // 2. Sanitize Incentives with lifetime double-entry math

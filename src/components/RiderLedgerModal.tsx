@@ -17,7 +17,7 @@ export const RiderLedgerModal: React.FC<RiderLedgerModalProps> = ({
   const handleClose = onClose || onBackToApp;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950 animate-in fade-in">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950 animate-in fade-in print:static print:overflow-visible print:bg-white print:p-0 print:m-0 print:h-auto print:w-auto">
       <RiderLedgerStatement
         {...props}
         onBackToApp={handleClose}

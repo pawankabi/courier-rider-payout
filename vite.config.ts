@@ -252,29 +252,48 @@ export default defineConfig(({ command, mode }) => {
           navigateFallbackDenylist: [/^\/__.*$/],
           runtimeCaching: [
             {
-              // Core HTML document navigation: Stale-While-Revalidate so app opens in < 1s from cache even on Cloud Run cold start
+              // Core HTML document navigation: NetworkFirst with quick fallback to cache
+              // Ensures installed PWAs automatically get the latest version on launch without re-downloading
               urlPattern: ({ request }) => request.mode === 'navigate',
-              handler: 'StaleWhileRevalidate',
+              handler: 'NetworkFirst',
               options: {
                 cacheName: 'pwa-app-shell',
+                networkTimeoutSeconds: 3,
                 cacheableResponse: {
                   statuses: [0, 200],
                 },
               },
             },
             {
-              // Core JS, CSS, and worker scripts: Cache-First strategy for instant offline / cold-start execution
+              // Core JS, CSS, and worker scripts: NetworkFirst strategy
+              // Guarantees installed apps seamlessly run the newest build upon opening, falling back to cache offline
               urlPattern: ({ request }) =>
                 request.destination === 'script' || request.destination === 'style' || request.destination === 'worker',
-              handler: 'CacheFirst',
+              handler: 'NetworkFirst',
               options: {
                 cacheName: 'pwa-static-assets',
+                networkTimeoutSeconds: 3,
                 cacheableResponse: {
                   statuses: [0, 200],
                 },
                 expiration: {
                   maxEntries: 100,
                   maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+              },
+            },
+            {
+              // Public statements & rider ledger data: NetworkFirst
+              urlPattern: ({ url }) =>
+                url.pathname.includes('/statement') ||
+                url.pathname.includes('/public_statements') ||
+                url.hostname.includes('firestore.googleapis.com'),
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'pwa-ledger-data',
+                networkTimeoutSeconds: 2.5,
+                cacheableResponse: {
+                  statuses: [0, 200],
                 },
               },
             },
