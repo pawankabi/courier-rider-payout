@@ -22,8 +22,7 @@ import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } 
 import { fetchPublicRiderStatement } from '../services/firestoreSync';
 import { generateStatementUrl } from '../services/smsService';
 import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
-import { calculatePureRiderLedger as calculateRiderLedger } from '../utils/pureLedgerEngine';
-import type { UnifiedTransactionItem } from '../utils/pureLedgerEngine';
+import { calculatePureRiderLedger, UnifiedTransactionItem } from '../utils/pureLedgerEngine';
 
 export type { UnifiedTransactionItem };
 
@@ -53,7 +52,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   onEditIncentive,
   onResetAccount,
 }) => {
-  // Extract or resolve riderId from prop or window location (hash or search params)
+  // Extract or resolve riderId from prop or window location (hash, query, or path)
   const resolvedRiderId = useMemo(() => {
     if (propRiderId && propRiderId.trim()) return decodeURIComponent(propRiderId).trim();
     if (typeof window !== 'undefined') {
@@ -141,7 +140,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const [loading, setLoading] = useState<boolean>(!initialStatement && !statement);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // Default: 'desc' = Current to Oldest (Newest at top)
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // Default: 'desc' = Newest at top
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -234,7 +233,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     };
   }, [resolvedRiderId, initialStatement]);
 
-  // Statement URL strictly resolved to production Vercel domain or current vercel.app origin
+  // Statement URL strictly resolved to production domain or current host origin
   const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')
     ? window.location.origin
     : 'https://courier-rider-payout.vercel.app';
@@ -258,18 +257,18 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const isRider = !isAdmin;
 
-  // Compile Transactions & Simple Khatabook Math via calculateRiderLedger
+  // Pure Arithmetic Accounting Calculation via pureLedgerEngine
   const { 
     timelineRows, 
-    totalPaidToRider, 
-    totalSettledOrEarned, 
+    totalPlus, 
+    totalMinus, 
     netBalance, 
     balanceStatus,
     balanceLabel,
     adminBalanceLabel,
     riderBalanceLabel,
   } = useMemo(() => {
-    return calculateRiderLedger(statement, sortOrder, isRider, propSettlements);
+    return calculatePureRiderLedger(statement, sortOrder, isRider, propSettlements);
   }, [statement, sortOrder, isRider, propSettlements]);
 
   // Admin Actions: Delete Row (Android WebView safe, zero window.confirm)
@@ -282,419 +281,293 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     try {
       if (row.type === 'advance' && onDeleteAdvance) {
         await onDeleteAdvance(row.originalId);
-        // Optimistic state update
-        setStatement((prev) => {
-          if (!prev) return null;
-          const updatedAdvances = (prev.advances || []).filter(
-            (a) => a.id !== row.originalId && `adv-${a.id}` !== row.id
-          );
-          const newTotal = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-          return {
-            ...prev,
-            advances: updatedAdvances,
-            totalAdvance: newTotal,
-          };
-        });
-        showToast('एडवांस एंट्री सफलतापूर्वक हटाई गई।');
+        showToast('एडवांस सफलतापूर्वक हटा दिया गया');
       } else if (row.type === 'incentive' && onDeleteIncentive) {
         await onDeleteIncentive(row.originalId);
-        // Optimistic state update
-        setStatement((prev) => {
-          if (!prev) return null;
-          const updatedIncentives = (prev.incentives || []).filter(
-            (i) => i.id !== row.originalId && `inc-${i.id}` !== row.id
-          );
-          const newTotal = updatedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+        showToast('इंसेंटिव सफलतापूर्वक हटा दिया गया');
+      }
+
+      setStatement((prev) => {
+        if (!prev) return null;
+        if (row.type === 'advance') {
           return {
             ...prev,
-            incentives: updatedIncentives,
-            totalIncentive: newTotal,
+            advances: (prev.advances || []).filter((a) => a.id !== row.originalId && `adv-${a.id}` !== row.id),
           };
-        });
-        showToast('इंसेंटिव एंट्री सफलतापूर्वक हटाई गई।');
-      }
+        }
+        if (row.type === 'incentive') {
+          return {
+            ...prev,
+            incentives: (prev.incentives || []).filter((i) => i.id !== row.originalId && `inc-${i.id}` !== row.id),
+          };
+        }
+        return prev;
+      });
       setDeletingRow(null);
-    } catch (err) {
-      console.error('Error deleting ledger row:', err);
-      showToast('एंट्री हटाने में त्रुटि हुई।');
+    } catch (err: any) {
+      showToast(`हटाने में त्रुटि: ${err.message || 'अज्ञात समस्या'}`);
     } finally {
       setIsDeletingRow(false);
       setActionInProgress(null);
     }
   };
 
-  // Admin Actions: Edit Advance Row
+  // Admin Actions: Start Edit Advance
   const handleStartEditAdvance = (row: UnifiedTransactionItem) => {
-    if (!isAdmin) return;
     setEditingAdvanceRow(row);
-    setEditAmount(String(row.paidToRider));
-    setEditDate(row.rawDate ? row.rawDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
-    setEditReason(row.title || '');
+    setEditAmount(row.minusAmount ? String(row.minusAmount) : '');
+    setEditDate(row.rawDate || new Date().toISOString().split('T')[0]);
+    setEditReason(row.title || 'एडवांस भुगतान');
   };
 
-  const handleCancelEditAdvance = () => {
-    setEditingAdvanceRow(null);
-    setEditAmount('');
-    setEditDate('');
-    setEditReason('');
-  };
-
-  const handleSaveEditAdvance = async (e: React.FormEvent) => {
+  // Admin Actions: Save Edit Advance
+  const handleSaveAdvanceEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAdvanceRow || !onEditAdvance) return;
 
-    const num = Math.max(0, parseFloat(editAmount) || 0);
-    if (num <= 0) {
-      showToast('कृपया मान्य एडवांस राशि दर्ज करें।');
+    const numAmount = parseFloat(editAmount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      showToast('कृपया वैध राशि दर्ज करें');
       return;
     }
 
     setIsSavingEdit(true);
     setActionInProgress(editingAdvanceRow.id);
+
     try {
       await onEditAdvance(editingAdvanceRow.originalId, {
-        amount: num,
-        reason: editReason.trim() || 'सामान्य एडवांस',
-        date: editDate || new Date().toISOString().slice(0, 10),
+        amount: numAmount,
+        reason: editReason.trim() || 'एडवांस भुगतान',
+        date: editDate || new Date().toISOString().split('T')[0],
       });
 
-      // Optimistic update
       setStatement((prev) => {
         if (!prev) return null;
-        const exists = (prev.advances || []).some(
-          (a) => a.id === editingAdvanceRow.originalId || `adv-${a.id}` === editingAdvanceRow.id
-        );
-        let updatedAdvances: RiderAdvanceEntry[];
-        if (exists) {
-          updatedAdvances = (prev.advances || []).map((a) => {
+        return {
+          ...prev,
+          advances: (prev.advances || []).map((a) => {
             if (a.id === editingAdvanceRow.originalId || `adv-${a.id}` === editingAdvanceRow.id) {
               return {
                 ...a,
-                amount: num,
-                reason: editReason.trim() || 'सामान्य एडवांस',
+                amount: numAmount,
+                reason: editReason.trim() || 'एडवांस भुगतान',
                 date: editDate || a.date,
               };
             }
             return a;
-          });
-        } else {
-          const newAdv: RiderAdvanceEntry = {
-            id: editingAdvanceRow.originalId !== 'prior-settled-advance' ? editingAdvanceRow.originalId : `adv_${Date.now()}`,
-            riderId: prev.riderId,
-            amount: num,
-            reason: editReason.trim() || 'सामान्य एडवांस',
-            date: editDate || new Date().toISOString().slice(0, 10),
-            runningBalance: num,
-            createdAt: new Date().toISOString(),
-          };
-          updatedAdvances = [newAdv, ...(prev.advances || [])];
-        }
-        const newTotal = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-        return {
-          ...prev,
-          advances: updatedAdvances,
-          totalAdvance: newTotal,
+          }),
         };
       });
 
-      showToast('एडवांस एंट्री सफलतापूर्वक अपडेट की गई।');
-      handleCancelEditAdvance();
-    } catch (err) {
-      console.error('Error updating advance in ledger:', err);
-      showToast('एडवांस अपडेट करने में त्रुटि हुई।');
+      showToast('एडवांस सफलतापूर्वक अपडेट किया गया');
+      setEditingAdvanceRow(null);
+    } catch (err: any) {
+      showToast(`अपडेट में त्रुटि: ${err.message || 'अज्ञात समस्या'}`);
     } finally {
       setIsSavingEdit(false);
       setActionInProgress(null);
     }
   };
 
-  // Admin Actions: Edit Incentive Row
+  // Admin Actions: Start Edit Incentive
   const handleStartEditIncentive = (row: UnifiedTransactionItem) => {
-    if (!isAdmin) return;
     setEditingIncentiveRow(row);
-    setEditIncAmount(String(row.settledOrEarned));
-    setEditIncDate(row.rawDate ? row.rawDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
-    setEditIncReason(row.title || '');
+    setEditIncAmount(row.plusAmount ? String(row.plusAmount) : '');
+    setEditIncDate(row.rawDate || new Date().toISOString().split('T')[0]);
+    setEditIncReason(row.title || 'इंसेंटिव / बोनस');
   };
 
-  const handleCancelEditIncentive = () => {
-    setEditingIncentiveRow(null);
-    setEditIncAmount('');
-    setEditIncDate('');
-    setEditIncReason('');
-  };
-
-  const handleSaveEditIncentive = async (e: React.FormEvent) => {
+  // Admin Actions: Save Edit Incentive
+  const handleSaveIncentiveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingIncentiveRow || !onEditIncentive) return;
 
-    const num = Math.max(0, parseFloat(editIncAmount) || 0);
-    if (num <= 0) {
-      showToast('कृपया मान्य इंसेंटिव राशि दर्ज करें।');
+    const numAmount = parseFloat(editIncAmount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      showToast('कृपया वैध राशि दर्ज करें');
       return;
     }
 
     setIsSavingIncEdit(true);
     setActionInProgress(editingIncentiveRow.id);
+
     try {
       await onEditIncentive(editingIncentiveRow.originalId, {
-        amount: num,
+        amount: numAmount,
         reason: editIncReason.trim() || 'इंसेंटिव / बोनस',
-        date: editIncDate || new Date().toISOString().slice(0, 10),
+        date: editIncDate || new Date().toISOString().split('T')[0],
       });
 
-      // Optimistic update
       setStatement((prev) => {
         if (!prev) return null;
-        const updatedIncentives = (prev.incentives || []).map((i) => {
-          if (i.id === editingIncentiveRow.originalId || `inc-${i.id}` === editingIncentiveRow.id) {
-            return {
-              ...i,
-              amount: num,
-              reason: editIncReason.trim() || 'इंसेंटिव / बोनस',
-              date: editIncDate || i.date,
-            };
-          }
-          return i;
-        });
-        const newTotal = updatedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
         return {
           ...prev,
-          incentives: updatedIncentives,
-          totalIncentive: newTotal,
+          incentives: (prev.incentives || []).map((i) => {
+            if (i.id === editingIncentiveRow.originalId || `inc-${i.id}` === editingIncentiveRow.id) {
+              return {
+                ...i,
+                amount: numAmount,
+                reason: editIncReason.trim() || 'इंसेंटिव / बोनस',
+                date: editIncDate || i.date,
+              };
+            }
+            return i;
+          }),
         };
       });
 
-      showToast('इंसेंटिव एंट्री सफलतापूर्वक अपडेट की गई।');
-      handleCancelEditIncentive();
-    } catch (err) {
-      console.error('Error updating incentive in ledger:', err);
-      showToast('इंसेंटिव अपडेट करने में त्रुटि हुई।');
+      showToast('इंसेंटिव सफलतापूर्वक अपडेट किया गया');
+      setEditingIncentiveRow(null);
+    } catch (err: any) {
+      showToast(`अपडेट में त्रुटि: ${err.message || 'अज्ञात समस्या'}`);
     } finally {
       setIsSavingIncEdit(false);
       setActionInProgress(null);
     }
   };
 
-  // Admin Action: Reset Entire Rider Account (In-App Confirm, zero window.confirm)
+  // Admin Actions: Confirm Reset Account (Android WebView safe, zero window.confirm)
   const handleConfirmResetAccount = async () => {
-    if (!isAdmin || !statement) return;
+    if (!isAdmin || !onResetAccount) return;
     setIsResetting(true);
-    setActionInProgress('reset-all');
-
     try {
-      if (onResetAccount) {
-        await onResetAccount();
-      }
-      // Flush corrupt local storage snapshots so fresh server data takes immediate effect
-      try {
-        const rId = resolvedRiderId || statement.riderId;
-        localStorage.removeItem(`cp_stmt_${rId}`);
-        sessionStorage.removeItem(`cp_stmt_${rId}`);
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-          const k = localStorage.key(i);
-          if (k && (k.includes(rId) || k.includes('statement') || k.includes('ledger'))) {
-            localStorage.removeItem(k);
-          }
-        }
-      } catch {}
-
+      await onResetAccount();
       setStatement((prev) => {
         if (!prev) return null;
         return {
           ...prev,
           advances: [],
           incentives: [],
+          salaries: [],
+          recentDeliveries: [],
           totalAdvance: 0,
           totalIncentive: 0,
         };
       });
-      showToast('खाता सफलतापूर्वक रीसेट (₹0) कर दिया गया!');
+      showToast('खाता सफलतापूर्वक रीसेट (शून्य) कर दिया गया');
       setShowResetConfirm(false);
-    } catch (err) {
-      console.error('Error resetting account:', err);
-      showToast('खाता रीसेट करने में त्रुटि हुई।');
+    } catch (err: any) {
+      showToast(`रीसेट में त्रुटि: ${err.message || 'अज्ञात समस्या'}`);
     } finally {
       setIsResetting(false);
-      setActionInProgress(null);
     }
   };
 
-  // Clean CSV Export
-  const handleExportCSV = () => {
-    if (!statement) return;
-    let csvContent = 'data:text/csv;charset=utf-8,';
-
-    csvContent += `HISAAB KITAAB STATEMENT - ${statement.riderName}\n`;
-    csvContent += `Hub: ${statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}\n`;
-    csvContent += `Phone: +91 ${statement.riderPhone}\n`;
-    csvContent += `Net Balance: ${
-      balanceStatus === 'rider_due' ? 'Rider Due: Rs. ' + netBalance : balanceStatus === 'payable' ? 'Payable to Rider: Rs. ' + netBalance : 'All Settled: Rs. 0'
-    }\n`;
-    csvContent += `Generated At: ${new Date().toLocaleDateString('en-IN')}\n\n`;
-
-    csvContent += 'तारीख (Date),विवरण (Details),दिया गया / एडवांस (₹),काटा गया / चुकता (₹)\n';
-
-    timelineRows.forEach((row) => {
-      const dateClean = `"${row.formattedDate}"`;
-      const detailsClean = `"${row.title.replace(/"/g, '""')}${row.subTitle ? ' - ' + row.subTitle.replace(/"/g, '""') : ''}"`;
-      const paidStr = row.paidToRider > 0 ? `${row.paidToRider}` : '0';
-      const settledStr = row.settledOrEarned > 0 ? `${row.settledOrEarned}` : '0';
-      csvContent += `${dateClean},${detailsClean},${paidStr},${settledStr}\n`;
-    });
-
-    csvContent += `\n"कुल योग (TOTALS)","","${totalPaidToRider}","${totalSettledOrEarned}"\n`;
-    csvContent += `"अंतिम शेष (FINAL NET BALANCE)","","${
-      balanceStatus === 'rider_due' 
-        ? (isAdmin ? 'लेना बाकी / रिकवरी: Rs ' + netBalance : 'हब में जमा करना बाकी है (आपको हब को देना होगा): Rs ' + netBalance)
-        : balanceStatus === 'payable' 
-        ? (isAdmin ? 'देना बाकी: Rs ' + netBalance : 'आपको मिलना बाकी है (हब से प्राप्त होगा): Rs ' + netBalance)
-        : 'पूरा हिसाब चुकता: Rs 0'
-    }",""\n`;
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `${statement.riderName.replace(/\s+/g, '_')}_Hisab_Kitab_Statement.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const cleanDigits = statement ? getCleanPhoneDigits(statement.riderPhone).slice(-10) : '';
-  const shareText = statement 
-    ? `नमस्ते ${statement.riderName}, आपका हिसाब किताब यहाँ देखें:\n${riderBalanceLabel}\nलिंक: ${statementUrl}` 
-    : '';
-  const waShareUrl = cleanDigits
-    ? `https://wa.me/91${cleanDigits}?text=${encodeURIComponent(shareText)}` 
-    : '#';
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6 text-slate-800">
-        <RefreshCw className="w-10 h-10 text-[#047857] animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-slate-900">हिसाब किताब लोड हो रहा है...</h2>
-        <p className="text-slate-500 text-sm mt-1">कृपया प्रतीक्षा करें, राइडर स्टेटमेंट प्राप्त किया जा रहा है।</p>
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+        <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <h3 className="text-white text-base font-bold font-sans">
+          राइडर खाता बही लोड हो रहा है...
+        </h3>
+        <p className="text-slate-400 text-xs mt-1 font-sans">
+          कृपया प्रतीक्षा करें...
+        </p>
       </div>
     );
   }
 
   if (!statement) {
     return (
-      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6 text-slate-900 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mb-4 shadow-xs">
-          <FileSpreadsheet className="w-8 h-8" />
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 max-w-md w-full text-center space-y-4 shadow-xl">
+          <div className="w-12 h-12 bg-red-500/10 text-red-400 rounded-full flex items-center justify-center mx-auto">
+            <X className="w-6 h-6" />
+          </div>
+          <h3 className="text-white text-base font-bold font-sans">
+            राइडर खाता विवरण नहीं मिला
+          </h3>
+          <p className="text-slate-400 text-xs leading-relaxed font-sans">
+            यह खाता लिंक अमान्य हो सकता है या खाता अभी तक सेट नहीं किया गया है।
+          </p>
+          {onBackToApp && (
+            <button
+              type="button"
+              onClick={onBackToApp}
+              className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-md"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>मुख्य ऐप पर वापस जाएं</span>
+            </button>
+          )}
         </div>
-        <h2 className="text-2xl font-bold text-slate-900">स्टेटमेंट उपलब्ध नहीं है (Statement Not Found)</h2>
-        <p className="text-slate-500 text-sm max-w-md mt-2">
-          इस राइडर ID के लिए कोई सार्वजनिक हिसाब किताब रिकॉर्ड नहीं मिला।
-        </p>
-        {onBackToApp && (
-          <button
-            onClick={onBackToApp}
-            className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition cursor-pointer shadow-sm active:scale-95"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>ऐप पर वापस जाएं</span>
-          </button>
-        )}
       </div>
     );
   }
 
+  const cleanDigits = getCleanPhoneDigits(statement.riderPhone);
+  const whatsappShareText = encodeURIComponent(
+    `*${statement.riderName} - कूरियर खाता बही*\n` +
+    `हब: ${statement.hubName}\n` +
+    `स्थिति: ${balanceLabel}\n` +
+    `विवरण देखने के लिए लिंक खोलें:\n${statementUrl}`
+  );
+
   return (
-    <div id="rider-ledger-statement" className="ledger-printable-root min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col print:bg-white print:text-black">
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 antialiased print:bg-white print:text-black ledger-printable-root">
+      
       {/* Toast Notification */}
       {toastMsg && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-[#047857] text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top duration-200 print:hidden no-print">
-          <Check className="w-4 h-4" />
+        <div className="fixed top-4 right-4 z-[9999] bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-2xl text-xs font-semibold flex items-center gap-2 border border-slate-700 animate-in fade-in slide-in-from-top-2 print:hidden">
+          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{toastMsg}</span>
         </div>
       )}
 
-      {/* Top Application Ribbon (Actions & Navigation) */}
-      <header className="border-b border-slate-200 bg-white sticky top-0 z-30 px-3 sm:px-4 py-3 shadow-xs print:hidden">
-        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2.5">
+      {/* 1. TOP STICKY APPLICATION BAR (Hidden in Print) */}
+      <header className="sticky top-0 z-40 bg-slate-900 text-white border-b border-slate-800 px-4 py-3 print:hidden shadow-md">
+        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
+          {/* Back button & Title */}
+          <div className="flex items-center gap-2.5 min-w-0">
             {onBackToApp && (
               <button
+                type="button"
                 onClick={onBackToApp}
-                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
-                title="मुख्य ऐप पर वापस जाएं"
+                className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition active:scale-95 cursor-pointer"
+                title="मुख्य ऐप पर वापस जाएं (Esc)"
               >
-                <ArrowLeft className="w-4 h-4" />
+                <ArrowLeft className="w-5 h-5" />
               </button>
             )}
-            <div className="flex items-center gap-2">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#047857] to-teal-600 flex items-center justify-center text-white shadow-xs">
-                <Receipt className="w-5 h-5" />
-              </div>
-              <div>
-                <h1 className="font-bold text-sm sm:text-base text-slate-900 flex items-center gap-2">
-                  <span>हिसाब किताब (Hisab Kitab)</span>
-                  {isAdmin ? (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-semibold flex items-center gap-1">
-                      <ShieldCheck className="w-3 h-3 text-blue-600" />
-                      <span>Admin View</span>
-                    </span>
-                  ) : (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-[#047857] border border-emerald-200 font-semibold">
-                      Read-Only
-                    </span>
-                  )}
-                </h1>
-                <p className="text-xs text-slate-500 font-medium">
-                  {statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}
-                </p>
-              </div>
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base font-black truncate text-white">
+                राइडर खाता बही (Rider Khatabook Ledger)
+              </h1>
+              <p className="text-[11px] text-slate-400 truncate">
+                {statement.riderName} • {statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}
+              </p>
             </div>
           </div>
 
-          {/* Action Ribbon Buttons */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Admin-Only Reset Account Button */}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setShowResetConfirm(true)}
-                disabled={actionInProgress === 'reset-all'}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-[#B91C1C] border border-red-200 transition active:scale-95 cursor-pointer text-xs font-bold disabled:opacity-50"
-                title="खाता रीसेट करें (Clear Test Data & Set Balance to ₹0)"
-              >
-                <RotateCcw className={`w-3.5 h-3.5 text-[#B91C1C] ${actionInProgress === 'reset-all' ? 'animate-spin' : ''}`} />
-                <span>खाता रीसेट (Clear Test Data)</span>
-              </button>
-            )}
-
+          {/* Quick Action Buttons */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Native Print / PDF Download Button */}
             <button
+              type="button"
               onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-xs transition active:scale-95 cursor-pointer"
-              title="डाउनलोड पीडीएफ या प्रिंट करें"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition active:scale-95 shadow-xs cursor-pointer"
+              title="ब्राउज़र प्रिंट या PDF डाउनलोड करें"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Download PDF / Print</span>
+              <span className="hidden sm:inline">PDF डाउनलोड / प्रिंट</span>
+              <span className="sm:hidden">प्रिंट</span>
             </button>
 
+            {/* Copy Public Link */}
             <button
-              onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-300 transition active:scale-95 cursor-pointer shadow-2xs"
-              title="एक्सेल CSV फाइल डाउनलोड करें"
-            >
-              <Download className="w-3.5 h-3.5 text-[#047857]" />
-              <span className="hidden sm:inline">Excel CSV</span>
-            </button>
-
-            <button
+              type="button"
               onClick={handleCopyLink}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-300 transition active:scale-95 cursor-pointer shadow-2xs"
-              title="सार्वजनिक हिसाब किताब लिंक कॉपी करें"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition active:scale-95 shadow-xs cursor-pointer"
+              title="राइडर के साथ शेयर करने के लिए लिंक कॉपी करें"
             >
-              {copiedLink ? <Check className="w-3.5 h-3.5 text-[#047857]" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
-              <span>{copiedLink ? 'Copied!' : 'Copy Link'}</span>
+              {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{copiedLink ? 'कॉपी हो गया!' : 'लिंक कॉपी करें'}</span>
+              <span className="sm:hidden">{copiedLink ? 'कॉपी!' : 'लिंक'}</span>
             </button>
 
+            {/* WhatsApp Share */}
             <a
-              href={waShareUrl}
+              href={`https://wa.me/?text=${whatsappShareText}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-slate-950 text-xs font-bold transition active:scale-95 shadow-xs cursor-pointer"
@@ -703,17 +576,29 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               <MessageCircle className="w-3.5 h-3.5" />
               <span>WhatsApp</span>
             </a>
+
+            {/* Admin Reset Account */}
+            {isAdmin && onResetAccount && (
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(true)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-red-950/60 hover:bg-red-900 text-red-300 text-xs font-bold border border-red-800/60 transition active:scale-95 shadow-xs cursor-pointer"
+                title="खाता रीसेट (Zero Balance)"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">खाता रीसेट</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Main Single-Page Container */}
+      {/* Main Container */}
       <main className="max-w-5xl w-full mx-auto p-3.5 sm:p-6 flex-1 space-y-4 print:p-4 print:max-w-none print:space-y-3">
         
-        {/* 2. ONE SIMPLE, CLEAN HEADER BAR */}
-        {/* Rider Name & Phone + Simple Net Balance in Plain Text (Prints identically) */}
+        {/* 2. RIDER PROFILE & NET BALANCE HEADER CARD */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 print:border print:border-slate-300 print:bg-white print:shadow-none print:p-4">
-          {/* Left: Rider Name & Phone */}
+          {/* Left: Rider Profile Details */}
           <div className="flex items-center gap-3.5">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex items-center justify-center text-xl font-black shadow-xs shrink-0 print:border print:border-indigo-300">
               {statement.riderName.charAt(0).toUpperCase()}
@@ -743,22 +628,23 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             </div>
           </div>
 
-          {/* Right: Simple Net Balance in Plain Hindi/English */}
+          {/* Right: Net Balance Badge in Exact Hindi (Admin vs Rider Contextual) */}
           <div className="flex items-center">
-            <div className={`w-full sm:w-auto px-4 py-3 rounded-xl border text-sm sm:text-base font-black flex items-center gap-2 shadow-xs ${
+            <div className={`w-full sm:w-auto px-5 py-3.5 rounded-2xl border text-sm sm:text-base font-black flex items-center gap-2.5 shadow-xs ${
               balanceStatus === 'rider_due'
-                ? 'bg-red-50 border-red-200 text-[#B91C1C] print:bg-rose-50 print:border-rose-300 print:text-rose-800'
+                ? 'bg-red-50 border-red-300 text-[#B91C1C] print:bg-rose-50 print:border-rose-300 print:text-rose-800'
                 : balanceStatus === 'payable'
-                ? 'bg-emerald-50 border-emerald-200 text-[#047857] print:bg-emerald-50 print:border-emerald-300 print:text-emerald-800'
-                : 'bg-slate-100 border-slate-200 text-slate-800 print:bg-slate-100 print:border-slate-300 print:text-slate-800'
+                ? 'bg-emerald-50 border-emerald-300 text-[#047857] print:bg-emerald-50 print:border-emerald-300 print:text-emerald-800'
+                : 'bg-slate-100 border-slate-300 text-slate-800 print:bg-slate-100 print:border-slate-300 print:text-slate-800'
             }`}>
-              <span>{balanceLabel}</span>
+              <span className="leading-tight">{balanceLabel}</span>
             </div>
           </div>
         </div>
 
-        {/* 3. CLEAN HISAB KITAB TABLE (EXACT 4 COLUMNS) */}
+        {/* 3. CLEAN TRANSACTION AUDIT TABLE */}
         <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs print:border print:border-slate-300 print:bg-white print:shadow-none print:overflow-visible">
+          {/* Table Header Bar */}
           <div className="p-3.5 sm:p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2 print:bg-slate-100 print:border-slate-300">
             <div className="flex items-center gap-2">
               <FileSpreadsheet className="w-4 h-4 text-[#047857]" />
@@ -791,20 +677,28 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             <div className="overflow-x-auto print:overflow-visible">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-100/70 text-slate-700 font-bold sticky top-0 print:static print:bg-slate-200 print:text-black print:border-slate-400">
+                  <tr className="border-b border-slate-200 bg-slate-100 text-slate-700 font-bold sticky top-0 print:static print:bg-slate-200 print:text-black print:border-slate-400">
                     {/* Column 1: तारीख व विवरण (Date & Details) */}
-                    <th className="py-3 px-3 sm:px-4 min-w-[280px]">
+                    <th className="py-3 px-3 sm:px-4 min-w-[260px]">
                       तारीख व विवरण (Date & Details)
                     </th>
-                    {/* Column 2: आपने दिया (YOU GAVE ₹) [Crimson / Maroon #B91C1C] */}
-                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-[#B91C1C] bg-red-50/50 print:bg-transparent">
-                      आपने दिया (YOU GAVE ₹)
+                    {/* Column 2: प्रकार (Type) */}
+                    <th className="py-3 px-2 sm:px-3 text-center w-[110px] whitespace-nowrap">
+                      प्रकार (Type)
                     </th>
-                    {/* Column 3: बना / मिला (YOU GOT ₹) [Dark Emerald Green #047857] */}
-                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap text-[#047857] bg-emerald-50/50 print:bg-transparent">
-                      बना / मिला (YOU GOT ₹)
+                    {/* Column 3: कमाई / क्रेडिट (+) (Earned / Credit +) [Emerald #047857] */}
+                    <th className="py-3 px-3 sm:px-4 text-right w-[140px] whitespace-nowrap text-[#047857] bg-emerald-50/50 print:bg-transparent">
+                      क्रेडिट / कमाई (+)
                     </th>
-                    {/* Column 4: एडमिन (Admin delete action - only visible to admin) */}
+                    {/* Column 4: एडवांस / डेबिट (-) (Advance / Debit -) [Crimson #B91C1C] */}
+                    <th className="py-3 px-3 sm:px-4 text-right w-[140px] whitespace-nowrap text-[#B91C1C] bg-red-50/50 print:bg-transparent">
+                      डेबिट / एडवांस (-)
+                    </th>
+                    {/* Column 5: चालू बैलेंस (Running Balance) */}
+                    <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap">
+                      चालू बैलेंस (Balance)
+                    </th>
+                    {/* Column 6: एडमिन (Admin Actions) */}
                     {isAdmin && (
                       <th className="py-3 px-3 sm:px-4 text-center w-[80px] whitespace-nowrap text-slate-500 print:hidden">
                         एडमिन
@@ -821,17 +715,6 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                       {/* 1. तारीख व विवरण (Date & Details) */}
                       <td className="py-3 px-3 sm:px-4 align-top">
                         <div className="flex items-start gap-2.5">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${
-                            row.type === 'advance'
-                              ? 'bg-red-50 text-[#B91C1C] border border-red-200'
-                              : row.type === 'incentive'
-                              ? 'bg-emerald-50 text-[#047857] border border-emerald-200'
-                              : row.type === 'salary'
-                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                              : 'bg-slate-100 text-slate-700 border border-slate-200'
-                          }`}>
-                            {row.type === 'advance' ? 'एडवांस' : row.type === 'incentive' ? 'इंसेंटिव' : row.type === 'salary' ? 'पे-आउट' : 'डिलीवरी'}
-                          </span>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono text-[11px] font-semibold text-slate-500 print:text-slate-600">
@@ -847,52 +730,57 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                                 {row.subTitle}
                               </div>
                             )}
-
-                            {/* PART 2: In-Row Balance Badge directly beneath timestamp & details */}
-                            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                              <span 
-                                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight ${
-                                  row.runningBalance < -0.01
-                                    ? 'bg-red-50 text-[#B91C1C] border border-red-200'
-                                    : row.runningBalance > 0.01
-                                    ? 'bg-emerald-50 text-[#047857] border border-emerald-200'
-                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
-                                }`}
-                              >
-                                {row.runningBalance < -0.01
-                                  ? `देना है: ₹${formatINR(Math.abs(row.runningBalance))}`
-                                  : row.runningBalance > 0.01
-                                  ? `पाना है: ₹${formatINR(row.runningBalance)}`
-                                  : '⚪ Bal. ₹0'}
-                              </span>
-                            </div>
                           </div>
                         </div>
                       </td>
 
-                      {/* 2. आपने दिया (YOU GAVE ₹) [Crimson / Maroon #B91C1C] */}
-                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-red-50/25 print:bg-transparent align-top whitespace-nowrap">
-                        {row.paidToRider > 0 ? (
-                          <span className="text-[#B91C1C]">
-                            +{formatINR(row.paidToRider)}
-                          </span>
-                        ) : (
-                          <span className="text-slate-300 print:text-slate-400 font-normal">-</span>
-                        )}
+                      {/* 2. प्रकार (Type Badge) */}
+                      <td className="py-3 px-2 sm:px-3 text-center align-top whitespace-nowrap">
+                        <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          row.entryKind === 'PLUS_EARNING'
+                            ? 'bg-emerald-50 text-[#047857] border border-emerald-200'
+                            : 'bg-red-50 text-[#B91C1C] border border-red-200'
+                        }`}>
+                          {row.typeLabel || (row.entryKind === 'PLUS_EARNING' ? '(+) पे-आउट' : '(-) एडवांस')}
+                        </span>
                       </td>
 
-                      {/* 3. बना / मिला (YOU GOT ₹) [Dark Emerald Green #047857] */}
+                      {/* 3. क्रेडिट / कमाई (+) (Earned / Credit +) [Emerald #047857] */}
                       <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-emerald-50/25 print:bg-transparent align-top whitespace-nowrap">
-                        {row.settledOrEarned > 0 ? (
+                        {row.plusAmount > 0 ? (
                           <span className="text-[#047857]">
-                            -{formatINR(row.settledOrEarned)}
+                            +{formatINR(row.plusAmount)}
                           </span>
                         ) : (
                           <span className="text-slate-300 print:text-slate-400 font-normal">-</span>
                         )}
                       </td>
 
-                      {/* 4. एडमिन (Admin Actions - Strictly visible ONLY inside Admin login) */}
+                      {/* 4. डेबिट / एडवांस (-) (Advance / Debit -) [Crimson #B91C1C] */}
+                      <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-red-50/25 print:bg-transparent align-top whitespace-nowrap">
+                        {row.minusAmount > 0 ? (
+                          <span className="text-[#B91C1C]">
+                            -{formatINR(row.minusAmount)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300 print:text-slate-400 font-normal">-</span>
+                        )}
+                      </td>
+
+                      {/* 5. चालू बैलेंस (Running Balance) */}
+                      <td className="py-3 px-3 sm:px-4 text-right align-top whitespace-nowrap font-mono text-xs">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-bold ${
+                          row.runningBalance < -0.01
+                            ? 'bg-red-50 text-[#B91C1C] border border-red-200'
+                            : row.runningBalance > 0.01
+                            ? 'bg-emerald-50 text-[#047857] border border-emerald-200'
+                            : 'bg-slate-100 text-slate-700 border border-slate-200'
+                        }`}>
+                          {row.runningBalanceLabel}
+                        </span>
+                      </td>
+
+                      {/* 6. एडमिन (Admin Actions - Strictly visible ONLY inside Admin login) */}
                       {isAdmin && (
                         <td className="py-3 px-3 sm:px-4 text-center align-top whitespace-nowrap print:hidden">
                           {(row.type === 'advance' || row.type === 'incentive') && row.originalId !== 'opening-advance' ? (
@@ -940,25 +828,27 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
                 {/* Bottom TOTALS Row & Net Status */}
                 <tfoot>
-                  <tr className="border-t-2 border-slate-200 bg-slate-50 text-xs font-bold font-mono print:bg-slate-200 print:border-slate-400">
-                    <td className="py-3.5 px-3 sm:px-4 font-sans font-black text-slate-900 print:text-black">
+                  <tr className="border-t-2 border-slate-300 bg-slate-50 text-xs font-bold font-mono print:bg-slate-200 print:border-slate-400">
+                    <td colSpan={2} className="py-3.5 px-3 sm:px-4 font-sans font-black text-slate-900 print:text-black">
                       कुल योग (Grand Totals)
                     </td>
-                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-[#B91C1C] bg-red-50/50 print:bg-transparent whitespace-nowrap">
-                      {formatINR(totalPaidToRider)}
-                    </td>
                     <td className="py-3.5 px-3 sm:px-4 text-right font-black text-[#047857] bg-emerald-50/50 print:bg-transparent whitespace-nowrap">
-                      {formatINR(totalSettledOrEarned)}
+                      +{formatINR(totalPlus)}
                     </td>
-                    {isAdmin && <td className="print:hidden" />}
+                    <td className="py-3.5 px-3 sm:px-4 text-right font-black text-[#B91C1C] bg-red-50/50 print:bg-transparent whitespace-nowrap">
+                      -{formatINR(totalMinus)}
+                    </td>
+                    <td colSpan={isAdmin ? 2 : 1} className="py-3.5 px-3 sm:px-4 text-right font-black font-sans text-xs">
+                      नेट शेष: {formatINR(netBalance)}
+                    </td>
                   </tr>
                   <tr className="border-t border-slate-200 bg-white text-xs font-bold print:bg-slate-100 print:border-slate-300">
-                    <td className="py-3 px-3 sm:px-4 font-sans text-slate-700 print:text-black">
-                      अंतिम हिसाब स्थिति (Net Status)
+                    <td colSpan={2} className="py-3 px-3 sm:px-4 font-sans text-slate-700 print:text-black">
+                      अंतिम हिसाब स्थिति (Final Status)
                     </td>
                     <td 
-                      colSpan={isAdmin ? 3 : 2} 
-                      className={`py-3 px-3 sm:px-4 text-right font-black font-sans text-sm ${
+                      colSpan={isAdmin ? 4 : 3} 
+                      className={`py-3 px-3 sm:px-4 text-right font-black font-sans text-sm sm:text-base ${
                         balanceStatus === 'rider_due'
                           ? 'text-[#B91C1C]'
                           : balanceStatus === 'payable'
@@ -975,126 +865,102 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
           )}
         </div>
 
-        {/* Printable Official Footer (Only in Print / PDF Mode) */}
+        {/* Printable Official Footer (Only visible in Print / PDF Mode) */}
         <div className="hidden print:block pt-8 mt-6 border-t border-slate-300 text-xs">
           <div className="flex justify-between items-end">
             <div>
               <p className="text-slate-600 font-sans">
-                This is an official computer-generated statement issued by <strong>{statement.hubName}</strong>.
+                यह <strong>{statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}</strong> द्वारा जारी किया गया आधिकारिक कंप्यूटर जनरेटेड खाता विवरण है।
               </p>
-              <p className="text-slate-500 font-mono text-[10px] mt-0.5">
-                Timestamp: {new Date().toISOString()} • Online Token: {statement.riderId}
+              <p className="text-slate-400 text-[10px] mt-1 font-mono">
+                जनरेटेड दिनांक: {formatDateDisplay(new Date().toISOString().split('T')[0])}
               </p>
             </div>
-            <div className="text-center w-48">
-              <div className="border-b border-slate-800 pb-8"></div>
-              <p className="mt-1 font-bold text-slate-800 font-sans">Authorized Hub Signature / Stamp</p>
+            <div className="text-right">
+              <div className="h-10 border-b border-slate-400 w-44 mb-1"></div>
+              <p className="text-slate-700 font-bold font-sans">
+                अधिकृत हस्ताक्षर (Hub In-charge)
+              </p>
             </div>
           </div>
         </div>
-
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-white py-4 px-4 text-center text-xs text-slate-500 print:hidden mt-auto shadow-2xs">
-        <div className="max-w-5xl mx-auto flex items-center justify-between flex-wrap gap-2">
-          <span className="font-medium text-slate-600">
-            {statement.hubName || 'सरायकेला कूरियर हब'} • सुरक्षित हिसाब किताब
-          </span>
-          <span className="font-mono text-[11px] text-slate-500">
-            {statementUrl}
-          </span>
-        </div>
-      </footer>
-
-      {/* Admin Edit Advance Modal */}
+      {/* Admin Modal: Edit Advance */}
       {editingAdvanceRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 print:hidden">
-          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200 text-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-200">
-                  <Pencil className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm sm:text-base text-slate-900">
-                    एडवांस संपादित करें (Edit Advance)
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    {statement.riderName} • {statement.riderPhone ? `+91 ${statement.riderPhone}` : ''}
-                  </p>
-                </div>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-amber-600" />
+                <span>एडवांस एंट्री एडिट करें</span>
+              </h3>
               <button
                 type="button"
-                onClick={handleCancelEditAdvance}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                onClick={() => setEditingAdvanceRow(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveEditAdvance} className="space-y-4">
+            <form onSubmit={handleSaveAdvanceEdit} className="space-y-3.5">
               <div>
-                <label className="text-xs text-slate-700 font-bold block mb-1">
-                  एडवांस राशि (Amount in ₹) <span className="text-[#B91C1C]">*</span>
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="any"
-                    value={editAmount}
-                    onChange={(e) => setEditAmount(e.target.value)}
-                    required
-                    placeholder="1000"
-                    className="w-full pl-7 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 font-mono font-bold focus:outline-none focus:bg-white focus:border-amber-500 transition"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs text-slate-700 font-bold block mb-1">
-                  दिनांक (Date) <span className="text-[#B91C1C]">*</span>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  एडवांस राशि (₹)
                 </label>
                 <input
-                  type="date"
-                  value={editDate}
-                  onChange={(e) => setEditDate(e.target.value)}
+                  type="number"
+                  step="any"
                   required
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 font-mono focus:outline-none focus:bg-white focus:border-amber-500 transition cursor-pointer"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  placeholder="0"
                 />
               </div>
 
               <div>
-                <label className="text-xs text-slate-700 font-bold block mb-1">
-                  कारण / विवरण (Reason / Purpose)
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  तारीख
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  विवरण / कारण
                 </label>
                 <input
                   type="text"
                   value={editReason}
                   onChange={(e) => setEditReason(e.target.value)}
-                  placeholder="उदा. बाइक मरम्मत, फ्यूल, त्यौहार खर्च"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:bg-white focus:border-amber-500 transition"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  placeholder="एडवांस का कारण"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+              <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={handleCancelEditAdvance}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                  onClick={() => setEditingAdvanceRow(null)}
+                  disabled={isSavingEdit}
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
                 >
-                  रद्द करें (Cancel)
+                  रद्द करें
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingEdit}
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-[#B91C1C] hover:from-amber-500 hover:to-red-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                  className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>{isSavingEdit ? 'अपडेट हो रहा है...' : 'सुरक्षित करें (Save Changes)'}</span>
+                  {isSavingEdit ? 'सहेज रहे हैं...' : 'अपडेट करें'}
                 </button>
               </div>
             </form>
@@ -1102,94 +968,81 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         </div>
       )}
 
-      {/* Admin Edit Incentive Modal */}
+      {/* Admin Modal: Edit Incentive */}
       {editingIncentiveRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 print:hidden">
-          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200 text-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-emerald-50 text-[#047857] border border-emerald-200">
-                  <Pencil className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm sm:text-base text-slate-900">
-                    इंसेंटिव संपादित करें (Edit Incentive)
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    {statement.riderName} • {statement.riderPhone ? `+91 ${statement.riderPhone}` : ''}
-                  </p>
-                </div>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-[#047857]" />
+                <span>इंसेंटिव एंट्री एडिट करें</span>
+              </h3>
               <button
                 type="button"
-                onClick={handleCancelEditIncentive}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                onClick={() => setEditingIncentiveRow(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveEditIncentive} className="space-y-4">
+            <form onSubmit={handleSaveIncentiveEdit} className="space-y-3.5">
               <div>
-                <label className="text-xs text-slate-700 font-bold block mb-1">
-                  इंसेंटिव राशि (Amount in ₹) <span className="text-[#B91C1C]">*</span>
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">₹</span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="any"
-                    value={editIncAmount}
-                    onChange={(e) => setEditIncAmount(e.target.value)}
-                    required
-                    placeholder="500"
-                    className="w-full pl-7 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-[#047857] font-mono font-bold focus:outline-none focus:bg-white focus:border-[#047857] transition"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs text-slate-700 font-bold block mb-1">
-                  दिनांक (Date) <span className="text-[#B91C1C]">*</span>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  इंसेंटिव राशि (₹)
                 </label>
                 <input
-                  type="date"
-                  value={editIncDate}
-                  onChange={(e) => setEditIncDate(e.target.value)}
+                  type="number"
+                  step="any"
                   required
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 font-mono focus:outline-none focus:bg-white focus:border-[#047857] transition cursor-pointer"
+                  value={editIncAmount}
+                  onChange={(e) => setEditIncAmount(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  placeholder="0"
                 />
               </div>
 
               <div>
-                <label className="text-xs text-slate-700 font-bold block mb-1">
-                  कारण / विवरण (Reason / Purpose)
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  तारीख
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={editIncDate}
+                  onChange={(e) => setEditIncDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  विवरण / कारण
                 </label>
                 <input
                   type="text"
                   value={editIncReason}
                   onChange={(e) => setEditIncReason(e.target.value)}
-                  placeholder="उदा. त्यौहार बोनस, परफॉर्मेंस इंसेंटिव"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:bg-white focus:border-[#047857] transition"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  placeholder="इंसेंटिव का कारण"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+              <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={handleCancelEditIncentive}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                  onClick={() => setEditingIncentiveRow(null)}
+                  disabled={isSavingIncEdit}
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
                 >
-                  रद्द करें (Cancel)
+                  रद्द करें
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingIncEdit}
-                  className="px-5 py-2 rounded-xl bg-[#047857] hover:bg-emerald-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                  className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>{isSavingIncEdit ? 'अपडेट हो रहा है...' : 'सुरक्षित करें (Save Changes)'}</span>
+                  {isSavingIncEdit ? 'सहेज रहे हैं...' : 'अपडेट करें'}
                 </button>
               </div>
             </form>
@@ -1197,130 +1050,74 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         </div>
       )}
 
-      {/* In-App Confirm Delete Row Modal (Android WebView safe, zero window.confirm) */}
+      {/* Admin Modal: Confirm Delete Row (Android WebView safe, zero window.confirm) */}
       {deletingRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in print:hidden">
-          <div 
-            className="w-full max-w-sm bg-white border border-slate-200 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 text-slate-900"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-red-50 text-[#B91C1C] border border-red-200">
-                <Trash2 className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-bold text-sm text-slate-900">
-                  {deletingRow.type === 'advance' ? 'एडवांस एंट्री हटाएं?' : 'इंसेंटिव एंट्री हटाएं?'}
-                </h3>
-                <p className="text-xs text-slate-500">यह रिकॉर्ड डेटाबेस से हमेशा के लिए हटा दिया जाएगा।</p>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="w-10 h-10 rounded-full bg-red-50 text-[#B91C1C] flex items-center justify-center mx-auto">
+              <Trash2 className="w-5 h-5" />
             </div>
-
-            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs font-mono">
-              <div className="flex justify-between text-slate-700 font-sans">
-                <span>राइडर:</span>
-                <span className="font-bold text-slate-900">{statement.riderName}</span>
-              </div>
-              <div className="flex justify-between text-slate-700">
-                <span>प्रकार:</span>
-                <span className="font-semibold text-amber-700">{deletingRow.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'}</span>
-              </div>
-              <div className="flex justify-between text-slate-700">
-                <span>राशि:</span>
-                <span className="font-bold text-[#B91C1C]">
-                  ₹{deletingRow.paidToRider || deletingRow.settledOrEarned}
-                </span>
-              </div>
-              <div className="flex justify-between text-slate-500 font-sans">
-                <span>विवरण:</span>
-                <span className="text-slate-800 truncate max-w-[180px] font-medium">{deletingRow.title}</span>
-              </div>
-              <div className="flex justify-between text-slate-500">
-                <span>दिनांक:</span>
-                <span className="text-slate-800 font-medium">{deletingRow.formattedDate}</span>
-              </div>
+            <div className="text-center">
+              <h3 className="text-sm font-bold text-slate-900">
+                क्या आप यह एंट्री हटाना चाहते हैं?
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                {deletingRow.title} • {formatINR(deletingRow.minusAmount || deletingRow.plusAmount)}
+              </p>
             </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+            <div className="flex items-center justify-center gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setDeletingRow(null)}
                 disabled={isDeletingRow}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
               >
-                रद्द करें (Cancel)
+                रद्द करें
               </button>
               <button
                 type="button"
                 onClick={handleConfirmDeleteRow}
                 disabled={isDeletingRow}
-                className="px-4 py-2 rounded-xl bg-[#B91C1C] hover:bg-red-800 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                className="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-500 rounded-xl transition cursor-pointer disabled:opacity-50"
               >
-                {isDeletingRow ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>हटा रहे हैं...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>हाँ, हटाएं (Confirm Delete)</span>
-                  </>
-                )}
+                {isDeletingRow ? 'हटा रहे हैं...' : 'हाँ, हटाएं'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* In-App Confirm Reset Entire Account Modal (Android WebView safe, zero window.confirm) */}
+      {/* Admin Modal: Confirm Reset Account */}
       {showResetConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in print:hidden">
-          <div 
-            className="w-full max-w-sm bg-white border border-red-200 rounded-2xl p-5 shadow-2xl space-y-4 animate-in zoom-in-95 text-slate-900"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-red-50 text-[#B91C1C] border border-red-200">
-                <RotateCcw className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-bold text-sm text-slate-900">खाता पूरा रीसेट करें?</h3>
-                <p className="text-xs text-[#B91C1C] font-semibold">Clear Test Data • सेट बकाया ₹0</p>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto">
+              <RotateCcw className="w-6 h-6" />
             </div>
-
-            <p className="text-xs text-slate-600 leading-relaxed">
-              क्या आप <strong>{statement.riderName}</strong> का पूरा खाता रीसेट करना चाहते हैं?
-              सभी टेस्ट एडवांस और इंसेंटिव डेटा स्थायी रूप से हटा दिए जाएंगे और कुल बकाया ₹0 हो जाएगा।
-            </p>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                क्या आप {statement.riderName} का खाता रीसेट करना चाहते हैं?
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                यह राइडर के सभी बकाया एडवांस, इंसेंटिव और पे-आउट इतिहास को रीसेट करके बैलेंस शून्य (⚪ हिसाब चुकता: ₹0) कर देगा।
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setShowResetConfirm(false)}
                 disabled={isResetting}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
               >
-                रद्द करें (Cancel)
+                रद्द करें
               </button>
               <button
                 type="button"
                 onClick={handleConfirmResetAccount}
                 disabled={isResetting}
-                className="px-4 py-2 rounded-xl bg-[#B91C1C] hover:bg-red-800 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                className="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-500 rounded-xl transition cursor-pointer disabled:opacity-50"
               >
-                {isResetting ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>रीसेट हो रहा है...</span>
-                  </>
-                ) : (
-                  <>
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>हाँ, रीसेट करें (Confirm Reset)</span>
-                  </>
-                )}
+                {isResetting ? 'रीसेट हो रहा है...' : 'हाँ, रीसेट करें'}
               </button>
             </div>
           </div>
@@ -1329,3 +1126,5 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     </div>
   );
 };
+
+export default RiderLedgerStatement;
