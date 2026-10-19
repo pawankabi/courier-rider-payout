@@ -10,6 +10,8 @@ export interface LedgerSalaryRecord {
   incentiveAmount?: number;
   grossTotal: number;
   advanceAmount: number;
+  advanceDate?: string;
+  advanceReason?: string;
   netTotal: number;
   paidAt?: string;
   status: string; // 'PAID' | 'UNPAID' | 'PENDING'
@@ -123,7 +125,8 @@ export function purgePhantomAdvances(advances: RiderAdvanceEntry[]): RiderAdvanc
 export function calculatePureRiderLedger(
   statement: PublicRiderStatement | null | undefined,
   sortOrder: 'asc' | 'desc' = 'desc',
-  isRider: boolean = false
+  isRider: boolean = false,
+  externalSettlements?: any[]
 ): PureLedgerCalculationResult {
   if (!statement) {
     return {
@@ -150,8 +153,36 @@ export function calculatePureRiderLedger(
     return (Number(i.amount) || 0) > 0;
   });
 
-  // 3. Process settlements / salaries
-  const salaries: LedgerSalaryRecord[] = (statement.salaries || []).map((s) => ({
+  // 3. Process settlements / salaries (combining statement.salaries with active externalSettlements if provided)
+  let rawSalaries = statement.salaries || [];
+  if (externalSettlements && Array.isArray(externalSettlements) && externalSettlements.length > 0) {
+    const riderExtSettlements = externalSettlements.filter(
+      (s: any) => s && (s.riderId === statement.riderId || (statement.riderPhone && s.riderPhone === statement.riderPhone))
+    );
+    if (riderExtSettlements.length > 0) {
+      const existingSalIds = new Set(rawSalaries.map((s) => s.id));
+      const additionalSalaries = riderExtSettlements
+        .filter((s: any) => !existingSalIds.has(s.id))
+        .map((s: any) => ({
+          id: s.id,
+          startDate: s.startDate,
+          endDate: s.endDate,
+          totalParcels: Number(s.totalParcels) || 0,
+          baseAmount: Number(s.baseAmount) || 0,
+          incentiveAmount: Number(s.incentiveAmount) || 0,
+          grossTotal: Number(s.grossTotal) || 0,
+          advanceAmount: Number(s.advanceAmount) || 0,
+          advanceDate: s.advanceDate,
+          advanceReason: s.advanceReason,
+          netTotal: Number(s.netTotal) || 0,
+          paidAt: s.paidAt,
+          status: s.status || 'PAID',
+        }));
+      rawSalaries = [...rawSalaries, ...additionalSalaries];
+    }
+  }
+
+  const salaries: LedgerSalaryRecord[] = rawSalaries.map((s: any) => ({
     id: s.id,
     startDate: s.startDate,
     endDate: s.endDate,
@@ -160,10 +191,52 @@ export function calculatePureRiderLedger(
     incentiveAmount: Number(s.incentiveAmount) || 0,
     grossTotal: Number(s.grossTotal) || 0,
     advanceAmount: Number(s.advanceAmount) || 0,
+    advanceDate: s.advanceDate,
+    advanceReason: s.advanceReason,
     netTotal: Number(s.netTotal) || 0,
     paidAt: s.paidAt,
     status: s.status || 'PAID',
   }));
+
+  // DYNAMICALLY CONSUME AUTHENTIC ADVANCES FROM SETTLEMENT DATA:
+  // For riders like Lakhindar Mahato whose advances were recorded in the settlement collection (e.g. ₹11,445),
+  // pull them directly into validAdvances so the ledger reconciles 1:1 against the payout.
+  salaries.forEach((sal) => {
+    const advAmt = Number(sal.advanceAmount) || 0;
+    if (advAmt <= 0) return;
+
+    // Check if validAdvances already has advances explicitly linked to this settlement
+    const linkedAdvances = validAdvances.filter((a) => {
+      if (a.id === `settlement_adv_${sal.id}` || a.id === `adv-${sal.id}` || a.id === sal.id) return true;
+      if (a.settlementId === sal.id || a.settledPayoutId === sal.id || a.settledInPayoutId === sal.id) return true;
+      if ((sal as any).settledAdvanceIds && Array.isArray((sal as any).settledAdvanceIds) && (sal as any).settledAdvanceIds.includes(a.id)) return true;
+      return false;
+    });
+
+    const linkedSum = linkedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+    if (linkedSum < advAmt) {
+      const missingAmt = advAmt - linkedSum;
+      // Check if there is an unlinked advance of identical amount
+      const unlinkedSameAmt = validAdvances.find(
+        (a) => !a.settlementId && !a.settledPayoutId && Math.abs(Number(a.amount) - missingAmt) < 0.01
+      );
+      if (unlinkedSameAmt) {
+        unlinkedSameAmt.settlementId = sal.id;
+      } else {
+        validAdvances.push({
+          id: `settlement_adv_${sal.id}`,
+          riderId: statement.riderId,
+          amount: missingAmt,
+          date: sal.advanceDate || sal.paidAt?.split('T')[0] || sal.startDate,
+          createdAt: sal.advanceDate || sal.paidAt || sal.startDate,
+          reason: sal.advanceReason || `एडवांस भुगतान (${formatDateDisplay(sal.startDate)} से ${formatDateDisplay(sal.endDate)} सेटलमेंट)`,
+          isSettled: true,
+          isDeducted: true,
+          status: 'PAID',
+        });
+      }
+    }
+  });
 
   const paidSalaries = salaries.filter((s) => !s.status || s.status.trim().toUpperCase() === 'PAID');
   const unpaidSalaries = salaries.filter((s) => s.status && s.status.trim().toUpperCase() !== 'PAID');
@@ -290,14 +363,14 @@ export function calculatePureRiderLedger(
     const advanceDeducted = Number(sal.advanceAmount) || 0;
     const grossTotal = Number(sal.grossTotal) || 0;
 
-    let subTitle = `${sal.totalParcels} पार्सल • सकल: ₹${formatINR(grossTotal)}`;
+    let subTitle = `${sal.totalParcels} पार्सल • सकल: ${formatINR(grossTotal)}`;
     if (advanceDeducted > 0) {
-      subTitle += ` | एडवांस कटौती: ₹${formatINR(advanceDeducted)}`;
+      subTitle += ` | एडवांस कटौती: ${formatINR(advanceDeducted)}`;
     }
     if (netTotal < 0) {
-      subTitle += ` | लेना शेष है: ₹${formatINR(Math.abs(netTotal))} • ${isPaid ? 'सेटलमेंट दर्ज (PARTIALLY SETTLED)' : 'लंबित (PENDING)'}`;
+      subTitle += ` | लेना शेष है: ${formatINR(Math.abs(netTotal))} • ${isPaid ? 'सेटलमेंट दर्ज (PARTIALLY SETTLED)' : 'लंबित (PENDING)'}`;
     } else {
-      subTitle += ` | नेट भुगतान: ₹${formatINR(netPaid)} • ${isPaid ? 'भुगतान पूर्ण (PAID)' : 'लंबित (PENDING)'}`;
+      subTitle += ` | नेट भुगतान: ${formatINR(netPaid)} • ${isPaid ? 'भुगतान पूर्ण (PAID)' : 'लंबित (PENDING)'}`;
     }
 
     rawList.push({
@@ -373,9 +446,9 @@ export function calculatePureRiderLedger(
     const absBal = Math.abs(running);
     let label = '⚪ Bal. ₹0';
     if (running < -0.01) {
-      label = `देना है: ₹${formatINR(absBal)}`;
+      label = `देना है: ${formatINR(absBal)}`;
     } else if (running > 0.01) {
-      label = `पाना है: ₹${formatINR(absBal)}`;
+      label = `पाना है: ${formatINR(absBal)}`;
     }
 
     return {
@@ -441,12 +514,12 @@ export function calculatePureRiderLedger(
 
   if (finalRawDifference < -0.99) {
     balanceStatus = 'rider_due';
-    adminBalanceLabel = `🔴 आपसे बकाया (You owe the Hub): ₹${formatINR(netBalance)}`;
-    riderBalanceLabel = `🔴 आपसे बकाया (You owe the Hub): ₹${formatINR(netBalance)}`;
+    adminBalanceLabel = `🔴 आपसे बकाया (You owe the Hub): ${formatINR(netBalance)}`;
+    riderBalanceLabel = `🔴 आपसे बकाया (You owe the Hub): ${formatINR(netBalance)}`;
   } else if (finalRawDifference > 0.99) {
     balanceStatus = 'payable';
-    adminBalanceLabel = `🟢 भुगतान योग्य (Payable / Hub Owes Rider): ₹${formatINR(netBalance)}`;
-    riderBalanceLabel = `🟢 आपको मिलना बाकी है: ₹${formatINR(netBalance)}`;
+    adminBalanceLabel = `🟢 भुगतान योग्य (Payable / Hub Owes Rider): ${formatINR(netBalance)}`;
+    riderBalanceLabel = `🟢 आपको मिलना बाकी है: ${formatINR(netBalance)}`;
   } else {
     balanceStatus = 'settled';
     adminBalanceLabel = '⚪ हिसाब चुकता: ₹0';

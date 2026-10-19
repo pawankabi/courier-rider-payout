@@ -30,6 +30,7 @@ export type { UnifiedTransactionItem };
 export interface RiderLedgerStatementProps {
   riderId?: string;
   initialStatement?: PublicRiderStatement | null;
+  settlements?: any[];
   onBackToApp?: () => void;
   userId?: string;
   isAdmin?: boolean;
@@ -43,6 +44,7 @@ export interface RiderLedgerStatementProps {
 export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   riderId: propRiderId,
   initialStatement = null,
+  settlements: propSettlements,
   onBackToApp,
   isAdmin = false,
   onDeleteAdvance,
@@ -120,6 +122,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                 incentiveAmount: s.incentiveAmount || 0,
                 grossTotal: s.grossTotal || 0,
                 advanceAmount: s.advanceAmount || 0,
+                advanceDate: s.advanceDate,
+                advanceReason: s.advanceReason,
                 netTotal: s.netTotal || 0,
                 paidAt: s.paidAt,
                 status: s.status || 'PAID',
@@ -265,8 +269,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     adminBalanceLabel,
     riderBalanceLabel,
   } = useMemo(() => {
-    return calculateRiderLedger(statement, sortOrder, isRider);
-  }, [statement, sortOrder, isRider]);
+    return calculateRiderLedger(statement, sortOrder, isRider, propSettlements);
+  }, [statement, sortOrder, isRider, propSettlements]);
 
   // Admin Actions: Delete Row (Android WebView safe, zero window.confirm)
   const handleConfirmDeleteRow = async () => {

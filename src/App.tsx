@@ -412,6 +412,8 @@ function MainCourierApp() {
           incentiveAmount: s.incentiveAmount,
           grossTotal: s.grossTotal,
           advanceAmount: s.advanceAmount || 0,
+          advanceDate: s.advanceDate,
+          advanceReason: s.advanceReason,
           netTotal: s.netTotal,
           paidAt: s.paidAt,
           status: s.status || 'PAID',
@@ -3110,6 +3112,7 @@ function MainCourierApp() {
           <RiderLedgerStatement
             riderId={viewingLedgerRiderId}
             initialStatement={inAppLedgerInitialStatement}
+            settlements={dashboardSettlements}
             onBackToApp={() => setViewingLedgerRiderId(null)}
             userId={targetUid}
             isAdmin={true}
@@ -3325,7 +3328,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-950 text-white">
         <StatementErrorBoundary>
-          <RiderLedgerStatement riderId={riderId} isAdmin={false} />
+          <RiderLedgerStatement riderId={riderId} settlements={loadSettlementsFromStorage()} isAdmin={false} />
         </StatementErrorBoundary>
       </div>
     );

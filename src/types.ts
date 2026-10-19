@@ -81,6 +81,8 @@ export interface PublicRiderStatement {
     incentiveAmount: number;
     grossTotal: number;
     advanceAmount: number;
+    advanceDate?: string;
+    advanceReason?: string;
     netTotal: number;
     paidAt: string;
     status: string;

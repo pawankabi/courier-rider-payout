@@ -2202,14 +2202,9 @@ export async function syncPublicRiderStatement(
   try {
     const docRef = doc(db, 'public_statements', rider.id);
     
-    // Purge phantom advances and sort descending
+    // Purge phantom advances
     const rawAdvances = advances.length > 0 ? advances : (rider.advances || []);
     const cleanAdvances = purgePhantomAdvances(rawAdvances);
-    const sortedAdvances = [...cleanAdvances].sort((a, b) => {
-      const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
-      const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
-      return timeB - timeA;
-    });
 
     // Filter and sort settlements for this rider
     const riderSettlements = settlements
@@ -2224,10 +2219,46 @@ export async function syncPublicRiderStatement(
         incentiveAmount: s.incentiveAmount,
         grossTotal: s.grossTotal,
         advanceAmount: s.advanceAmount || 0,
+        advanceDate: s.advanceDate,
+        advanceReason: s.advanceReason,
         netTotal: s.netTotal,
         paidAt: s.paidAt,
         status: s.status || 'PAID',
       }));
+
+    // Dynamically pull authentic advances directly from settlements into advances
+    riderSettlements.forEach((s) => {
+      if (s.advanceAmount > 0) {
+        const hasMatch = cleanAdvances.some(
+          (a) =>
+            a.id === `settlement_adv_${s.id}` ||
+            a.id === s.id ||
+            a.settlementId === s.id ||
+            a.settledPayoutId === s.id ||
+            ((s as any).settledAdvanceIds && (s as any).settledAdvanceIds.includes(a.id)) ||
+            (!a.settlementId && !a.settledPayoutId && Math.abs(Number(a.amount) - s.advanceAmount) < 0.01)
+        );
+        if (!hasMatch) {
+          cleanAdvances.push({
+            id: `settlement_adv_${s.id}`,
+            riderId: rider.id,
+            amount: s.advanceAmount,
+            date: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
+            createdAt: s.advanceDate || s.paidAt || s.startDate,
+            reason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
+            isSettled: true,
+            isDeducted: true,
+            status: 'PAID',
+          });
+        }
+      }
+    });
+
+    const sortedAdvances = [...cleanAdvances].sort((a, b) => {
+      const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
+      const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
+      return timeB - timeA;
+    });
 
     // Deliveries: keep all unpaid deliveries plus recent paid ones
     const riderDeliveries = deliveries.filter((d) => d.riderId === rider.id);
@@ -2430,6 +2461,8 @@ export async function fetchPublicRiderStatement(
             incentiveAmount: s.incentiveAmount,
             grossTotal: s.grossTotal,
             advanceAmount: s.advanceAmount || 0,
+            advanceDate: s.advanceDate,
+            advanceReason: s.advanceReason,
             netTotal: s.netTotal,
             paidAt: s.paidAt,
             status: s.status || 'PAID',
@@ -2454,6 +2487,8 @@ export async function fetchPublicRiderStatement(
               incentiveAmount: s.incentiveAmount,
               grossTotal: s.grossTotal,
               advanceAmount: s.advanceAmount || 0,
+              advanceDate: s.advanceDate,
+              advanceReason: s.advanceReason,
               netTotal: s.netTotal,
               paidAt: s.paidAt,
               status: s.status || 'PAID',
@@ -2566,6 +2601,34 @@ export async function fetchPublicRiderStatement(
         }
       } catch {}
     }
+
+    // Include authentic advances from settlements if not already present in advances
+    salaries.forEach((s) => {
+      if (s.advanceAmount > 0) {
+        const hasMatch = advances.some(
+          (a) =>
+            a.id === `settlement_adv_${s.id}` ||
+            a.id === s.id ||
+            a.settlementId === s.id ||
+            a.settledPayoutId === s.id ||
+            ((s as any).settledAdvanceIds && (s as any).settledAdvanceIds.includes(a.id)) ||
+            (!a.settlementId && !a.settledPayoutId && Math.abs(Number(a.amount) - s.advanceAmount) < 0.01)
+        );
+        if (!hasMatch) {
+          advances.push({
+            id: `settlement_adv_${s.id}`,
+            riderId: foundRider.id,
+            amount: s.advanceAmount,
+            date: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
+            createdAt: s.advanceDate || s.paidAt || s.startDate,
+            reason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
+            isSettled: true,
+            isDeducted: true,
+            status: 'PAID',
+          });
+        }
+      }
+    });
 
     const constructedStatement: PublicRiderStatement = {
       riderId: foundRider.id,
