@@ -440,48 +440,8 @@ export function calculatePureRiderLedger(
     }
   });
 
-  // D. Active Unsettled Daily Deliveries (Earned daily parcel deliveries not yet in any settlement)
-  const paidSettlementRanges = salaries
-    .filter((s) => !s.status || s.status.trim().toUpperCase() === 'PAID')
-    .map((s) => ({
-      startDate: s.startDate,
-      endDate: s.endDate,
-    }));
 
-  (statement.recentDeliveries || []).forEach((del) => {
-    if (!del) return;
-    // Skip if delivery is already part of a settlement or marked Paid
-    if (del.settlementId || del.status === 'Paid') return;
 
-    // Skip if delivery date falls inside any settled period
-    if (del.date) {
-      const isInsideSettledPeriod = paidSettlementRanges.some(
-        (rng) => del.date >= rng.startDate && del.date <= rng.endDate
-      );
-      if (isInsideSettledPeriod) return false;
-    }
-
-    const earnings = Number(del.totalEarnings) || 0;
-    if (earnings <= 0) return;
-
-    const dateVal = del.date || '';
-    const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
-
-    rawList.push({
-      id: `del-${del.id}`,
-      originalId: del.id,
-      rawDate: dateVal,
-      sortTimestamp: timestamp,
-      formattedDate: del.date ? formatDateDisplay(del.date) : 'अज्ञात दिनांक',
-      type: 'delivery',
-      entryKind: 'PLUS_EARNING',
-      typeLabel: '(+) डिलीवरी',
-      title: `दैनिक पार्सल डिलीवरी (${formatDateDisplay(del.date)})`,
-      subTitle: `${del.parcels || 0} पार्सल डिलीवर • सक्रिय डिलीवरी कमाई (अनपेड)`,
-      plusAmount: earnings,
-      minusAmount: 0,
-    });
-  });
 
   // Deduplicate entries by ID to ensure single ground truth
   const seenEntryIds = new Set<string>();
