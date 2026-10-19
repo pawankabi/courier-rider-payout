@@ -421,13 +421,31 @@ export function calculatePureRiderLedger(
       },
     });
 
+    // Minus (-) Entry: Advance settlement adjustment deducted in this salary
+    if (advanceDeducted > 0) {
+      rawList.push({
+        id: `sal-adv-${sal.id}`,
+        originalId: sal.id,
+        rawDate: dateVal,
+        sortTimestamp: timestamp + 1,
+        formattedDate: formatDateDisplay(dateVal),
+        type: 'advance',
+        entryKind: 'MINUS_ADVANCE',
+        typeLabel: '(-) एडवांस कटौती',
+        title: `सैलरी में एडवांस कटौती (${formatDateDisplay(sal.startDate)} से ${formatDateDisplay(sal.endDate)})`,
+        subTitle: `सैलरी सेटलमेंट में काटा गया एडवांस: ${formatINR(advanceDeducted)}`,
+        plusAmount: 0,
+        minusAmount: advanceDeducted,
+      });
+    }
+
     // Minus (-) Entry: Net cash disbursed to rider in hand
     if (isPaid && netCashPaid > 0) {
       rawList.push({
         id: `payout-cash-${sal.id}`,
         originalId: sal.id,
         rawDate: dateVal,
-        sortTimestamp: timestamp + 1, // Follows immediately after salary earning
+        sortTimestamp: timestamp + 2,
         formattedDate: formatDateDisplay(dateVal),
         type: 'payment',
         entryKind: 'MINUS_ADVANCE',
@@ -438,6 +456,7 @@ export function calculatePureRiderLedger(
         minusAmount: netCashPaid,
       });
     }
+
   });
 
 
