@@ -212,29 +212,40 @@ function parseRiderStatementRoute(): string | null {
     } catch {}
   }
 
-  // 2. Hash routing: #/statement/:riderId or #statement/:riderId or #statement=:riderId or #/ledger/:riderId
+  // 2. Hash routing: #/statement/rider/:riderId or #/statement/:riderId or #statement/:riderId or #statement=:riderId or #/ledger/:riderId
   if (hash.includes('statement') || hash.includes('ledger')) {
+    const matchRider = hash.match(/(?:statement|ledger)\/rider\/([^\/?#]+)/i);
+    if (matchRider && matchRider[1]) {
+      const val = decodeURIComponent(matchRider[1]).replace(/\/+$/, '').trim();
+      if (val && val !== ':riderId' && val !== ':id') return val;
+    }
     const match = hash.match(/(?:statement|ledger)[\/=]([^\/?#]+)/i);
-    if (match && match[1]) {
+    if (match && match[1] && match[1].toLowerCase() !== 'rider') {
       const val = decodeURIComponent(match[1]).replace(/\/+$/, '').trim();
-      if (val && val !== ':riderId') return val;
+      if (val && val !== ':riderId' && val !== ':id') return val;
     }
     const parts = hash.split(/(?:statement|ledger)[\/=]/i);
     if (parts.length > 1 && parts[1]) {
-      const raw = parts[1].split(/[?#&]/)[0];
+      const cleanedPart = parts[1].replace(/^rider\//i, '');
+      const raw = cleanedPart.split(/[?#&]/)[0];
       if (raw) {
         const val = decodeURIComponent(raw).replace(/\/+$/, '').trim();
-        if (val && val !== ':riderId') return val;
+        if (val && val !== ':riderId' && val !== ':id' && val.toLowerCase() !== 'rider') return val;
       }
     }
   }
 
-  // 3. Pathname routing: /statement/:riderId or /ledger/:riderId
-  if (pathname.includes('/statement/') || pathname.includes('/ledger/')) {
+  // 3. Pathname routing: /statement/rider/:riderId or /statement/:riderId or /ledger/:riderId
+  if (pathname.includes('/statement') || pathname.includes('/ledger')) {
+    const matchRider = pathname.match(/\/(?:statement|ledger)\/rider\/([^\/?#]+)/i);
+    if (matchRider && matchRider[1]) {
+      const val = decodeURIComponent(matchRider[1]).replace(/\/+$/, '').trim();
+      if (val && val !== ':riderId' && val !== ':id') return val;
+    }
     const match = pathname.match(/\/(?:statement|ledger)\/([^\/?#]+)/i);
-    if (match && match[1]) {
+    if (match && match[1] && match[1].toLowerCase() !== 'rider') {
       const val = decodeURIComponent(match[1]).replace(/\/+$/, '').trim();
-      if (val && val !== ':riderId') return val;
+      if (val && val !== ':riderId' && val !== ':id') return val;
     }
   }
 

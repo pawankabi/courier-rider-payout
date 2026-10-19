@@ -59,31 +59,43 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       const search = window.location.search || '';
       const params = new URLSearchParams(search);
       const queryId = params.get('statement') || params.get('rider') || params.get('riderId') || params.get('ledger') || params.get('riderStatement');
-      if (queryId) return decodeURIComponent(queryId).trim();
+      if (queryId && queryId !== ':riderId' && queryId !== ':id') return decodeURIComponent(queryId).trim();
 
       const hash = window.location.hash || '';
-      if (hash.includes('statement')) {
-        const match = hash.match(/statement[\/=]([^\/?#]+)/i);
-        if (match && match[1]) return decodeURIComponent(match[1]).trim();
-        const parts = hash.split(/statement[\/=]/i);
-        if (parts.length > 1 && parts[1]) {
-          const raw = parts[1].split(/[?#&]/)[0];
-          if (raw) return decodeURIComponent(raw).trim();
+      if (hash.includes('statement') || hash.includes('ledger')) {
+        const matchRider = hash.match(/(?:statement|ledger)\/rider\/([^\/?#]+)/i);
+        if (matchRider && matchRider[1]) {
+          const val = decodeURIComponent(matchRider[1]).replace(/\/+$/, '').trim();
+          if (val && val !== ':riderId' && val !== ':id') return val;
         }
-      }
-      if (hash.includes('ledger')) {
-        const match = hash.match(/ledger[\/=]([^\/?#]+)/i);
-        if (match && match[1]) return decodeURIComponent(match[1]).trim();
+        const match = hash.match(/(?:statement|ledger)[\/=]([^\/?#]+)/i);
+        if (match && match[1] && match[1].toLowerCase() !== 'rider') {
+          const val = decodeURIComponent(match[1]).replace(/\/+$/, '').trim();
+          if (val && val !== ':riderId' && val !== ':id') return val;
+        }
+        const parts = hash.split(/(?:statement|ledger)[\/=]/i);
+        if (parts.length > 1 && parts[1]) {
+          const cleanedPart = parts[1].replace(/^rider\//i, '');
+          const raw = cleanedPart.split(/[?#&]/)[0];
+          if (raw) {
+            const val = decodeURIComponent(raw).replace(/\/+$/, '').trim();
+            if (val && val !== ':riderId' && val !== ':id' && val.toLowerCase() !== 'rider') return val;
+          }
+        }
       }
 
       const pathname = window.location.pathname || '';
-      if (pathname.includes('/statement/')) {
-        const part = pathname.split('/statement/')[1]?.split('?')[0]?.split('#')[0];
-        if (part) return decodeURIComponent(part).replace(/\/+$/, '').trim();
-      }
-      if (pathname.includes('/ledger/')) {
-        const part = pathname.split('/ledger/')[1]?.split('?')[0]?.split('#')[0];
-        if (part) return decodeURIComponent(part).replace(/\/+$/, '').trim();
+      if (pathname.includes('/statement') || pathname.includes('/ledger')) {
+        const matchRider = pathname.match(/\/(?:statement|ledger)\/rider\/([^\/?#]+)/i);
+        if (matchRider && matchRider[1]) {
+          const val = decodeURIComponent(matchRider[1]).replace(/\/+$/, '').trim();
+          if (val && val !== ':riderId' && val !== ':id') return val;
+        }
+        const match = pathname.match(/\/(?:statement|ledger)\/([^\/?#]+)/i);
+        if (match && match[1] && match[1].toLowerCase() !== 'rider') {
+          const val = decodeURIComponent(match[1]).replace(/\/+$/, '').trim();
+          if (val && val !== ':riderId' && val !== ':id') return val;
+        }
       }
     }
     return '';
@@ -95,7 +107,22 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     if (typeof window !== 'undefined' && resolvedRiderId) {
       try {
         const cachedRiders = loadRidersFromStorage();
-        const localRider = (cachedRiders || []).find((r) => r && (r.id === resolvedRiderId || r.phone === resolvedRiderId));
+        const cleanResolved = resolvedRiderId.toLowerCase().trim();
+        const localRider = (cachedRiders || []).find((r) => {
+          if (!r) return false;
+          const rId = (r.id || '').toLowerCase().trim();
+          const rPhone = (r.phone || '').trim();
+          const rName = (r.name || '').toLowerCase().trim();
+          return (
+            rId === cleanResolved ||
+            rPhone === cleanResolved ||
+            rPhone.endsWith(cleanResolved) ||
+            rName === cleanResolved ||
+            rName.includes(cleanResolved) ||
+            cleanResolved.includes(rName)
+          );
+        });
+
         if (localRider) {
           const cachedDeliveries = loadDeliveriesFromStorage(cachedRiders);
           const cachedSettlements = loadSettlementsFromStorage();
@@ -111,7 +138,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             advances: Array.isArray(localRider.advances) ? localRider.advances : [],
             incentives: Array.isArray(localRider.incentives) ? localRider.incentives : [],
             salaries: (cachedSettlements || [])
-              .filter((s) => s && s.riderId === localRider.id)
+              .filter((s) => s && (s.riderId === localRider.id || (localRider.phone && s.riderPhone === localRider.phone)))
               .map((s) => ({
                 id: s.id,
                 startDate: s.startDate,
@@ -128,8 +155,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                 status: s.status || 'PAID',
               })),
             recentDeliveries: (cachedDeliveries || [])
-              .filter((d) => d && d.riderId === localRider.id)
-              .slice(0, 30),
+              .filter((d) => d && (d.riderId === localRider.id || (localRider.phone && d.riderPhone === localRider.phone)))
+              .slice(0, 100),
             updatedAt: new Date().toISOString(),
           };
         }
@@ -257,6 +284,18 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const isRider = !isAdmin;
 
+  const effectiveSettlements = useMemo(() => {
+    if (propSettlements && Array.isArray(propSettlements) && propSettlements.length > 0) {
+      return propSettlements;
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        return loadSettlementsFromStorage();
+      } catch {}
+    }
+    return [];
+  }, [propSettlements]);
+
   // Pure Arithmetic Accounting Calculation via pureLedgerEngine
   const { 
     timelineRows, 
@@ -268,8 +307,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     adminBalanceLabel,
     riderBalanceLabel,
   } = useMemo(() => {
-    return calculatePureRiderLedger(statement, sortOrder, isRider, propSettlements);
-  }, [statement, sortOrder, isRider, propSettlements]);
+    return calculatePureRiderLedger(statement, sortOrder, isRider, effectiveSettlements);
+  }, [statement, sortOrder, isRider, effectiveSettlements]);
 
   // Admin Actions: Delete Row (Android WebView safe, zero window.confirm)
   const handleConfirmDeleteRow = async () => {
@@ -686,13 +725,13 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                     <th className="py-3 px-2 sm:px-3 text-center w-[110px] whitespace-nowrap">
                       प्रकार (Type)
                     </th>
-                    {/* Column 3: कमाई / क्रेडिट (+) (Earned / Credit +) [Emerald #047857] */}
+                    {/* Column 3: कुल कमाई (+) (Earned / Credit +) [Emerald #047857] */}
                     <th className="py-3 px-3 sm:px-4 text-right w-[140px] whitespace-nowrap text-[#047857] bg-emerald-50/50 print:bg-transparent">
-                      क्रेडिट / कमाई (+)
+                      कुल कमाई (+)
                     </th>
-                    {/* Column 4: एडवांस / डेबिट (-) (Advance / Debit -) [Crimson #B91C1C] */}
+                    {/* Column 4: कुल एडवांस / कटौती (-) (Advance / Debit -) [Crimson #B91C1C] */}
                     <th className="py-3 px-3 sm:px-4 text-right w-[140px] whitespace-nowrap text-[#B91C1C] bg-red-50/50 print:bg-transparent">
-                      डेबिट / एडवांस (-)
+                      कुल एडवांस / कटौती (-)
                     </th>
                     {/* Column 5: चालू बैलेंस (Running Balance) */}
                     <th className="py-3 px-3 sm:px-4 text-right w-[150px] whitespace-nowrap">
@@ -745,7 +784,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                         </span>
                       </td>
 
-                      {/* 3. क्रेडिट / कमाई (+) (Earned / Credit +) [Emerald #047857] */}
+                      {/* 3. कुल कमाई (+) (Earned / Credit +) [Emerald #047857] */}
                       <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-emerald-50/25 print:bg-transparent align-top whitespace-nowrap">
                         {row.plusAmount > 0 ? (
                           <span className="text-[#047857]">
@@ -756,7 +795,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                         )}
                       </td>
 
-                      {/* 4. डेबिट / एडवांस (-) (Advance / Debit -) [Crimson #B91C1C] */}
+                      {/* 4. कुल एडवांस / कटौती (-) (Advance / Debit -) [Crimson #B91C1C] */}
                       <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-red-50/25 print:bg-transparent align-top whitespace-nowrap">
                         {row.minusAmount > 0 ? (
                           <span className="text-[#B91C1C]">
@@ -839,12 +878,12 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                       -{formatINR(totalMinus)}
                     </td>
                     <td colSpan={isAdmin ? 2 : 1} className="py-3.5 px-3 sm:px-4 text-right font-black font-sans text-xs">
-                      नेट शेष: {formatINR(netBalance)}
+                      {balanceStatus === 'rider_due' ? `देना शेष: ₹${formatINR(netBalance)}` : balanceStatus === 'payable' ? `पाना शेष: ₹${formatINR(netBalance)}` : 'शेष: ₹0'}
                     </td>
                   </tr>
                   <tr className="border-t border-slate-200 bg-white text-xs font-bold print:bg-slate-100 print:border-slate-300">
                     <td colSpan={2} className="py-3 px-3 sm:px-4 font-sans text-slate-700 print:text-black">
-                      अंतिम हिसाब स्थिति (Final Status)
+                      अंतिम शेष (Bal)
                     </td>
                     <td 
                       colSpan={isAdmin ? 4 : 3} 
