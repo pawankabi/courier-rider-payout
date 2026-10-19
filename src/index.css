@@ -88,9 +88,17 @@
   nav,
   .no-print,
   #aistudio-chat,
+  #pwa-offline-alert,
+  [id*="offline"],
+  [class*="toast"],
   ::-webkit-scrollbar {
     display: none !important;
     visibility: hidden !important;
+  }
+
+  /* Isolate printable ledger when modal is active */
+  body:has(.ledger-printable-root) > div:not(:has(.ledger-printable-root)) {
+    display: none !important;
   }
 
   /* Printable Table Formatting */

@@ -1,5 +1,6 @@
 import { DeliveryEntry, Rider, RiderAdvanceEntry, RiderIncentiveEntry, SettlementRecord } from '../types';
 import { formatINR } from './formatters';
+import { purgePhantomAdvances } from './pureLedgerEngine';
 
 export interface OpeningBalanceResult {
   openingBalance: number;
@@ -420,14 +421,8 @@ export function reindexAndSanitizeRiderBalances(
     const totalAdvanceCoveredByEarnings = Math.max(0, totalGrossEarned - totalCashDisbursed);
 
     // Lifetime advances taken & recoveries:
-    // Strictly filter out any synthetic/phantom duplicates (adv_cf_, settle_adj)
-    const originalAdvances = (rider.advances || []).filter(
-      (a) =>
-        !a.id?.startsWith('settle_adj') &&
-        !a.id?.startsWith('adv_cf_') &&
-        !a.reason?.includes('सेटलमेंट समायोजन') &&
-        (Number(a.amount) || 0) > 0
-    );
+    // Strictly filter out any synthetic/phantom duplicates (adv_cf_, settle_adj, etc.)
+    const originalAdvances = purgePhantomAdvances(rider.advances || []);
     const regularAdvances = originalAdvances.filter((a) => !a.isRecovery && a.type !== 'recovery');
     const recoveries = originalAdvances.filter((a) => a.isRecovery || a.type === 'recovery');
 
@@ -490,8 +485,9 @@ export function reindexAndSanitizeRiderBalances(
             status: 'PAID',
           });
           // 2. Active unrecovered portion
+          const remId = adv.id.endsWith('_rem') ? adv.id : `${adv.id}_rem`;
           sanitizedAdvances.push({
-            id: `${adv.id}_rem`,
+            id: remId,
             riderId: rider.id,
             amount: unrecoveredAmt,
             date: adv.date,

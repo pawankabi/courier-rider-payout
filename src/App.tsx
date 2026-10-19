@@ -1994,6 +1994,18 @@ function MainCourierApp() {
     setRiders(updatedRiders);
     saveRidersToStorage(updatedRiders, targetUid);
 
+    // Flush corrupt local storage snapshots so fresh server data takes immediate effect
+    try {
+      localStorage.removeItem(`cp_stmt_${riderId}`);
+      sessionStorage.removeItem(`cp_stmt_${riderId}`);
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && (k.includes(riderId) || k.includes('statement') || k.includes('ledger'))) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch {}
+
     // Delete docs and reset in Firestore
     try {
       await resetRiderAccountInFirestore(targetUid || '', riderId);
@@ -3094,7 +3106,7 @@ function MainCourierApp() {
 
       {/* In-App Khatabook Statement / Ledger Screen Overlay with sticky top Close/Back button */}
       {viewingLedgerRiderId && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950 animate-in fade-in">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950 animate-in fade-in print:static print:overflow-visible print:bg-white print:p-0 print:m-0 print:h-auto print:w-auto">
           <RiderLedgerStatement
             riderId={viewingLedgerRiderId}
             initialStatement={inAppLedgerInitialStatement}

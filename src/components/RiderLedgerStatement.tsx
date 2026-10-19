@@ -22,8 +22,8 @@ import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } 
 import { fetchPublicRiderStatement } from '../services/firestoreSync';
 import { generateStatementUrl } from '../services/smsService';
 import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
-import { calculateRiderLedger } from '../utils/ledgerCalculation';
-import type { UnifiedTransactionItem } from '../utils/ledgerCalculation';
+import { calculatePureRiderLedger as calculateRiderLedger } from '../utils/pureLedgerEngine';
+import type { UnifiedTransactionItem } from '../utils/pureLedgerEngine';
 
 export type { UnifiedTransactionItem };
 
@@ -482,6 +482,19 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       if (onResetAccount) {
         await onResetAccount();
       }
+      // Flush corrupt local storage snapshots so fresh server data takes immediate effect
+      try {
+        const rId = resolvedRiderId || statement.riderId;
+        localStorage.removeItem(`cp_stmt_${rId}`);
+        sessionStorage.removeItem(`cp_stmt_${rId}`);
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.includes(rId) || k.includes('statement') || k.includes('ledger'))) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch {}
+
       setStatement((prev) => {
         if (!prev) return null;
         return {
@@ -586,10 +599,10 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col print:bg-white print:text-black">
+    <div id="rider-ledger-statement" className="ledger-printable-root min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col print:bg-white print:text-black">
       {/* Toast Notification */}
       {toastMsg && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-[#047857] text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top duration-200">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-[#047857] text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top duration-200 print:hidden no-print">
           <Check className="w-4 h-4" />
           <span>{toastMsg}</span>
         </div>
@@ -741,7 +754,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         </div>
 
         {/* 3. CLEAN HISAB KITAB TABLE (EXACT 4 COLUMNS) */}
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs print:border print:border-slate-300 print:bg-white print:shadow-none">
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs print:border print:border-slate-300 print:bg-white print:shadow-none print:overflow-visible">
           <div className="p-3.5 sm:p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2 print:bg-slate-100 print:border-slate-300">
             <div className="flex items-center gap-2">
               <FileSpreadsheet className="w-4 h-4 text-[#047857]" />
@@ -771,10 +784,10 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               इस राइडर के लिए अभी तक कोई लेनदेन दर्ज नहीं किया गया है।
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto print:overflow-visible">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-100/70 text-slate-700 font-bold sticky top-0 print:bg-slate-200 print:text-black print:border-slate-400">
+                  <tr className="border-b border-slate-200 bg-slate-100/70 text-slate-700 font-bold sticky top-0 print:static print:bg-slate-200 print:text-black print:border-slate-400">
                     {/* Column 1: तारीख व विवरण (Date & Details) */}
                     <th className="py-3 px-3 sm:px-4 min-w-[280px]">
                       तारीख व विवरण (Date & Details)

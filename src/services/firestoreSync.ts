@@ -44,6 +44,7 @@ import {
   saveSettlementsToStorage, 
   setCachedAuthUserId 
 } from '../utils/storage';
+import { purgePhantomAdvances } from '../utils/pureLedgerEngine';
 
 export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
 
@@ -2201,8 +2202,10 @@ export async function syncPublicRiderStatement(
   try {
     const docRef = doc(db, 'public_statements', rider.id);
     
-    // Sort advances by date or createdAt descending
-    const sortedAdvances = [...(advances.length > 0 ? advances : (rider.advances || []))].sort((a, b) => {
+    // Purge phantom advances and sort descending
+    const rawAdvances = advances.length > 0 ? advances : (rider.advances || []);
+    const cleanAdvances = purgePhantomAdvances(rawAdvances);
+    const sortedAdvances = [...cleanAdvances].sort((a, b) => {
       const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
       const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
       return timeB - timeA;
@@ -2309,6 +2312,9 @@ export async function fetchPublicRiderStatement(
       (existingStatement.salaries && existingStatement.salaries.length > 0) ||
       (existingStatement.recentDeliveries && existingStatement.recentDeliveries.length > 0)
     )) {
+      if (Array.isArray(existingStatement.advances)) {
+        existingStatement.advances = purgePhantomAdvances(existingStatement.advances);
+      }
       return existingStatement;
     }
 
@@ -3004,6 +3010,23 @@ export async function resetRiderAccountInFirestore(
       console.warn('Error deleting workspace incentives during reset:', e);
     }
   }
+
+  // CollectionGroup deep purge for any nested subcollections
+  try {
+    const qCgAdv = query(collectionGroup(db, 'advances'), where('riderId', '==', riderId));
+    const snapCgAdv = await getDocs(qCgAdv);
+    for (const d of snapCgAdv.docs) {
+      await deleteDoc(d.ref).catch(() => {});
+    }
+  } catch (e) {}
+
+  try {
+    const qCgInc = query(collectionGroup(db, 'incentives'), where('riderId', '==', riderId));
+    const snapCgInc = await getDocs(qCgInc);
+    for (const d of snapCgInc.docs) {
+      await deleteDoc(d.ref).catch(() => {});
+    }
+  } catch (e) {}
 
   // 3. Reset rider record in /riders and /workspaces/{userId}/riders
   try {
