@@ -426,35 +426,6 @@ export function reindexAndSanitizeRiderBalances(
     const regularAdvances = originalAdvances.filter((a) => !a.isRecovery && a.type !== 'recovery');
     const recoveries = originalAdvances.filter((a) => a.isRecovery || a.type === 'recovery');
 
-    // Pull authentic advances directly from settlements if not already in regularAdvances
-    riderPaidSettlements.forEach((s) => {
-      const advAmt = Number(s.advanceAmount) || 0;
-      if (advAmt <= 0) return;
-      const alreadyPresent = regularAdvances.some(
-        (a) =>
-          a.id === `settlement_adv_${s.id}` ||
-          a.id === `adv-${s.id}` ||
-          a.id === s.id ||
-          a.settlementId === s.id ||
-          a.settledPayoutId === s.id ||
-          ((s as any).settledAdvanceIds && (s as any).settledAdvanceIds.includes(a.id)) ||
-          (!a.settlementId && !a.settledPayoutId && Math.abs(Number(a.amount) - advAmt) < 0.01)
-      );
-      if (!alreadyPresent) {
-        regularAdvances.push({
-          id: `settlement_adv_${s.id}`,
-          riderId: rider.id,
-          amount: advAmt,
-          date: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
-          createdAt: s.advanceDate || s.paidAt || s.startDate,
-          reason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} - ${s.endDate})`,
-          isSettled: true,
-          isDeducted: true,
-          status: 'PAID',
-        });
-      }
-    });
-
     const totalAdvancesTaken = regularAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
     const totalRecoveries = recoveries.reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
 

@@ -874,7 +874,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                       <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-red-50/25 print:bg-transparent align-top whitespace-nowrap">
                         {row.paidToRider > 0 ? (
                           <span className="text-[#B91C1C]">
-                            +₹{formatINR(row.paidToRider)}
+                            +{formatINR(row.paidToRider)}
                           </span>
                         ) : (
                           <span className="text-slate-300 print:text-slate-400 font-normal">-</span>
@@ -885,7 +885,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                       <td className="py-3 px-3 sm:px-4 text-right font-mono font-bold bg-emerald-50/25 print:bg-transparent align-top whitespace-nowrap">
                         {row.settledOrEarned > 0 ? (
                           <span className="text-[#047857]">
-                            -₹{formatINR(row.settledOrEarned)}
+                            -{formatINR(row.settledOrEarned)}
                           </span>
                         ) : (
                           <span className="text-slate-300 print:text-slate-400 font-normal">-</span>
@@ -945,10 +945,10 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                       कुल योग (Grand Totals)
                     </td>
                     <td className="py-3.5 px-3 sm:px-4 text-right font-black text-[#B91C1C] bg-red-50/50 print:bg-transparent whitespace-nowrap">
-                      ₹{formatINR(totalPaidToRider)}
+                      {formatINR(totalPaidToRider)}
                     </td>
                     <td className="py-3.5 px-3 sm:px-4 text-right font-black text-[#047857] bg-emerald-50/50 print:bg-transparent whitespace-nowrap">
-                      ₹{formatINR(totalSettledOrEarned)}
+                      {formatINR(totalSettledOrEarned)}
                     </td>
                     {isAdmin && <td className="print:hidden" />}
                   </tr>
