@@ -3133,6 +3133,7 @@ function MainCourierApp() {
             initialStatement={inAppLedgerInitialStatement}
             settlements={dashboardSettlements}
             advances={dashboardAdvances}
+            externalAdvances={dashboardAdvances}
             onBackToApp={() => setViewingLedgerRiderId(null)}
             userId={targetUid}
             isAdmin={true}

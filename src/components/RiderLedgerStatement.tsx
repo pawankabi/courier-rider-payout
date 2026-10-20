@@ -31,6 +31,7 @@ export interface RiderLedgerStatementProps {
   initialStatement?: PublicRiderStatement | null;
   settlements?: any[];
   advances?: RiderAdvanceEntry[];
+  externalAdvances?: RiderAdvanceEntry[];
   onBackToApp?: () => void;
   userId?: string;
   isAdmin?: boolean;
@@ -46,6 +47,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   initialStatement = null,
   settlements: propSettlements,
   advances: propAdvances,
+  externalAdvances: propExternalAdvances,
   onBackToApp,
   isAdmin = false,
   onDeleteAdvance,
@@ -300,8 +302,15 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   // Gather effective master advances across sources
   const effectiveAdvances = useMemo(() => {
-    if (propAdvances && Array.isArray(propAdvances) && propAdvances.length > 0) {
-      return propAdvances;
+    const list: RiderAdvanceEntry[] = [];
+    if (propAdvances && Array.isArray(propAdvances)) {
+      list.push(...propAdvances);
+    }
+    if (propExternalAdvances && Array.isArray(propExternalAdvances)) {
+      list.push(...propExternalAdvances);
+    }
+    if (list.length > 0) {
+      return list;
     }
     if (typeof window !== 'undefined') {
       try {
@@ -311,7 +320,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       } catch {}
     }
     return statement?.advances || [];
-  }, [propAdvances, statement?.advances]);
+  }, [propAdvances, propExternalAdvances, statement?.advances]);
 
   // Pure Arithmetic Accounting Calculation via pureLedgerEngine
   const { 
