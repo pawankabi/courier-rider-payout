@@ -92,22 +92,16 @@ export function isPhantomOrSyntheticAdvance(adv: Partial<RiderAdvanceEntry>): bo
   if (!adv) return true;
   const amt = Number(adv.amount) || 0;
   if (amt <= 0) return true;
-  const id = adv.id || '';
+  const id = String(adv.id || (adv as any)._id || '');
   if (
     id.startsWith('adv_cf_') ||
     id.startsWith('settle_adj') ||
-    id.startsWith('adv-settlement-implicit') ||
-    id.includes('phantom') ||
-    id.includes('ghost')
+    id.startsWith('adv-settlement-implicit')
   ) {
     return true;
   }
   const reason = adv.reason || '';
-  if (
-    reason.includes('सेटलमेंट समायोजन') ||
-    reason.includes('Synthetic') ||
-    reason.includes('Auto Settlement Adjustment')
-  ) {
+  if (reason.includes('सेटलमेंट समायोजन')) {
     return true;
   }
   return false;
@@ -175,10 +169,19 @@ export function calculatePureRiderLedger(
     }
   };
 
+  const cleanPhone = (p?: string) => (p || '').replace(/\D/g, '').slice(-10);
+  const targetRiderId = String(statement.riderId || '').trim();
+  const targetPhone = cleanPhone(statement.riderPhone);
+
   (statement.advances || []).forEach(addAdv);
   if (externalAdvances && Array.isArray(externalAdvances)) {
     externalAdvances
-      .filter((a) => a && (a.riderId === statement.riderId || (statement.riderPhone && (a as any).riderPhone === statement.riderPhone)))
+      .filter((a) => {
+        if (!a) return false;
+        const aRiderId = String(a.riderId || '').trim();
+        const aPhone = cleanPhone((a as any).riderPhone);
+        return (targetRiderId && aRiderId === targetRiderId) || (targetPhone && aPhone && aPhone === targetPhone);
+      })
       .forEach(addAdv);
   }
 
@@ -203,7 +206,12 @@ export function calculatePureRiderLedger(
 
   if (externalSettlements && Array.isArray(externalSettlements)) {
     externalSettlements
-      .filter((s: any) => s && (s.riderId === statement.riderId || (statement.riderPhone && s.riderPhone === statement.riderPhone)))
+      .filter((s: any) => {
+        if (!s) return false;
+        const sRiderId = String(s.riderId || '').trim();
+        const sPhone = cleanPhone(s.riderPhone);
+        return (targetRiderId && sRiderId === targetRiderId) || (targetPhone && sPhone && sPhone === targetPhone);
+      })
       .forEach((s: any) => {
         const key = `${s.startDate}_${s.endDate}`;
         if (!seenSalKeys.has(key)) {
@@ -231,34 +239,30 @@ export function calculatePureRiderLedger(
     settledIncentiveIds: s.settledIncentiveIds,
   }));
 
-  // Helper: check if an advance is active and truly unsettled (6-condition qualification)
+  // Helper: check if an advance is active and truly unsettled (5-condition qualification)
   const isUnsettledAdvanceEntry = (adv: RiderAdvanceEntry): boolean => {
     if (!adv) return false;
-    const advId = adv.id || (adv as any)._id;
+    const advId = String(adv.id || (adv as any)._id || '').trim();
 
-    // 1) adv.isSettled !== true && adv.isDeducted !== true && (adv as any).status !== 'PAID'
-    if (adv.isSettled === true || adv.isDeducted === true || (adv as any).status === 'PAID') return false;
+    // 1) adv.isSettled !== true && (adv as any).status !== 'PAID'
+    if (adv.isSettled === true || (adv as any).status === 'PAID') return false;
 
-    // 2) !adv.settledInPayoutId && !adv.settledPayoutId && !adv.settlementId
-    if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
-
-    // 3) Number(adv.amount) > 0
+    // 2) Number(adv.amount) > 0
     const amt = Number(adv.amount) || 0;
     if (amt <= 0) return false;
 
-    // 4) adv.type !== 'recovery' && !adv.isRecovery
+    // 3) adv.type !== 'recovery' && !adv.isRecovery
     if (adv.type === 'recovery' || adv.isRecovery) return false;
 
-    // 5) Exclude carryover markers: !(advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) && !adv.reason?.includes('सेटलमेंट समायोजन')
-    if (advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) return false;
-    if (adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+    // 4) Not a carryover token: !settle_adj, !adv_cf_
+    if (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
 
-    // 6) Settlements check: Ensure advId is NOT in any paid settlement's settledAdvanceIds
+    // 5) Settlements check: Ensure advId is NOT in any paid settlement's settledAdvanceIds
     if (salaries && salaries.length > 0) {
       const isSettledInSalaries = salaries.some((s) => {
         const isPaidOrSettled = !s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED';
         if (!isPaidOrSettled) return false;
-        return Array.isArray((s as any).settledAdvanceIds) && ((s as any).settledAdvanceIds.includes(advId) || (adv.id && (s as any).settledAdvanceIds.includes(adv.id)));
+        return Array.isArray((s as any).settledAdvanceIds) && (s as any).settledAdvanceIds.some((id: any) => String(id).trim() === advId);
       });
       if (isSettledInSalaries) return false;
     }
@@ -318,15 +322,15 @@ export function calculatePureRiderLedger(
 
       // Cash advance taken by rider is a (-) entry
       rawList.push({
-        id: `adv-${adv.id}`,
-        originalId: adv.id,
+        id: `adv-${adv.id || (adv as any)._id}`,
+        originalId: String(adv.id || (adv as any)._id),
         rawDate: dateVal,
         sortTimestamp: timestamp,
         formattedDate: adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt),
         type: 'advance',
         entryKind: 'MINUS_ADVANCE',
         typeLabel: '(-) एडवांस',
-        title: adv.reason || 'एडवांस भुगतान (Advance Given)',
+        title: adv.reason || 'नकद एडवांस',
         subTitle: 'नकद / ऑनलाइन भुगतान (सक्रिय बकाया)',
         plusAmount: 0,
         minusAmount: positiveAmt,
@@ -458,12 +462,7 @@ export function calculatePureRiderLedger(
     .filter((s) => (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
     .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
 
-  const activeAdvancesSum = validAdvances
-    .filter((a) => !a.isRecovery && a.type !== 'recovery' && isUnsettledAdvanceEntry(a))
-    .reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-
-  const uncoveredDeficit = Math.max(0, totalSettlementDeficits - activeAdvancesSum);
-  if (uncoveredDeficit > 0) {
+  if (totalSettlementDeficits > 0) {
     const lastSal = salaries[salaries.length - 1];
     rawList.push({
       id: 'settlement-deficit-cf',
@@ -477,7 +476,7 @@ export function calculatePureRiderLedger(
       title: 'पिछले सेटलमेंट का बकाया शेष (Settlement Deficit Carry-Forward)',
       subTitle: 'एडवांस कटौती सकल कमाई से अधिक थी • अवशेष देयता',
       plusAmount: 0,
-      minusAmount: uncoveredDeficit,
+      minusAmount: totalSettlementDeficits,
     });
   }
 

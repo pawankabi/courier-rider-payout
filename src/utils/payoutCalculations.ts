@@ -124,34 +124,33 @@ export function isUnsettledAdvance(
   riderId?: string
 ): boolean {
   if (!adv) return false;
-  const advId = adv.id || (adv as any)._id;
+  const advId = String(adv.id || (adv as any)._id || '').trim();
 
-  // 1) adv.isSettled !== true && adv.isDeducted !== true && (adv as any).status !== 'PAID'
-  if (adv.isSettled === true || adv.isDeducted === true || (adv as any).status === 'PAID') return false;
+  // 1) adv.isSettled !== true && (adv as any).status !== 'PAID'
+  if (adv.isSettled === true || (adv as any).status === 'PAID') return false;
 
-  // 2) !adv.settledInPayoutId && !adv.settledPayoutId && !adv.settlementId
-  if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
-
-  // 3) Real Cash: Number(adv.amount) > 0 and adv.type !== 'recovery' && !adv.isRecovery
-  const amt = Number(adv.amount) || 0;
-  if (amt <= 0) return false;
-  if (adv.type === 'recovery' || adv.isRecovery) return false;
-
-  // 4) Exclude carryover markers: !(advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) && !adv.reason?.includes('सेटलमेंट समायोजन')
-  if (advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) return false;
-  if (adv.reason?.includes('सेटलमेंट समायोजन')) return false;
-
-  // 5) Settlements check: Ensure advId is NOT in any paid settlement's settledAdvanceIds
-  if (settlements && settlements.length > 0) {
+  // 2) If settlements exist: !settlements.some(s => (s.status === 'PAID' || s.status === 'SETTLED') && Array.isArray(s.settledAdvanceIds) && s.settledAdvanceIds.includes(String(adv.id || (adv as any)._id)))
+  // If settlements is empty or undefined, this condition passes automatically
+  if (settlements && Array.isArray(settlements) && settlements.length > 0) {
     const isAlreadySettledInRecord = settlements.some(
       (s) =>
-        (!riderId || s.riderId === riderId) &&
+        (!riderId || String(s.riderId).trim() === String(riderId).trim()) &&
         (!s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED') &&
         Array.isArray(s.settledAdvanceIds) &&
-        (s.settledAdvanceIds.includes(advId) || (adv.id && s.settledAdvanceIds.includes(adv.id)))
+        s.settledAdvanceIds.some((id) => String(id).trim() === advId)
     );
     if (isAlreadySettledInRecord) return false;
   }
+
+  // 3) Number(adv.amount) > 0
+  const amt = Number(adv.amount) || 0;
+  if (amt <= 0) return false;
+
+  // 4) adv.type !== 'recovery' && !adv.isRecovery
+  if (adv.type === 'recovery' || adv.isRecovery) return false;
+
+  // 5) !String(adv.id || '').startsWith('settle_adj') && !String(adv.id || '').startsWith('adv_cf_') && !adv.reason?.includes('सेटलमेंट समायोजन')
+  if (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
 
   return true;
 }

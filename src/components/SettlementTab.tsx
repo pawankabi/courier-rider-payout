@@ -187,26 +187,27 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     );
   }, [settlements, selectedRider, startDate, endDate]);
 
-  // Global & Rider Advance Resolution: resolve all advances for selectedRider
-  const riderAdvances = useMemo(() => {
+  // 1. Resolve current rider advances cleanly using robust string comparison
+  const currentRiderAdvances = useMemo(() => {
     if (!selectedRider) return [];
+    const fromMaster = (advances && Array.isArray(advances)
+      ? advances.filter((a) => String(a.riderId).trim() === String(selectedRider?.id).trim())
+      : []) || [];
+
     const map = new Map<string, RiderAdvanceEntry>();
     (selectedRider.advances || []).forEach((a) => {
       if (a) {
-        const id = a.id || (a as any)._id || Math.random().toString();
+        const id = String(a.id || (a as any)._id || Math.random()).trim();
         map.set(id, a);
       }
     });
-    if (advances && Array.isArray(advances)) {
-      advances
-        .filter((a) => a && (a.riderId === selectedRider.id || (selectedRider.phone && (a as any).riderPhone === selectedRider.phone)))
-        .forEach((a) => {
-          if (a) {
-            const id = a.id || (a as any)._id || Math.random().toString();
-            map.set(id, a);
-          }
-        });
-    }
+    fromMaster.forEach((a) => {
+      if (a) {
+        const id = String(a.id || (a as any)._id || Math.random()).trim();
+        map.set(id, a);
+      }
+    });
+
     return map.size > 0 ? Array.from(map.values()) : (selectedRider.advances || []);
   }, [advances, selectedRider]);
 
@@ -217,11 +218,11 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       selectedRider.id,
       startDate,
       entries,
-      riderAdvances,
+      currentRiderAdvances,
       selectedRider.incentives,
       settlements
     );
-  }, [selectedRider, startDate, entries, settlements, riderAdvances]);
+  }, [selectedRider, startDate, entries, settlements, currentRiderAdvances]);
 
   const openingBalance = openingBalResult?.openingBalance || 0;
 
@@ -236,13 +237,21 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   // If an advance of ₹7,489 or ANY cash loan was taken, it MUST be deducted here, regardless of its creation date!
   const activeAdvancesList = useMemo(() => {
     if (!selectedRider) return [];
-    return getActiveAdvances(riderAdvances, settlements, selectedRider.id);
-  }, [selectedRider, settlements, riderAdvances]);
+    return getActiveAdvances(currentRiderAdvances, settlements || [], selectedRider.id);
+  }, [selectedRider, settlements, currentRiderAdvances]);
 
-  // Active unsettled advances sum for selected rider
-  const activeRiderAdvanceSum = useMemo(() => {
-    return calculateActiveAdvanceTotal(riderAdvances, settlements, selectedRider?.id);
-  }, [riderAdvances, settlements, selectedRider]);
+  // CARRY-FORWARD DEBT + ACTIVE ADVANCES SYNC:
+  const liveActiveAdvanceTotal = useMemo(() => {
+    return calculateActiveAdvanceTotal(currentRiderAdvances, settlements || [], selectedRider?.id);
+  }, [currentRiderAdvances, settlements, selectedRider]);
+
+  const carriedDeficit = useMemo(() => {
+    return (openingBalResult && openingBalResult.status === 'rider_debt') ? Math.abs(openingBalResult.openingBalance) : 0;
+  }, [openingBalResult]);
+
+  const totalDeductionRequired = useMemo(() => {
+    return liveActiveAdvanceTotal + carriedDeficit;
+  }, [liveActiveAdvanceTotal, carriedDeficit]);
 
   // Unpaid entries specifically for the Mark As Paid action
   const unpaidEntries = useMemo(() => {
@@ -254,12 +263,10 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     if (isFullySettledPeriod) {
       return matchingSettlement.advanceAmount || 0;
     }
-    const activeAdv = activeRiderAdvanceSum;
-    const prevDebt = (openingBalResult && openingBalResult.status === 'rider_debt') ? Math.abs(openingBalResult.openingBalance) : 0;
-    return Math.max(activeAdv, prevDebt);
-  }, [matchingSettlement, unpaidEntries.length, activeRiderAdvanceSum, openingBalResult]);
+    return totalDeductionRequired;
+  }, [matchingSettlement, unpaidEntries.length, totalDeductionRequired]);
 
-  // Auto-populate advance deduction: If viewing already settled, use saved record; otherwise auto-populate active advances
+  // Auto-populate advance deduction: If viewing already settled, use saved record; otherwise auto-populate active advances & carried deficits
   useEffect(() => {
     const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
     if (isFullySettledPeriod) {
@@ -267,15 +274,19 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       setAdvanceDate(matchingSettlement.advanceDate || '');
       setAdvanceReason(matchingSettlement.advanceReason || '');
     } else {
-      setAdvanceAmount(totalAdvanceDeduction);
+      setAdvanceAmount(totalDeductionRequired);
       setAdvanceDate(getTodayDateString());
-      if (openingBalResult && openingBalResult.status === 'rider_debt') {
+      if (carriedDeficit > 0 && liveActiveAdvanceTotal > 0) {
+        setAdvanceReason('पहले का बकाया + सक्रिय एडवांस (Deficit & Active Advance)');
+      } else if (carriedDeficit > 0) {
         setAdvanceReason('पहले का बकाया (Previous Debt Carry-Forward)');
+      } else if (activeAdvancesList.length > 0) {
+        setAdvanceReason(activeAdvancesList[0].reason || 'सक्रिय एडवांस (Active Advance)');
       } else {
         setAdvanceReason('');
       }
     }
-  }, [selectedRiderId, startDate, endDate, matchingSettlement, unpaidEntries.length, totalAdvanceDeduction, openingBalResult]);
+  }, [selectedRiderId, startDate, endDate, matchingSettlement, unpaidEntries.length, totalDeductionRequired, carriedDeficit, liveActiveAdvanceTotal, activeAdvancesList]);
 
   // a) OPERATIONAL EARNINGS (Scoped strictly to selected [startDate, endDate])
   const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
@@ -797,24 +808,28 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                   Deduct Advance Payment (Optional)
                 </h3>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                  कुल एक्टिव एडवांस: {formatINR(activeRiderAdvanceSum)}
+                  कुल एक्टिव एडवांस: {formatINR(totalDeductionRequired)}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                इस अवधि के एडवांस स्वचालित रूप से समायोजित किए जाएंगे
+                {carriedDeficit > 0 && liveActiveAdvanceTotal > 0
+                  ? `सक्रिय एडवांस ₹${formatINR(liveActiveAdvanceTotal)} + पिछला बकाया ₹${formatINR(carriedDeficit)} समायोजित किए जाएंगे`
+                  : carriedDeficit > 0
+                  ? `पिछले सेटलमेंट का बकाया ₹${formatINR(carriedDeficit)} समायोजित किया जाएगा`
+                  : 'इस अवधि के एडवांस स्वचालित रूप से समायोजित किए जाएंगे'}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {activeRiderAdvanceSum > 0 && Number(advanceAmount) !== activeRiderAdvanceSum && (
+            {totalDeductionRequired > 0 && Number(advanceAmount) !== totalDeductionRequired && (
               <button
                 type="button"
-                onClick={() => setAdvanceAmount(activeRiderAdvanceSum)}
+                onClick={() => setAdvanceAmount(totalDeductionRequired)}
                 className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-300 hover:text-white bg-indigo-500/20 px-2.5 py-1 rounded-lg border border-indigo-500/30 transition"
-                title="Use entire active advance"
+                title="Use entire active advance & deficit"
               >
-                <span>कुल एक्टिव एडवांस भरें ({formatINR(activeRiderAdvanceSum)})</span>
+                <span>कुल एक्टिव एडवांस भरें ({formatINR(totalDeductionRequired)})</span>
               </button>
             )}
             {numericAdvance > 0 && (

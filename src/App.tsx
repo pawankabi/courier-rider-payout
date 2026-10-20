@@ -2162,6 +2162,11 @@ function MainCourierApp() {
     });
   }, [settlements, dashboardRiders, currentUser, inspectedUser]);
 
+  // Live master fleet advances aggregated from dashboard riders
+  const dashboardAdvances = useMemo(() => {
+    return dashboardRiders.flatMap((r) => r.advances || []);
+  }, [dashboardRiders]);
+
   // Today stats for quick header badge
   const todayDate = getTodayDateString();
   const todayEntries = dashboardEntries.filter((e) => e.date === todayDate);
@@ -2857,7 +2862,7 @@ function MainCourierApp() {
                 riders={dashboardRiders}
                 entries={dashboardEntries}
                 settlements={dashboardSettlements}
-                advances={dashboardRiders.flatMap((r) => r.advances || [])}
+                advances={dashboardAdvances}
                 hubName={activeHubName}
                 isVerifiedHub={isVerifiedHub}
                 userRateConfig={userRateConfig}
@@ -3127,7 +3132,7 @@ function MainCourierApp() {
             riderId={viewingLedgerRiderId}
             initialStatement={inAppLedgerInitialStatement}
             settlements={dashboardSettlements}
-            advances={dashboardRiders.flatMap((r) => r.advances || [])}
+            advances={dashboardAdvances}
             onBackToApp={() => setViewingLedgerRiderId(null)}
             userId={targetUid}
             isAdmin={true}
