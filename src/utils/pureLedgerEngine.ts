@@ -44,7 +44,7 @@ export interface UnifiedTransactionItem {
   rawDate: string;
   sortTimestamp: number;
   formattedDate: string;
-  type: 'advance' | 'incentive' | 'salary' | 'delivery' | 'payment';
+  type: 'advance' | 'incentive' | 'salary' | 'payment';
   entryKind: 'PLUS_EARNING' | 'MINUS_ADVANCE';
   typeLabel: string;
   title: string;
@@ -160,10 +160,6 @@ export function calculatePureRiderLedger(
     };
   }
 
-  const riderNameLower = (statement.riderName || '').toLowerCase();
-  const riderIdLower = (statement.riderId || '').toLowerCase();
-  const isLakhindar = riderNameLower.includes('lakhindar') || riderIdLower.includes('lakhindar') || riderNameLower.includes('लखिंदर');
-
   // 1. Gather Authentic Advances (excluding phantom/ghost duplicates)
   const validAdvances: RiderAdvanceEntry[] = purgePhantomAdvances(statement.advances || []);
 
@@ -243,41 +239,6 @@ export function calculatePureRiderLedger(
     }
   });
 
-  // STRICT GUARANTEE FOR LAKHINDAR MAHATO:
-  // Genuine Gross Payout / Earnings: ₹8,810
-  // Genuine Total Advances Taken: ₹11,445
-  // Strict Net Status: Advance exceeds earnings by ₹2,635
-  if (isLakhindar) {
-    const currentAdvSum = validAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-    if (currentAdvSum < 11445) {
-      validAdvances.length = 0;
-      validAdvances.push({
-        id: 'lakhindar-adv-authentic',
-        riderId: statement.riderId,
-        amount: 11445,
-        date: '2026-10-01',
-        createdAt: '2026-10-01T00:00:00.000Z',
-        reason: 'एडवांस भुगतान (नकद / ऑनलाइन)',
-        isSettled: true,
-        isDeducted: true,
-        status: 'PAID',
-      });
-    }
-    if (salaries.length === 0) {
-      salaries.push({
-        id: 'lakhindar-sal-8810',
-        startDate: '2026-10-01',
-        endDate: '2026-10-15',
-        totalParcels: 677,
-        grossTotal: 8810,
-        advanceAmount: 11445,
-        netTotal: -2635,
-        paidAt: '2026-10-15T00:00:00.000Z',
-        status: 'PAID',
-      });
-    }
-  }
-
   // 4. Construct Pure Ledger Transactions (Chronological simulation)
   interface DraftLedgerEntry {
     id: string;
@@ -285,7 +246,7 @@ export function calculatePureRiderLedger(
     rawDate: string;
     sortTimestamp: number;
     formattedDate: string;
-    type: 'advance' | 'incentive' | 'salary' | 'delivery' | 'payment';
+    type: 'advance' | 'incentive' | 'salary' | 'payment';
     entryKind: 'PLUS_EARNING' | 'MINUS_ADVANCE';
     typeLabel: string;
     title: string;
@@ -440,48 +401,6 @@ export function calculatePureRiderLedger(
     }
   });
 
-  // D. Active Unsettled Daily Deliveries (Earned daily parcel deliveries not yet in any settlement)
-  const paidSettlementRanges = salaries
-    .filter((s) => !s.status || s.status.trim().toUpperCase() === 'PAID')
-    .map((s) => ({
-      startDate: s.startDate,
-      endDate: s.endDate,
-    }));
-
-  (statement.recentDeliveries || []).forEach((del) => {
-    if (!del) return;
-    // Skip if delivery is already part of a settlement or marked Paid
-    if (del.settlementId || del.status === 'Paid') return;
-
-    // Skip if delivery date falls inside any settled period
-    if (del.date) {
-      const isInsideSettledPeriod = paidSettlementRanges.some(
-        (rng) => del.date >= rng.startDate && del.date <= rng.endDate
-      );
-      if (isInsideSettledPeriod) return false;
-    }
-
-    const earnings = Number(del.totalEarnings) || 0;
-    if (earnings <= 0) return;
-
-    const dateVal = del.date || '';
-    const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
-
-    rawList.push({
-      id: `del-${del.id}`,
-      originalId: del.id,
-      rawDate: dateVal,
-      sortTimestamp: timestamp,
-      formattedDate: del.date ? formatDateDisplay(del.date) : 'अज्ञात दिनांक',
-      type: 'delivery',
-      entryKind: 'PLUS_EARNING',
-      typeLabel: '(+) डिलीवरी',
-      title: `दैनिक पार्सल डिलीवरी (${formatDateDisplay(del.date)})`,
-      subTitle: `${del.parcels || 0} पार्सल डिलीवर • सक्रिय डिलीवरी कमाई (अनपेड)`,
-      plusAmount: earnings,
-      minusAmount: 0,
-    });
-  });
 
   // Deduplicate entries by ID to ensure single ground truth
   const seenEntryIds = new Set<string>();

@@ -403,7 +403,9 @@ export const RidersTab: React.FC<Props> = ({
   const getRiderRangePendingBalance = (riderId: string, startDate?: string, endDate?: string) => {
     const rangeEarnings = calculateEarningsForRange(riderId, startDate, endDate);
     const rangePaid = calculateSettlementsPaidForRange(riderId, startDate, endDate);
-    return rangeEarnings - rangePaid;
+    const rider = riders.find((r) => r.id === riderId);
+    const activeAdvance = rider ? calculateActiveAdvanceTotal(rider.advances, settlements, rider.id) : 0;
+    return (rangeEarnings - rangePaid) - activeAdvance;
   };
 
   const filteredRangeEntries = entries.filter((e) => {
@@ -1644,27 +1646,39 @@ export const RidersTab: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Mobile Dedicated Prominent Action Buttons [ + एडवांस ] & [ + इंसेंटिव ] */}
-                <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-800/80 sm:hidden">
+                {/* Mobile Dedicated Prominent Action Buttons [ + एडवांस ] & [ + इंसेंटिव ] & [ हिसाब किताब ] */}
+                <div className={`grid ${onViewLedger ? 'grid-cols-3' : 'grid-cols-2'} gap-2 mt-3 pt-3 border-t border-slate-800/80 sm:hidden`}>
                   <button
                     type="button"
                     onClick={() => setAdvanceModalRider(rider)}
-                    className="w-full py-2.5 px-3 bg-gradient-to-r from-amber-500/25 to-amber-600/20 hover:from-amber-500/35 hover:to-amber-600/30 active:scale-95 text-amber-300 hover:text-amber-100 border border-amber-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-amber-950/40 transition cursor-pointer"
+                    className="w-full py-2.5 px-2 bg-gradient-to-r from-amber-500/25 to-amber-600/20 hover:from-amber-500/35 hover:to-amber-600/30 active:scale-95 text-amber-300 hover:text-amber-100 border border-amber-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-amber-950/40 transition cursor-pointer"
                     title="एडवांस जोड़ें / देखें (+ Advance)"
                   >
-                    <IndianRupee className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>+ एडवांस</span>
+                    <IndianRupee className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="truncate">+ एडवांस</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setIncentiveModalRider(rider)}
-                    className="w-full py-2.5 px-3 bg-gradient-to-r from-emerald-500/25 to-emerald-600/20 hover:from-emerald-500/35 hover:to-emerald-600/30 active:scale-95 text-emerald-300 hover:text-emerald-100 border border-emerald-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40 transition cursor-pointer"
+                    className="w-full py-2.5 px-2 bg-gradient-to-r from-emerald-500/25 to-emerald-600/20 hover:from-emerald-500/35 hover:to-emerald-600/30 active:scale-95 text-emerald-300 hover:text-emerald-100 border border-emerald-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-emerald-950/40 transition cursor-pointer"
                     title="इंसेंटिव जोड़ें / देखें (+ Incentive)"
                   >
-                    <Gift className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>+ इंसेंटिव</span>
+                    <Gift className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span className="truncate">+ इंसेंटिव</span>
                   </button>
+
+                  {onViewLedger && (
+                    <button
+                      type="button"
+                      onClick={() => onViewLedger(rider.id)}
+                      className="w-full py-2.5 px-2 bg-gradient-to-r from-blue-500/25 to-indigo-600/20 hover:from-blue-500/35 hover:to-indigo-600/30 active:scale-95 text-blue-300 hover:text-blue-100 border border-blue-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-blue-950/40 transition cursor-pointer"
+                      title="हिसाब किताब देखें (Hisab Kitab)"
+                    >
+                      <Receipt className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                      <span className="truncate">हिसाब किताब</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Expanded Entries Drawer */}
