@@ -139,7 +139,8 @@ export function calculatePureRiderLedger(
   statement: PublicRiderStatement | null | undefined,
   sortOrder: 'asc' | 'desc' = 'desc',
   isRider: boolean = false,
-  externalSettlements?: any[]
+  externalSettlements?: any[],
+  externalAdvances?: RiderAdvanceEntry[]
 ): PureLedgerCalculationResult {
   if (!statement) {
     return {
@@ -160,8 +161,28 @@ export function calculatePureRiderLedger(
     };
   }
 
-  // 1. Gather Authentic Advances (excluding phantom/ghost duplicates)
-  const validAdvances: RiderAdvanceEntry[] = purgePhantomAdvances(statement.advances || []);
+  // 1. Gather Authentic Advances (resolving both statement.advances and external master advances)
+  const rawAdvancesList: RiderAdvanceEntry[] = [];
+  const advSeen = new Set<string>();
+  const addAdv = (a: RiderAdvanceEntry) => {
+    if (!a) return;
+    const key = a.id || (a as any)._id;
+    if (key && !advSeen.has(key)) {
+      advSeen.add(key);
+      rawAdvancesList.push(a);
+    } else if (!key) {
+      rawAdvancesList.push(a);
+    }
+  };
+
+  (statement.advances || []).forEach(addAdv);
+  if (externalAdvances && Array.isArray(externalAdvances)) {
+    externalAdvances
+      .filter((a) => a && (a.riderId === statement.riderId || (statement.riderPhone && (a as any).riderPhone === statement.riderPhone)))
+      .forEach(addAdv);
+  }
+
+  const validAdvances: RiderAdvanceEntry[] = purgePhantomAdvances(rawAdvancesList);
 
   // 2. Gather Authentic Incentives
   const validIncentives: RiderIncentiveEntry[] = (statement.incentives || []).filter((i) => {
@@ -206,32 +227,38 @@ export function calculatePureRiderLedger(
     netTotal: Number(s.netTotal) || 0,
     paidAt: s.paidAt,
     status: s.status || 'PAID',
+    settledAdvanceIds: s.settledAdvanceIds,
+    settledIncentiveIds: s.settledIncentiveIds,
   }));
 
   // Helper: check if an advance is active and truly unsettled (6-condition qualification)
   const isUnsettledAdvanceEntry = (adv: RiderAdvanceEntry): boolean => {
+    if (!adv) return false;
+    const advId = adv.id || (adv as any)._id;
+
     // 1) adv.isSettled !== true && adv.isDeducted !== true && (adv as any).status !== 'PAID'
     if (adv.isSettled === true || adv.isDeducted === true || (adv as any).status === 'PAID') return false;
 
     // 2) !adv.settledInPayoutId && !adv.settledPayoutId && !adv.settlementId
     if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
 
-    // 4) Number(adv.amount) > 0
+    // 3) Number(adv.amount) > 0
     const amt = Number(adv.amount) || 0;
     if (amt <= 0) return false;
 
-    // 5) adv.type !== 'recovery' && !adv.isRecovery
+    // 4) adv.type !== 'recovery' && !adv.isRecovery
     if (adv.type === 'recovery' || adv.isRecovery) return false;
 
-    // 6) !adv.id?.startsWith('settle_adj') && !adv.id?.startsWith('adv_cf_') && !adv.reason?.includes('सेटलमेंट समायोजन')
-    if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+    // 5) Exclude carryover markers: !(advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) && !adv.reason?.includes('सेटलमेंट समायोजन')
+    if (advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) return false;
+    if (adv.reason?.includes('सेटलमेंट समायोजन')) return false;
 
-    // 3) !settlements.some(s => (s.status === 'PAID' || s.status === 'SETTLED') && Array.isArray(s.settledAdvanceIds) && s.settledAdvanceIds.includes(adv.id))
+    // 6) Settlements check: Ensure advId is NOT in any paid settlement's settledAdvanceIds
     if (salaries && salaries.length > 0) {
       const isSettledInSalaries = salaries.some((s) => {
         const isPaidOrSettled = !s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED';
         if (!isPaidOrSettled) return false;
-        return Array.isArray((s as any).settledAdvanceIds) && (s as any).settledAdvanceIds.includes(adv.id);
+        return Array.isArray((s as any).settledAdvanceIds) && ((s as any).settledAdvanceIds.includes(advId) || (adv.id && (s as any).settledAdvanceIds.includes(adv.id)));
       });
       if (isSettledInSalaries) return false;
     }

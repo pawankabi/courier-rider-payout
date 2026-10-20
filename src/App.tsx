@@ -428,6 +428,8 @@ function MainCourierApp() {
           netTotal: s.netTotal,
           paidAt: s.paidAt,
           status: s.status || 'PAID',
+          settledAdvanceIds: s.settledAdvanceIds,
+          settledIncentiveIds: s.settledIncentiveIds,
         })),
       recentDeliveries: [...unpaidDels, ...paidDels].map((e) => ({
         id: e.id,
@@ -2855,6 +2857,7 @@ function MainCourierApp() {
                 riders={dashboardRiders}
                 entries={dashboardEntries}
                 settlements={dashboardSettlements}
+                advances={dashboardRiders.flatMap((r) => r.advances || [])}
                 hubName={activeHubName}
                 isVerifiedHub={isVerifiedHub}
                 userRateConfig={userRateConfig}
@@ -3124,6 +3127,7 @@ function MainCourierApp() {
             riderId={viewingLedgerRiderId}
             initialStatement={inAppLedgerInitialStatement}
             settlements={dashboardSettlements}
+            advances={dashboardRiders.flatMap((r) => r.advances || [])}
             onBackToApp={() => setViewingLedgerRiderId(null)}
             userId={targetUid}
             isAdmin={true}

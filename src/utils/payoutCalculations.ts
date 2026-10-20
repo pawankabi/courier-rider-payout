@@ -123,30 +123,32 @@ export function isUnsettledAdvance(
   settlements?: SettlementRecord[],
   riderId?: string
 ): boolean {
+  if (!adv) return false;
+  const advId = adv.id || (adv as any)._id;
+
   // 1) adv.isSettled !== true && adv.isDeducted !== true && (adv as any).status !== 'PAID'
   if (adv.isSettled === true || adv.isDeducted === true || (adv as any).status === 'PAID') return false;
 
   // 2) !adv.settledInPayoutId && !adv.settledPayoutId && !adv.settlementId
   if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
 
-  // 4) Number(adv.amount) > 0
+  // 3) Real Cash: Number(adv.amount) > 0 and adv.type !== 'recovery' && !adv.isRecovery
   const amt = Number(adv.amount) || 0;
   if (amt <= 0) return false;
-
-  // 5) adv.type !== 'recovery' && !adv.isRecovery
   if (adv.type === 'recovery' || adv.isRecovery) return false;
 
-  // 6) !adv.id?.startsWith('settle_adj') && !adv.id?.startsWith('adv_cf_') && !adv.reason?.includes('सेटलमेंट समायोजन')
-  if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+  // 4) Exclude carryover markers: !(advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) && !adv.reason?.includes('सेटलमेंट समायोजन')
+  if (advId && (advId.startsWith('settle_adj') || advId.startsWith('adv_cf_'))) return false;
+  if (adv.reason?.includes('सेटलमेंट समायोजन')) return false;
 
-  // 3) !settlements.some(s => (s.status === 'PAID' || s.status === 'SETTLED') && Array.isArray(s.settledAdvanceIds) && s.settledAdvanceIds.includes(adv.id))
+  // 5) Settlements check: Ensure advId is NOT in any paid settlement's settledAdvanceIds
   if (settlements && settlements.length > 0) {
     const isAlreadySettledInRecord = settlements.some(
       (s) =>
         (!riderId || s.riderId === riderId) &&
         (!s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED') &&
         Array.isArray(s.settledAdvanceIds) &&
-        s.settledAdvanceIds.includes(adv.id)
+        (s.settledAdvanceIds.includes(advId) || (adv.id && s.settledAdvanceIds.includes(adv.id)))
     );
     if (isAlreadySettledInRecord) return false;
   }

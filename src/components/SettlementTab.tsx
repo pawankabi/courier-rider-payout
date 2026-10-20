@@ -25,7 +25,7 @@ import {
   Info
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { DeliveryEntry, Rider, SettlementRecord, UserRateConfig } from '../types';
+import { DeliveryEntry, Rider, RiderAdvanceEntry, SettlementRecord, UserRateConfig } from '../types';
 import { 
   formatINR, 
   formatDateDisplay, 
@@ -60,6 +60,7 @@ export interface SettlementTabProps {
   riders: Rider[];
   entries: DeliveryEntry[];
   settlements?: SettlementRecord[];
+  advances?: RiderAdvanceEntry[];
   hubName?: string;
   isVerifiedHub?: boolean;
   onMarkEntriesPaid: (
@@ -89,6 +90,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   riders,
   entries,
   settlements = [],
+  advances,
   hubName,
   isVerifiedHub = false,
   onMarkEntriesPaid,
@@ -185,6 +187,29 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     );
   }, [settlements, selectedRider, startDate, endDate]);
 
+  // Global & Rider Advance Resolution: resolve all advances for selectedRider
+  const riderAdvances = useMemo(() => {
+    if (!selectedRider) return [];
+    const map = new Map<string, RiderAdvanceEntry>();
+    (selectedRider.advances || []).forEach((a) => {
+      if (a) {
+        const id = a.id || (a as any)._id || Math.random().toString();
+        map.set(id, a);
+      }
+    });
+    if (advances && Array.isArray(advances)) {
+      advances
+        .filter((a) => a && (a.riderId === selectedRider.id || (selectedRider.phone && (a as any).riderPhone === selectedRider.phone)))
+        .forEach((a) => {
+          if (a) {
+            const id = a.id || (a as any)._id || Math.random().toString();
+            map.set(id, a);
+          }
+        });
+    }
+    return map.size > 0 ? Array.from(map.values()) : (selectedRider.advances || []);
+  }, [advances, selectedRider]);
+
   // Opening Balance prior to selected startDate (Clean Slate: ₹0 if past cycles are settled)
   const openingBalResult = useMemo(() => {
     if (!selectedRider) return null;
@@ -192,11 +217,11 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       selectedRider.id,
       startDate,
       entries,
-      selectedRider.advances,
+      riderAdvances,
       selectedRider.incentives,
       settlements
     );
-  }, [selectedRider, startDate, entries, settlements]);
+  }, [selectedRider, startDate, entries, settlements, riderAdvances]);
 
   const openingBalance = openingBalResult?.openingBalance || 0;
 
@@ -211,8 +236,13 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   // If an advance of ₹7,489 or ANY cash loan was taken, it MUST be deducted here, regardless of its creation date!
   const activeAdvancesList = useMemo(() => {
     if (!selectedRider) return [];
-    return getActiveAdvances(selectedRider.advances, settlements, selectedRider.id);
-  }, [selectedRider, settlements]);
+    return getActiveAdvances(riderAdvances, settlements, selectedRider.id);
+  }, [selectedRider, settlements, riderAdvances]);
+
+  // Active unsettled advances sum for selected rider
+  const activeRiderAdvanceSum = useMemo(() => {
+    return calculateActiveAdvanceTotal(riderAdvances, settlements, selectedRider?.id);
+  }, [riderAdvances, settlements, selectedRider]);
 
   // Unpaid entries specifically for the Mark As Paid action
   const unpaidEntries = useMemo(() => {
@@ -224,10 +254,10 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     if (isFullySettledPeriod) {
       return matchingSettlement.advanceAmount || 0;
     }
-    const activeAdv = calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id);
+    const activeAdv = activeRiderAdvanceSum;
     const prevDebt = (openingBalResult && openingBalResult.status === 'rider_debt') ? Math.abs(openingBalResult.openingBalance) : 0;
     return Math.max(activeAdv, prevDebt);
-  }, [matchingSettlement, unpaidEntries.length, selectedRider, settlements, openingBalResult]);
+  }, [matchingSettlement, unpaidEntries.length, activeRiderAdvanceSum, openingBalResult]);
 
   // Auto-populate advance deduction: If viewing already settled, use saved record; otherwise auto-populate active advances
   useEffect(() => {
@@ -767,7 +797,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                   Deduct Advance Payment (Optional)
                 </h3>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                  कुल एक्टिव एडवांस: {formatINR(calculateActiveAdvanceTotal(selectedRider?.advances))}
+                  कुल एक्टिव एडवांस: {formatINR(activeRiderAdvanceSum)}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
@@ -777,14 +807,14 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {calculateActiveAdvanceTotal(selectedRider?.advances) > 0 && Number(advanceAmount) !== calculateActiveAdvanceTotal(selectedRider?.advances) && (
+            {activeRiderAdvanceSum > 0 && Number(advanceAmount) !== activeRiderAdvanceSum && (
               <button
                 type="button"
-                onClick={() => setAdvanceAmount(calculateActiveAdvanceTotal(selectedRider?.advances))}
+                onClick={() => setAdvanceAmount(activeRiderAdvanceSum)}
                 className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-300 hover:text-white bg-indigo-500/20 px-2.5 py-1 rounded-lg border border-indigo-500/30 transition"
                 title="Use entire active advance"
               >
-                <span>कुल एक्टिव एडवांस भरें ({formatINR(calculateActiveAdvanceTotal(selectedRider?.advances))})</span>
+                <span>कुल एक्टिव एडवांस भरें ({formatINR(activeRiderAdvanceSum)})</span>
               </button>
             )}
             {numericAdvance > 0 && (

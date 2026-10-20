@@ -30,6 +30,7 @@ export interface RiderLedgerStatementProps {
   riderId?: string;
   initialStatement?: PublicRiderStatement | null;
   settlements?: any[];
+  advances?: RiderAdvanceEntry[];
   onBackToApp?: () => void;
   userId?: string;
   isAdmin?: boolean;
@@ -44,6 +45,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   riderId: propRiderId,
   initialStatement = null,
   settlements: propSettlements,
+  advances: propAdvances,
   onBackToApp,
   isAdmin = false,
   onDeleteAdvance,
@@ -296,6 +298,21 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     return [];
   }, [propSettlements]);
 
+  // Gather effective master advances across sources
+  const effectiveAdvances = useMemo(() => {
+    if (propAdvances && Array.isArray(propAdvances) && propAdvances.length > 0) {
+      return propAdvances;
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const cachedRiders = loadRidersFromStorage();
+        const allCachedAdvances = (cachedRiders || []).flatMap((r) => r.advances || []);
+        if (allCachedAdvances.length > 0) return allCachedAdvances;
+      } catch {}
+    }
+    return statement?.advances || [];
+  }, [propAdvances, statement?.advances]);
+
   // Pure Arithmetic Accounting Calculation via pureLedgerEngine
   const { 
     timelineRows, 
@@ -307,8 +324,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     adminBalanceLabel,
     riderBalanceLabel,
   } = useMemo(() => {
-    return calculatePureRiderLedger(statement, sortOrder, isRider, effectiveSettlements);
-  }, [statement, sortOrder, isRider, effectiveSettlements]);
+    return calculatePureRiderLedger(statement, sortOrder, isRider, effectiveSettlements, effectiveAdvances);
+  }, [statement, sortOrder, isRider, effectiveSettlements, effectiveAdvances]);
 
   // Admin Actions: Delete Row (Android WebView safe, zero window.confirm)
   const handleConfirmDeleteRow = async () => {
