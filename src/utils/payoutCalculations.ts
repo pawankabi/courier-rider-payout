@@ -45,7 +45,9 @@ export interface ActiveCycleNetPayableResult {
  */
 function getSettlementContext(settlements?: SettlementRecord[], riderId?: string) {
   const paidSettlements = (settlements || []).filter(
-    (s) => (!riderId || s.riderId === riderId) && (!s.status || s.status.trim().toUpperCase() === 'PAID')
+    (s) =>
+      (!riderId || s.riderId === riderId) &&
+      (!s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED')
   );
   const settledAdvIds = new Set<string>();
   const settledIncIds = new Set<string>();
@@ -121,24 +123,32 @@ export function isUnsettledAdvance(
   settlements?: SettlementRecord[],
   riderId?: string
 ): boolean {
-  if (adv.isSettled === true || adv.isDeducted === true) return false;
-  if ((adv as any).status === 'PAID') return false;
-  if (adv.isRecovery || adv.type === 'recovery') return false;
-  if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+  // 1) adv.isSettled !== true && adv.isDeducted !== true && (adv as any).status !== 'PAID'
+  if (adv.isSettled === true || adv.isDeducted === true || (adv as any).status === 'PAID') return false;
+
+  // 2) !adv.settledInPayoutId && !adv.settledPayoutId && !adv.settlementId
+  if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
+
+  // 4) Number(adv.amount) > 0
   const amt = Number(adv.amount) || 0;
   if (amt <= 0) return false;
 
-  // Check if explicitly recorded in a settlement
-  if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
+  // 5) adv.type !== 'recovery' && !adv.isRecovery
+  if (adv.type === 'recovery' || adv.isRecovery) return false;
 
+  // 6) !adv.id?.startsWith('settle_adj') && !adv.id?.startsWith('adv_cf_') && !adv.reason?.includes('सेटलमेंट समायोजन')
+  if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+
+  // 3) !settlements.some(s => (s.status === 'PAID' || s.status === 'SETTLED') && Array.isArray(s.settledAdvanceIds) && s.settledAdvanceIds.includes(adv.id))
   if (settlements && settlements.length > 0) {
-    const { settledAdvIds } = getSettlementContext(settlements, riderId || adv.riderId);
-    if (settledAdvIds.has(adv.id)) return false;
-  }
-
-  // If advance is explicitly marked UNPAID/unsettled (e.g. carry forward remainder debt), it stays active
-  if (adv.isSettled === false || (adv as any).status === 'UNPAID') {
-    return true;
+    const isAlreadySettledInRecord = settlements.some(
+      (s) =>
+        (!riderId || s.riderId === riderId) &&
+        (!s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED') &&
+        Array.isArray(s.settledAdvanceIds) &&
+        s.settledAdvanceIds.includes(adv.id)
+    );
+    if (isAlreadySettledInRecord) return false;
   }
 
   return true;

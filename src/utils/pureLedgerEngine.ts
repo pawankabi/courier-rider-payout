@@ -208,26 +208,32 @@ export function calculatePureRiderLedger(
     status: s.status || 'PAID',
   }));
 
-  // Helper: check if an advance is active and truly unsettled
+  // Helper: check if an advance is active and truly unsettled (6-condition qualification)
   const isUnsettledAdvanceEntry = (adv: RiderAdvanceEntry): boolean => {
-    if (adv.isSettled === true || adv.isDeducted === true) return false;
-    if ((adv as any).status === 'PAID') return false;
-    if (adv.isRecovery || adv.type === 'recovery') return false;
-    if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+    // 1) adv.isSettled !== true && adv.isDeducted !== true && (adv as any).status !== 'PAID'
+    if (adv.isSettled === true || adv.isDeducted === true || (adv as any).status === 'PAID') return false;
+
+    // 2) !adv.settledInPayoutId && !adv.settledPayoutId && !adv.settlementId
+    if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
+
+    // 4) Number(adv.amount) > 0
     const amt = Number(adv.amount) || 0;
     if (amt <= 0) return false;
 
-    // Check if explicitly recorded in a settlement
-    if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
+    // 5) adv.type !== 'recovery' && !adv.isRecovery
+    if (adv.type === 'recovery' || adv.isRecovery) return false;
 
+    // 6) !adv.id?.startsWith('settle_adj') && !adv.id?.startsWith('adv_cf_') && !adv.reason?.includes('सेटलमेंट समायोजन')
+    if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+
+    // 3) !settlements.some(s => (s.status === 'PAID' || s.status === 'SETTLED') && Array.isArray(s.settledAdvanceIds) && s.settledAdvanceIds.includes(adv.id))
     if (salaries && salaries.length > 0) {
-      const settledAdvIds = new Set<string>();
-      salaries.forEach((s) => {
-        if ((s as any).settledAdvanceIds && Array.isArray((s as any).settledAdvanceIds)) {
-          (s as any).settledAdvanceIds.forEach((id: string) => settledAdvIds.add(id));
-        }
+      const isSettledInSalaries = salaries.some((s) => {
+        const isPaidOrSettled = !s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED';
+        if (!isPaidOrSettled) return false;
+        return Array.isArray((s as any).settledAdvanceIds) && (s as any).settledAdvanceIds.includes(adv.id);
       });
-      if (settledAdvIds.has(adv.id)) return false;
+      if (isSettledInSalaries) return false;
     }
 
     return true;
@@ -448,51 +454,7 @@ export function calculatePureRiderLedger(
     });
   }
 
-  // E. Active Unsettled Operational Deliveries
-  const paidSettlementRanges = salaries
-    .filter((s) => !s.status || s.status.trim().toUpperCase() === 'PAID')
-    .map((s) => ({
-      startDate: s.startDate,
-      endDate: s.endDate,
-    }));
 
-  const unsettledDeliveries = (statement.recentDeliveries || []).filter((del) => {
-    if (!del || del.status === 'Paid' || del.settlementId) return false;
-    if (del.date) {
-      const isInsideSettledPeriod = paidSettlementRanges.some(
-        (rng) => del.date >= rng.startDate && del.date <= rng.endDate
-      );
-      if (isInsideSettledPeriod) return false;
-    }
-    return (Number(del.totalEarnings) || 0) > 0;
-  });
-
-  const totalUnsettledDeliveriesGross = unsettledDeliveries.reduce(
-    (sum, d) => sum + (Number(d.totalEarnings) || 0),
-    0
-  );
-  const totalUnsettledParcels = unsettledDeliveries.reduce(
-    (sum, d) => sum + (Number(d.parcels) || 0),
-    0
-  );
-
-  if (totalUnsettledDeliveriesGross > 0) {
-    const latestDelDate = unsettledDeliveries.map((d) => d.date).sort().reverse()[0] || '';
-    rawList.push({
-      id: 'active-unsettled-deliveries',
-      originalId: 'active-unsettled-deliveries',
-      rawDate: latestDelDate,
-      sortTimestamp: latestDelDate ? new Date(latestDelDate).getTime() + 500 : Date.now(),
-      formattedDate: latestDelDate ? formatDateDisplay(latestDelDate) : 'चालू चक्र',
-      type: 'salary',
-      entryKind: 'PLUS_EARNING',
-      typeLabel: '(+) चालू डिलीवरी',
-      title: 'चालू चक्र पार्सल डिलीवरी कमाई (Unsettled Operational Deliveries)',
-      subTitle: `${totalUnsettledParcels} पार्सल डिलीवर • सक्रिय डिलीवरी कमाई (सेटलमेंट लंबित)`,
-      plusAmount: totalUnsettledDeliveriesGross,
-      minusAmount: 0,
-    });
-  }
 
 
   // Deduplicate entries by ID to ensure single ground truth
@@ -593,7 +555,7 @@ export function calculatePureRiderLedger(
     totalSettledOrEarned: totalPlus,
     unsettledAdvances: balanceStatus === 'rider_due' ? netBalance : 0,
     unsettledIncentives: validIncentives.filter((i) => !i.isSettled && !i.isPaid && (i as any).status !== 'PAID').reduce((sum, i) => sum + (Number(i.amount) || 0), 0),
-    unpaidSalary: totalUnsettledDeliveriesGross,
+    unpaidSalary: 0,
     netBalance,
     rawDifference: finalDifference,
     balanceStatus,
