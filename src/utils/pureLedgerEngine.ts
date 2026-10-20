@@ -208,36 +208,30 @@ export function calculatePureRiderLedger(
     status: s.status || 'PAID',
   }));
 
-  // Consume authentic advances recorded in settlements if not already in validAdvances
-  salaries.forEach((sal) => {
-    const advAmt = Number(sal.advanceAmount) || 0;
-    if (advAmt <= 0) return;
+  // Helper: check if an advance is active and truly unsettled
+  const isUnsettledAdvanceEntry = (adv: RiderAdvanceEntry): boolean => {
+    if (adv.isSettled === true || adv.isDeducted === true) return false;
+    if ((adv as any).status === 'PAID') return false;
+    if (adv.isRecovery || adv.type === 'recovery') return false;
+    if (adv.id?.startsWith('settle_adj') || adv.id?.startsWith('adv_cf_') || adv.reason?.includes('सेटलमेंट समायोजन')) return false;
+    const amt = Number(adv.amount) || 0;
+    if (amt <= 0) return false;
 
-    const alreadyPresent = validAdvances.some(
-      (a) =>
-        a.id === `settlement_adv_${sal.id}` ||
-        a.id === `adv-${sal.id}` ||
-        a.id === sal.id ||
-        a.settlementId === sal.id ||
-        a.settledPayoutId === sal.id ||
-        ((sal as any).settledAdvanceIds && (sal as any).settledAdvanceIds.includes(a.id)) ||
-        (!a.settlementId && !a.settledPayoutId && Math.abs(Number(a.amount) - advAmt) < 0.01)
-    );
+    // Check if explicitly recorded in a settlement
+    if (adv.settledInPayoutId || adv.settledPayoutId || adv.settlementId) return false;
 
-    if (!alreadyPresent) {
-      validAdvances.push({
-        id: `settlement_adv_${sal.id}`,
-        riderId: statement.riderId,
-        amount: advAmt,
-        date: sal.advanceDate || sal.paidAt?.split('T')[0] || sal.startDate,
-        createdAt: sal.advanceDate || sal.paidAt || sal.startDate,
-        reason: sal.advanceReason || `एडवांस भुगतान (${formatDateDisplay(sal.startDate)} से ${formatDateDisplay(sal.endDate)} सेटलमेंट)`,
-        isSettled: true,
-        isDeducted: true,
-        status: 'PAID',
+    if (salaries && salaries.length > 0) {
+      const settledAdvIds = new Set<string>();
+      salaries.forEach((s) => {
+        if ((s as any).settledAdvanceIds && Array.isArray((s as any).settledAdvanceIds)) {
+          (s as any).settledAdvanceIds.forEach((id: string) => settledAdvIds.add(id));
+        }
       });
+      if (settledAdvIds.has(adv.id)) return false;
     }
-  });
+
+    return true;
+  };
 
   // 4. Construct Pure Ledger Transactions (Chronological simulation)
   interface DraftLedgerEntry {
@@ -265,13 +259,11 @@ export function calculatePureRiderLedger(
     const positiveAmt = Math.abs(amt);
     const dateVal = adv.date || adv.createdAt || '';
     const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
-    const isSettled = Boolean(
-      adv.isSettled || 
-      adv.isDeducted || 
-      (adv as any).status === 'PAID'
-    );
 
     if (isRec) {
+      const isSettledRec = adv.isSettled === true || adv.isDeducted === true || (adv as any).status === 'PAID' || adv.settlementId;
+      if (isSettledRec) return;
+
       // Cash inward recovery deposited by rider is a (+) entry
       rawList.push({
         id: `rec-${adv.id}`,
@@ -288,6 +280,9 @@ export function calculatePureRiderLedger(
         minusAmount: 0,
       });
     } else {
+      // Only push an advance into rawList if it is truly UNSETTLED
+      if (!isUnsettledAdvanceEntry(adv)) return;
+
       // Cash advance taken by rider is a (-) entry
       rawList.push({
         id: `adv-${adv.id}`,
@@ -299,23 +294,29 @@ export function calculatePureRiderLedger(
         entryKind: 'MINUS_ADVANCE',
         typeLabel: '(-) एडवांस',
         title: adv.reason || 'एडवांस भुगतान (Advance Given)',
-        subTitle: isSettled ? 'नकद / ऑनलाइन भुगतान (सेटलमेंट में समायोजित)' : 'नकद / ऑनलाइन भुगतान (सक्रिय बकाया)',
+        subTitle: 'नकद / ऑनलाइन भुगतान (सक्रिय बकाया)',
         plusAmount: 0,
         minusAmount: positiveAmt,
       });
     }
   });
 
-  // B. Incentives & Festival Bonuses
+  // B. Incentives & Festival Bonuses (Only active / unsettled)
   validIncentives.forEach((inc) => {
     const incAmt = Number(inc.amount) || 0;
-    const dateVal = inc.date || inc.createdAt || '';
-    const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
+    if (incAmt <= 0) return;
     const isSettled = Boolean(
       inc.isSettled || 
       inc.isPaid || 
-      (inc as any).status === 'PAID'
+      (inc as any).status === 'PAID' ||
+      inc.settlementId ||
+      inc.settledPayoutId ||
+      inc.settledInPayoutId
     );
+    if (isSettled) return;
+
+    const dateVal = inc.date || inc.createdAt || '';
+    const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
 
     rawList.push({
       id: `inc-${inc.id}`,
@@ -329,27 +330,27 @@ export function calculatePureRiderLedger(
       title: inc.reason || 'इंसेंटिव / बोनस (Incentive & Bonus)',
       subTitle: inc.source === 'surplus' 
         ? 'अतिरिक्त सरप्लस जमा' 
-        : isSettled 
-        ? 'स्वीकृत बोनस (सेटलमेंट में चुकता)' 
         : 'स्वीकृत बोनस (सक्रिय)',
       plusAmount: incAmt,
       minusAmount: 0,
     });
   });
 
-  // C. Delivered Parcel Payouts (Gross Earnings) & Net Cash Disbursed
+  // C. Delivered Parcel Payouts (Gross Earnings) & Deductions
   salaries.forEach((sal) => {
     const dateVal = sal.paidAt ? sal.paidAt.split('T')[0] : sal.endDate;
     const timestamp = new Date(sal.paidAt || sal.endDate).getTime() || 0;
     const isPaid = !sal.status || sal.status.trim().toUpperCase() === 'PAID';
     const netTotal = Number(sal.netTotal) || 0;
     const netCashPaid = isPaid ? Math.max(0, netTotal) : 0;
-    const advanceDeducted = Number(sal.advanceAmount) || 0;
+    const totalAdvInSal = Number(sal.advanceAmount) || 0;
     const grossTotal = Number(sal.grossTotal) || 0;
+    // Advance amount covered/absorbed inside this settlement
+    const advanceDeducted = Math.min(grossTotal, totalAdvInSal);
 
     let subTitle = `${sal.totalParcels} पार्सल • सकल कमाई: ${formatINR(grossTotal)}`;
-    if (advanceDeducted > 0) {
-      subTitle += ` | एडवांस कटौती: ${formatINR(advanceDeducted)}`;
+    if (totalAdvInSal > 0) {
+      subTitle += ` | एडवांस कटौती: ${formatINR(totalAdvInSal)}`;
     }
     if (netTotal < 0) {
       subTitle += ` | लेना शेष है: ${formatINR(Math.abs(netTotal))} • ${isPaid ? 'सेटलमेंट दर्ज (PARTIALLY SETTLED)' : 'लंबित (PENDING)'}`;
@@ -357,7 +358,7 @@ export function calculatePureRiderLedger(
       subTitle += ` | नेट भुगतान: ${formatINR(netCashPaid)} • ${isPaid ? 'भुगतान पूर्ण (PAID)' : 'लंबित (PENDING)'}`;
     }
 
-    // Plus (+) Entry: Delivered parcel payout gross earnings
+    // 1. Plus (+) Entry: Delivered parcel payout gross earnings
     rawList.push({
       id: `sal-${sal.id}`,
       originalId: sal.id,
@@ -376,19 +377,37 @@ export function calculatePureRiderLedger(
         endDate: sal.endDate,
         totalParcels: sal.totalParcels,
         grossTotal,
-        advanceDeducted,
+        advanceDeducted: totalAdvInSal,
         netPaid: netCashPaid,
         status: sal.status,
       },
     });
 
-    // Minus (-) Entry: Net cash disbursed to rider in hand
+    // 2. Minus (-) Entry: Advance deducted inside this settlement
+    if (advanceDeducted > 0) {
+      rawList.push({
+        id: `sal-adv-${sal.id}`,
+        originalId: sal.id,
+        rawDate: sal.advanceDate || dateVal,
+        sortTimestamp: timestamp + 1,
+        formattedDate: formatDateDisplay(sal.advanceDate || dateVal),
+        type: 'advance',
+        entryKind: 'MINUS_ADVANCE',
+        typeLabel: '(-) एडवांस कटौती',
+        title: `एडवांस कटौती (${formatDateDisplay(sal.startDate)} से ${formatDateDisplay(sal.endDate)} सेटलमेंट)`,
+        subTitle: sal.advanceReason || 'पे-आउट सेटलमेंट में समायोजित एडवांस',
+        plusAmount: 0,
+        minusAmount: advanceDeducted,
+      });
+    }
+
+    // 3. Minus (-) Entry: Net cash disbursed to rider in hand
     if (isPaid && netCashPaid > 0) {
       rawList.push({
         id: `payout-cash-${sal.id}`,
         originalId: sal.id,
         rawDate: dateVal,
-        sortTimestamp: timestamp + 1, // Follows immediately after salary earning
+        sortTimestamp: timestamp + 2, // Follows immediately after advance deduction
         formattedDate: formatDateDisplay(dateVal),
         type: 'payment',
         entryKind: 'MINUS_ADVANCE',
@@ -400,6 +419,80 @@ export function calculatePureRiderLedger(
       });
     }
   });
+
+  // D. Uncovered Settlement Deficits Carried Over (if not already represented in active advances)
+  const totalSettlementDeficits = salaries
+    .filter((s) => (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
+    .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
+
+  const activeAdvancesSum = validAdvances
+    .filter((a) => !a.isRecovery && a.type !== 'recovery' && isUnsettledAdvanceEntry(a))
+    .reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+
+  const uncoveredDeficit = Math.max(0, totalSettlementDeficits - activeAdvancesSum);
+  if (uncoveredDeficit > 0) {
+    const lastSal = salaries[salaries.length - 1];
+    rawList.push({
+      id: 'settlement-deficit-cf',
+      originalId: 'settlement-deficit-cf',
+      rawDate: lastSal?.endDate || new Date().toISOString().split('T')[0],
+      sortTimestamp: Date.now(),
+      formattedDate: formatDateDisplay(lastSal?.endDate || new Date().toISOString().split('T')[0]),
+      type: 'advance',
+      entryKind: 'MINUS_ADVANCE',
+      typeLabel: '(-) पूर्व बकाया',
+      title: 'पिछले सेटलमेंट का बकाया शेष (Settlement Deficit Carry-Forward)',
+      subTitle: 'एडवांस कटौती सकल कमाई से अधिक थी • अवशेष देयता',
+      plusAmount: 0,
+      minusAmount: uncoveredDeficit,
+    });
+  }
+
+  // E. Active Unsettled Operational Deliveries
+  const paidSettlementRanges = salaries
+    .filter((s) => !s.status || s.status.trim().toUpperCase() === 'PAID')
+    .map((s) => ({
+      startDate: s.startDate,
+      endDate: s.endDate,
+    }));
+
+  const unsettledDeliveries = (statement.recentDeliveries || []).filter((del) => {
+    if (!del || del.status === 'Paid' || del.settlementId) return false;
+    if (del.date) {
+      const isInsideSettledPeriod = paidSettlementRanges.some(
+        (rng) => del.date >= rng.startDate && del.date <= rng.endDate
+      );
+      if (isInsideSettledPeriod) return false;
+    }
+    return (Number(del.totalEarnings) || 0) > 0;
+  });
+
+  const totalUnsettledDeliveriesGross = unsettledDeliveries.reduce(
+    (sum, d) => sum + (Number(d.totalEarnings) || 0),
+    0
+  );
+  const totalUnsettledParcels = unsettledDeliveries.reduce(
+    (sum, d) => sum + (Number(d.parcels) || 0),
+    0
+  );
+
+  if (totalUnsettledDeliveriesGross > 0) {
+    const latestDelDate = unsettledDeliveries.map((d) => d.date).sort().reverse()[0] || '';
+    rawList.push({
+      id: 'active-unsettled-deliveries',
+      originalId: 'active-unsettled-deliveries',
+      rawDate: latestDelDate,
+      sortTimestamp: latestDelDate ? new Date(latestDelDate).getTime() + 500 : Date.now(),
+      formattedDate: latestDelDate ? formatDateDisplay(latestDelDate) : 'चालू चक्र',
+      type: 'salary',
+      entryKind: 'PLUS_EARNING',
+      typeLabel: '(+) चालू डिलीवरी',
+      title: 'चालू चक्र पार्सल डिलीवरी कमाई (Unsettled Operational Deliveries)',
+      subTitle: `${totalUnsettledParcels} पार्सल डिलीवर • सक्रिय डिलीवरी कमाई (सेटलमेंट लंबित)`,
+      plusAmount: totalUnsettledDeliveriesGross,
+      minusAmount: 0,
+    });
+  }
 
 
   // Deduplicate entries by ID to ensure single ground truth
@@ -499,8 +592,8 @@ export function calculatePureRiderLedger(
     totalPaidToRider: totalMinus,
     totalSettledOrEarned: totalPlus,
     unsettledAdvances: balanceStatus === 'rider_due' ? netBalance : 0,
-    unsettledIncentives: 0,
-    unpaidSalary: salaries.filter((s) => s.status && s.status.trim().toUpperCase() !== 'PAID').reduce((sum, s) => sum + s.netTotal, 0),
+    unsettledIncentives: validIncentives.filter((i) => !i.isSettled && !i.isPaid && (i as any).status !== 'PAID').reduce((sum, i) => sum + (Number(i.amount) || 0), 0),
+    unpaidSalary: totalUnsettledDeliveriesGross,
     netBalance,
     rawDifference: finalDifference,
     balanceStatus,

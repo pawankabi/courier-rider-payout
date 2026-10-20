@@ -214,18 +214,25 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     return getActiveAdvances(selectedRider.advances, settlements, selectedRider.id);
   }, [selectedRider, settlements]);
 
+  // Unpaid entries specifically for the Mark As Paid action
+  const unpaidEntries = useMemo(() => {
+    return filteredEntries.filter((e) => e.status === 'Unpaid');
+  }, [filteredEntries]);
+
   const totalAdvanceDeduction = useMemo(() => {
-    if (matchingSettlement) {
+    const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
+    if (isFullySettledPeriod) {
       return matchingSettlement.advanceAmount || 0;
     }
     const activeAdv = calculateActiveAdvanceTotal(selectedRider?.advances, settlements, selectedRider?.id);
     const prevDebt = (openingBalResult && openingBalResult.status === 'rider_debt') ? Math.abs(openingBalResult.openingBalance) : 0;
     return Math.max(activeAdv, prevDebt);
-  }, [matchingSettlement, selectedRider, settlements, openingBalResult]);
+  }, [matchingSettlement, unpaidEntries.length, selectedRider, settlements, openingBalResult]);
 
   // Auto-populate advance deduction: If viewing already settled, use saved record; otherwise auto-populate active advances
   useEffect(() => {
-    if (matchingSettlement) {
+    const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
+    if (isFullySettledPeriod) {
       setAdvanceAmount(matchingSettlement.advanceAmount || 0);
       setAdvanceDate(matchingSettlement.advanceDate || '');
       setAdvanceReason(matchingSettlement.advanceReason || '');
@@ -238,12 +245,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         setAdvanceReason('');
       }
     }
-  }, [selectedRiderId, startDate, endDate, matchingSettlement, totalAdvanceDeduction, openingBalResult]);
-
-  // Unpaid entries specifically for the Mark As Paid action
-  const unpaidEntries = useMemo(() => {
-    return filteredEntries.filter((e) => e.status === 'Unpaid');
-  }, [filteredEntries]);
+  }, [selectedRiderId, startDate, endDate, matchingSettlement, unpaidEntries.length, totalAdvanceDeduction, openingBalResult]);
 
   // a) OPERATIONAL EARNINGS (Scoped strictly to selected [startDate, endDate])
   const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
@@ -253,11 +255,12 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
 
   // b) Total Active Incentives added to Gross
   const totalIncentive = useMemo(() => {
-    if (matchingSettlement) {
+    const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
+    if (isFullySettledPeriod) {
       return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
     }
     return activeIncentivesList.reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
-  }, [matchingSettlement, deliveryGross, activeIncentivesList]);
+  }, [matchingSettlement, unpaidEntries.length, deliveryGross, activeIncentivesList]);
 
   const riderBonusIncentives = totalIncentive;
 
@@ -266,7 +269,8 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
   // Final Net Payable = Gross Earnings - TotalAdvanceDeduction;
   const grossTotal = deliveryGross + totalIncentive;
   const numericAdvance = Math.max(0, Number(advanceAmount) || 0);
-  const netSettlement = matchingSettlement
+  const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
+  const netSettlement = isFullySettledPeriod
     ? matchingSettlement.netTotal
     : (grossTotal - numericAdvance);
   const netPayableAmount = Math.max(0, netSettlement);
