@@ -1,57 +1,147 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0F172A"/>
-      <stop offset="100%" stop-color="#1E293B"/>
+    <!-- Dark Metallic Squircle Gradients -->
+    <linearGradient id="metallicSquircle" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="50%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#020617"/>
     </linearGradient>
-    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="squircleBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="50%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+
+    <!-- Neon Vortex Gradients -->
+    <linearGradient id="vortexGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="50%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <linearGradient id="vortexGrad2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="50%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+
+    <!-- 3D Parcel Box Gradients -->
+    <linearGradient id="boxTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#93C5FD"/>
+      <stop offset="100%" stop-color="#60A5FA"/>
+    </linearGradient>
+    <linearGradient id="boxLeft" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#3B82F6"/>
       <stop offset="100%" stop-color="#1D4ED8"/>
     </linearGradient>
-    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F59E0B"/>
-      <stop offset="100%" stop-color="#D97706"/>
+    <linearGradient id="boxRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#1E40AF"/>
     </linearGradient>
-    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+
+    <!-- Upward Growth Graph Arrow -->
+    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#10B981"/>
-      <stop offset="100%" stop-color="#059669"/>
+      <stop offset="60%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
     </linearGradient>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.4"/>
+
+    <!-- Golden Rupee Coin Gradients -->
+    <radialGradient id="goldCoinRadial" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FEF08A"/>
+      <stop offset="35%" stop-color="#FACC15"/>
+      <stop offset="75%" stop-color="#CA8A04"/>
+      <stop offset="100%" stop-color="#854D0E"/>
+    </radialGradient>
+    <linearGradient id="goldCoinRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FEF9C3"/>
+      <stop offset="50%" stop-color="#EAB308"/>
+      <stop offset="100%" stop-color="#713F12"/>
+    </linearGradient>
+
+    <!-- Drop Shadows & Neon Glow Filters -->
+    <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="deepDropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="coinShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="2" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.5"/>
     </filter>
   </defs>
 
-  <!-- Background Rounded Rect -->
-  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
-  
-  <!-- Outer subtle accent ring -->
-  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#334155" stroke-width="4" stroke-opacity="0.6"/>
+  <!-- 1. Dark Metallic Squircle Outer Container -->
+  <rect x="8" y="8" width="496" height="496" rx="120" fill="url(#metallicSquircle)" filter="url(#deepDropShadow)"/>
+  <rect x="12" y="12" width="488" height="488" rx="116" fill="none" stroke="url(#squircleBorder)" stroke-width="4" stroke-opacity="0.8"/>
 
-  <!-- Delivery Box Base & Fast Courier Motif -->
-  <g filter="url(#shadow)">
-    <!-- Main Parcel Body -->
-    <path d="M156 196 L256 140 L356 196 L256 252 Z" fill="#60A5FA"/>
-    <path d="M156 196 L256 252 L256 376 L156 320 Z" fill="#2563EB"/>
-    <path d="M356 196 L256 252 L256 376 L356 320 Z" fill="#1D4ED8"/>
+  <!-- Subtle Metallic Highlight Sweep -->
+  <path d="M40 120 C120 40, 240 20, 400 36 C240 70, 100 160, 40 260 Z" fill="#FFFFFF" opacity="0.05"/>
+
+  <!-- 2. Energetic Cyan-Green Neon Vortex (Speed Orbits) -->
+  <g filter="url(#neonGlow)" opacity="0.85">
+    <!-- Outer elliptical orbit -->
+    <ellipse cx="256" cy="270" rx="195" ry="85" fill="none" stroke="url(#vortexGrad1)" stroke-width="5" transform="rotate(-22 256 270)" stroke-dasharray="240 60 120 40"/>
+    <!-- Inner dynamic vortex swirl -->
+    <path d="M100 310 C130 380, 260 410, 370 360 C440 325, 430 230, 360 190 C290 150, 170 170, 130 220" fill="none" stroke="url(#vortexGrad2)" stroke-width="6" stroke-linecap="round" opacity="0.9"/>
+    <!-- Glowing speed particle dots -->
+    <circle cx="115" cy="235" r="4.5" fill="#38BDF8"/>
+    <circle cx="415" cy="230" r="5" fill="#34D399"/>
+    <circle cx="365" cy="380" r="4" fill="#06B6D4"/>
+  </g>
+
+  <!-- 3. 3D Courier Parcel Box (Isometric with Deep Drop Shadow) -->
+  <g filter="url(#deepDropShadow)">
+    <!-- Top Face -->
+    <path d="M256 128 L366 186 L256 244 L146 186 Z" fill="url(#boxTop)"/>
+    <!-- Left Face -->
+    <path d="M146 186 L256 244 L256 374 L146 314 Z" fill="url(#boxLeft)"/>
+    <!-- Right Face -->
+    <path d="M366 186 L256 244 L256 374 L366 314 Z" fill="url(#boxRight)"/>
+
+    <!-- Parcel Tape / Sealing Straps -->
+    <!-- Top Tape -->
+    <path d="M236 138 L256 128 L276 138 L276 254 L256 244 L236 254 Z" fill="#BFDBFE" opacity="0.85"/>
+    <!-- Front Left Tape -->
+    <path d="M236 254 L256 244 L256 374 L236 363 Z" fill="#60A5FA" opacity="0.9"/>
+    <!-- Front Right Tape -->
+    <path d="M256 244 L276 254 L276 363 L256 374 Z" fill="#3B82F6" opacity="0.9"/>
+    <!-- Horizontal Cross Straps -->
+    <path d="M146 250 L256 308 L256 332 L146 274 Z" fill="#1D4ED8" opacity="0.5"/>
+    <path d="M256 308 L366 250 L366 274 L256 332 Z" fill="#1E40AF" opacity="0.5"/>
+  </g>
+
+  <!-- 4. Upward Growth Financial Graph Arrows (Rising Out of Box) -->
+  <g filter="url(#neonGlow)">
+    <!-- Upward Trend Line -->
+    <path d="M170 290 L230 250 L280 270 L380 140" fill="none" stroke="url(#arrowGrad)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Glowing Arrow Head pointing to upper right sky -->
+    <polygon points="395,120 355,138 375,158" fill="#38BDF8"/>
+    <!-- Secondary mini upward vector -->
+    <path d="M195 305 L235 278 L265 292 L330 200" fill="none" stroke="#34D399" stroke-width="4" stroke-linecap="round" stroke-dasharray="6 6" opacity="0.7"/>
+  </g>
+
+  <!-- 5. Shining Golden Indian Rupee (₹) Coin in 3D Relief -->
+  <g filter="url(#coinShadow)" transform="translate(365, 360)">
+    <!-- Outer Rim Bevel -->
+    <circle cx="0" cy="0" r="76" fill="url(#goldCoinRim)"/>
+    <!-- Inner Coin Face -->
+    <circle cx="0" cy="0" r="67" fill="url(#goldCoinRadial)"/>
+    <!-- Engraved Coin Border Ring -->
+    <circle cx="0" cy="0" r="58" fill="none" stroke="#CA8A04" stroke-width="3" stroke-dasharray="6 3"/>
     
-    <!-- Parcel Tape / Ribbon -->
-    <path d="M236 151 L256 140 L276 151 L276 263 L256 252 L236 263 Z" fill="#93C5FD" opacity="0.8"/>
-    <path d="M236 263 L256 252 L276 263 L276 387 L256 376 L236 387 Z" fill="#3B82F6" opacity="0.9"/>
+    <!-- Indian Rupee Symbol (₹) in 3D Emboss -->
+    <!-- Shadow for Rupee symbol -->
+    <text x="1" y="27" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="78" font-weight="900" fill="#713F12" text-anchor="middle" opacity="0.6">₹</text>
+    <!-- Crisp Golden Rupee symbol face -->
+    <text x="0" y="25" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="78" font-weight="900" fill="#FFFFFF" text-anchor="middle">₹</text>
   </g>
 
-  <!-- Speed Motion Trails -->
-  <path d="M84 220 L132 220" stroke="#38BDF8" stroke-width="10" stroke-linecap="round" opacity="0.8"/>
-  <path d="M60 256 L124 256" stroke="#38BDF8" stroke-width="12" stroke-linecap="round"/>
-  <path d="M96 292 L136 292" stroke="#38BDF8" stroke-width="10" stroke-linecap="round" opacity="0.8"/>
-
-  <!-- Indian Rupee Badge Floating at Bottom-Right -->
-  <g filter="url(#shadow)">
-    <circle cx="360" cy="356" r="76" fill="url(#emeraldGrad)" stroke="#FFFFFF" stroke-width="6"/>
-    <!-- Rupee Symbol -->
-    <text x="360" y="385" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="82" font-weight="900" fill="#FFFFFF" text-anchor="middle">₹</text>
+  <!-- Sparkle Highlights on Rupee Coin -->
+  <g transform="translate(425, 305)" fill="#FFFFFF" opacity="0.9">
+    <path d="M0 -10 Q0 0 10 0 Q0 0 0 10 Q0 0 -10 0 Q0 0 0 -10 Z"/>
   </g>
-
-  <!-- Star / Incentive Badge at Top Right -->
-  <circle cx="380" cy="132" r="34" fill="url(#goldGrad)" stroke="#FFFFFF" stroke-width="4"/>
-  <path d="M380 114 L385 125 L397 126 L388 135 L391 147 L380 141 L369 147 L372 135 L363 126 L375 125 Z" fill="#FFFFFF"/>
+  <g transform="translate(315, 410)" fill="#FEF08A" opacity="0.8">
+    <path d="M0 -6 Q0 0 6 0 Q0 0 0 6 Q0 0 -6 0 Q0 0 0 -6 Z"/>
+  </g>
 </svg>

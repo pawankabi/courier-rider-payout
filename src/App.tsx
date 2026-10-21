@@ -2162,10 +2162,26 @@ function MainCourierApp() {
     });
   }, [settlements, dashboardRiders, currentUser, inspectedUser]);
 
-  // Live master fleet advances aggregated from dashboard riders
-  const dashboardAdvances = useMemo(() => {
-    return dashboardRiders.flatMap((r) => r.advances || []);
+  // Live master fleet advances aggregated from dashboard riders - EXACT data source powering Advances Tab
+  const advances = useMemo(() => {
+    const list: RiderAdvanceEntry[] = [];
+    (dashboardRiders || []).forEach((r) => {
+      if (Array.isArray(r.advances) && r.advances.length > 0) {
+        r.advances.forEach((adv) => {
+          if (adv) {
+            list.push({
+              ...adv,
+              riderId: adv.riderId || r.id,
+              riderPhone: (adv as any).riderPhone || r.phone,
+            });
+          }
+        });
+      }
+    });
+    return list;
   }, [dashboardRiders]);
+
+  const dashboardAdvances = advances;
 
   // Today stats for quick header badge
   const todayDate = getTodayDateString();
@@ -2862,7 +2878,7 @@ function MainCourierApp() {
                 riders={dashboardRiders}
                 entries={dashboardEntries}
                 settlements={dashboardSettlements}
-                advances={dashboardAdvances}
+                advances={advances}
                 hubName={activeHubName}
                 isVerifiedHub={isVerifiedHub}
                 userRateConfig={userRateConfig}
@@ -3132,8 +3148,8 @@ function MainCourierApp() {
             riderId={viewingLedgerRiderId}
             initialStatement={inAppLedgerInitialStatement}
             settlements={dashboardSettlements}
-            advances={dashboardAdvances}
-            externalAdvances={dashboardAdvances}
+            advances={advances}
+            externalAdvances={advances}
             onBackToApp={() => setViewingLedgerRiderId(null)}
             userId={targetUid}
             isAdmin={true}

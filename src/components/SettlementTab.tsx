@@ -139,6 +139,9 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     return riders.find((r) => r.id === selectedRiderId) || riders[0];
   }, [riders, selectedRiderId]);
 
+  console.log("SETTLEMENT TAB ADVANCES PROP:", advances);
+  console.log("SELECTED RIDER:", selectedRider);
+
   // 15-Day Payout Presets
   const setFirstHalfOfMonth = () => {
     const now = new Date();
@@ -187,28 +190,30 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     );
   }, [settlements, selectedRider, startDate, endDate]);
 
-  // 1. Resolve current rider advances cleanly using robust string comparison
   const currentRiderAdvances = useMemo(() => {
-    if (!selectedRider) return [];
-    const fromMaster = (advances && Array.isArray(advances)
-      ? advances.filter((a) => String(a.riderId).trim() === String(selectedRider?.id).trim())
-      : []) || [];
+    if (!selectedRider || !advances || !Array.isArray(advances)) return [];
 
-    const map = new Map<string, RiderAdvanceEntry>();
-    (selectedRider.advances || []).forEach((a) => {
-      if (a) {
-        const id = String(a.id || (a as any)._id || Math.random()).trim();
-        map.set(id, a);
-      }
-    });
-    fromMaster.forEach((a) => {
-      if (a) {
-        const id = String(a.id || (a as any)._id || Math.random()).trim();
-        map.set(id, a);
-      }
-    });
+    const targetId = String(selectedRider.id || '').trim().toLowerCase();
+    const targetPhone = String(selectedRider.phone || '').replace(/\D/g, '').slice(-10);
+    const targetName = String(selectedRider.name || '').trim().toLowerCase();
 
-    return map.size > 0 ? Array.from(map.values()) : (selectedRider.advances || []);
+    return advances.filter((adv: any) => {
+      if (!adv) return false;
+      const aId = String(adv.riderId || adv.rider_id || '').trim().toLowerCase();
+      const aPhone = String(adv.riderPhone || adv.phone || '').replace(/\D/g, '').slice(-10);
+      const aName = String(adv.riderName || '').trim().toLowerCase();
+
+      // 1. Primary Match: Exact Normalized ID
+      const matchesId = Boolean(targetId && aId && targetId === aId);
+      
+      // 2. Secondary Match: 10-Digit Mobile Number
+      const matchesPhone = Boolean(targetPhone.length === 10 && aPhone.length === 10 && targetPhone === aPhone);
+      
+      // 3. Fallback Match: Exact Full Name
+      const matchesName = Boolean(targetName && aName && targetName === aName);
+
+      return matchesId || matchesPhone || matchesName;
+    });
   }, [advances, selectedRider]);
 
   // Opening Balance prior to selected startDate (Clean Slate: ₹0 if past cycles are settled)
@@ -233,85 +238,103 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     return getActiveIncentives(selectedRider.incentives, settlements, selectedRider.id);
   }, [selectedRider, settlements]);
 
-  // 2. ALL ACTIVE UNSETTLED ADVANCES (Timeless / State-Scoped)
-  // If an advance of ₹7,489 or ANY cash loan was taken, it MUST be deducted here, regardless of its creation date!
-  const activeAdvancesList = useMemo(() => {
-    if (!selectedRider) return [];
-    return getActiveAdvances(currentRiderAdvances, settlements || [], selectedRider.id);
-  }, [selectedRider, settlements, currentRiderAdvances]);
+  // 5. SETTLEMENT TAB (Smart Adjustment & Direction):
+  // Robust lookup across advances
+  const targetId = String(selectedRider?.id || '').trim();
+  const targetPhone = String(selectedRider?.phone || '').replace(/\D/g, '').slice(-10);
 
-  // CARRY-FORWARD DEBT + ACTIVE ADVANCES SYNC:
+  const activeAdvances = useMemo(() => {
+    return currentRiderAdvances.filter(
+      (adv) =>
+        !adv.isSettled &&
+        (adv as any).status !== 'PAID' &&
+        !adv.isRecovery &&
+        adv.type !== 'recovery' &&
+        Number(adv.remainingAmount ?? adv.amount) > 0
+    );
+  }, [currentRiderAdvances]);
+
+  const totalPendingAdvance = useMemo(() => {
+    return activeAdvances.reduce(
+      (sum, adv) => sum + Number(adv.remainingAmount ?? adv.amount ?? 0),
+      0
+    );
+  }, [activeAdvances]);
+
   const liveActiveAdvanceTotal = useMemo(() => {
-    return calculateActiveAdvanceTotal(currentRiderAdvances, settlements || [], selectedRider?.id);
-  }, [currentRiderAdvances, settlements, selectedRider]);
+    if (totalPendingAdvance > 0) return totalPendingAdvance;
+    if (selectedRider) {
+      return calculateActiveAdvanceTotal(currentRiderAdvances, settlements, selectedRider.id);
+    }
+    return 0;
+  }, [totalPendingAdvance, selectedRider, currentRiderAdvances, settlements]);
 
   const carriedDeficit = useMemo(() => {
-    return (openingBalResult && openingBalResult.status === 'rider_debt') ? Math.abs(openingBalResult.openingBalance) : 0;
+    return openingBalResult?.status === 'rider_debt' ? Math.abs(openingBalResult?.openingBalance || 0) : 0;
   }, [openingBalResult]);
 
-  const totalDeductionRequired = useMemo(() => {
-    return liveActiveAdvanceTotal + carriedDeficit;
-  }, [liveActiveAdvanceTotal, carriedDeficit]);
+  const totalDeductionRequired = liveActiveAdvanceTotal + carriedDeficit;
+
+  // Operational Earnings for the period
+  const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
+  const totalBaseAmount = filteredEntries.reduce((sum, e) => sum + e.baseAmount, 0);
+  const totalIncentiveAmount = filteredEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
+  const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
 
   // Unpaid entries specifically for the Mark As Paid action
   const unpaidEntries = useMemo(() => {
     return filteredEntries.filter((e) => e.status === 'Unpaid');
   }, [filteredEntries]);
 
-  const totalAdvanceDeduction = useMemo(() => {
-    const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
-    if (isFullySettledPeriod) {
-      return matchingSettlement.advanceAmount || 0;
-    }
-    return totalDeductionRequired;
-  }, [matchingSettlement, unpaidEntries.length, totalDeductionRequired]);
+  const isFullySettledPeriod = Boolean(
+    unpaidEntries.length === 0 &&
+    matchingSettlement &&
+    (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID')
+  );
 
-  // Auto-populate advance deduction: If viewing already settled, use saved record; otherwise auto-populate active advances & carried deficits
+  // Active incentives added to period gross
+  const totalIncentive = useMemo(() => {
+    if (isFullySettledPeriod && matchingSettlement) {
+      return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
+    }
+    return activeIncentivesList.reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
+  }, [isFullySettledPeriod, matchingSettlement, deliveryGross, activeIncentivesList]);
+
+  const riderBonusIncentives = totalIncentive;
+  const periodGross = deliveryGross + totalIncentive;
+  const grossTotal = periodGross;
+
+  // Default input box calculation: Math.min(totalDeductionRequired, Math.max(0, periodGross))
+  const defaultAdvanceDeduction = useMemo(() => {
+    return Math.min(totalDeductionRequired, Math.max(0, periodGross));
+  }, [totalDeductionRequired, periodGross]);
+
+  // Auto-populate advance deduction on rider/period change
   useEffect(() => {
-    const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
-    if (isFullySettledPeriod) {
+    if (isFullySettledPeriod && matchingSettlement) {
       setAdvanceAmount(matchingSettlement.advanceAmount || 0);
       setAdvanceDate(matchingSettlement.advanceDate || '');
       setAdvanceReason(matchingSettlement.advanceReason || '');
     } else {
-      setAdvanceAmount(totalDeductionRequired);
+      setAdvanceAmount(defaultAdvanceDeduction);
       setAdvanceDate(getTodayDateString());
-      if (carriedDeficit > 0 && liveActiveAdvanceTotal > 0) {
-        setAdvanceReason('पहले का बकाया + सक्रिय एडवांस (Deficit & Active Advance)');
-      } else if (carriedDeficit > 0) {
-        setAdvanceReason('पहले का बकाया (Previous Debt Carry-Forward)');
-      } else if (activeAdvancesList.length > 0) {
-        setAdvanceReason(activeAdvancesList[0].reason || 'सक्रिय एडवांस (Active Advance)');
+      if (totalDeductionRequired > 0) {
+        setAdvanceReason(
+          periodGross < totalDeductionRequired
+            ? 'सक्रिय एडवांस आंशिक कटौती (Partial FIFO Deduction)'
+            : 'सक्रिय एडवांस समायोजन (Advance Deducted)'
+        );
       } else {
         setAdvanceReason('');
       }
     }
-  }, [selectedRiderId, startDate, endDate, matchingSettlement, unpaidEntries.length, totalDeductionRequired, carriedDeficit, liveActiveAdvanceTotal, activeAdvancesList]);
-
-  // a) OPERATIONAL EARNINGS (Scoped strictly to selected [startDate, endDate])
-  const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
-  const totalBaseAmount = filteredEntries.reduce((sum, e) => sum + e.baseAmount, 0);
-  const totalIncentiveAmount = filteredEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
-  const deliveryGross = filteredEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
-
-  // b) Total Active Incentives added to Gross
-  const totalIncentive = useMemo(() => {
-    const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
-    if (isFullySettledPeriod) {
-      return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
-    }
-    return activeIncentivesList.reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
-  }, [matchingSettlement, unpaidEntries.length, deliveryGross, activeIncentivesList]);
-
-  const riderBonusIncentives = totalIncentive;
+  }, [selectedRiderId, startDate, endDate, matchingSettlement, isFullySettledPeriod, defaultAdvanceDeduction, totalDeductionRequired, periodGross]);
 
   // d) TRUE NET PAYABLE:
   // Gross Earnings = DeliveryEarnings + TotalIncentive;
   // Final Net Payable = Gross Earnings - TotalAdvanceDeduction;
-  const grossTotal = deliveryGross + totalIncentive;
   const numericAdvance = Math.max(0, Number(advanceAmount) || 0);
-  const isFullySettledPeriod = unpaidEntries.length === 0 && matchingSettlement && (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID');
-  const netSettlement = isFullySettledPeriod
+  const netSettlement = isFullySettledPeriod && matchingSettlement
     ? matchingSettlement.netTotal
     : (grossTotal - numericAdvance);
   const netPayableAmount = Math.max(0, netSettlement);
@@ -357,7 +380,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       openingBalance: openingBalResult?.openingBalance || 0,
       openingBalanceType: openingBalResult?.status || 'zero',
       settledIncentiveIds: activeIncentivesList.map((i) => i.id),
-      settledAdvanceIds: activeAdvancesList.map((a) => a.id),
+      settledAdvanceIds: activeAdvances.map((a: any) => a.id),
     } as any);
 
     // Fire celebratory confetti!

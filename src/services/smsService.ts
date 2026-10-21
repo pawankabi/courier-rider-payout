@@ -4,7 +4,7 @@
  * with 1-click fallback triggers for instant WhatsApp and native SMS.
  */
 
-import { getCleanPhoneDigits } from '../utils/formatters';
+import { getCleanPhoneDigits, formatINR, formatDateDisplay } from '../utils/formatters';
 import { getRiderStatementUrl, ensureProductionStatementUrl, PRODUCTION_DOMAIN } from '../utils/shareLink';
 import { isNativeAndroid, sendNativeBackgroundSms } from './nativeSms';
 
@@ -44,17 +44,31 @@ export function formatAdvanceSmsText(params: {
   riderName: string;
   amount: number;
   reason?: string;
+  date?: string;
   totalAdvance?: number;
+  netBalance?: number;
   statementUrl: string;
 }): string {
   const reasonText = params.reason && params.reason.trim().length > 0 
     ? params.reason.trim() 
     : 'सामान्य एडवांस';
-  const advancePart = typeof params.totalAdvance === 'number'
-    ? `। कुल बकाया एडवांस: ₹${params.totalAdvance}`
-    : '';
+  const dateText = params.date ? `दिनांक ${formatDateDisplay(params.date)} को ` : '';
   const safeStatementUrl = ensureProductionStatementUrl(params.statementUrl);
-  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} एडवांस जोड़ा गया है (${reasonText})${advancePart}। हिसाब किताब देखें: ${safeStatementUrl}`;
+
+  let standingStatus = '';
+  if (typeof params.netBalance === 'number') {
+    if (params.netBalance > 0.01) {
+      standingStatus = `आपका कुल बकाया एडवांस: ₹${formatINR(params.netBalance)} (कंपनी को लेना है)।`;
+    } else if (params.netBalance < -0.01) {
+      standingStatus = `कंपनी की तरफ आपका शुद्ध पेआउट शेष: ₹${formatINR(Math.abs(params.netBalance))} (राइडर को देना है)।`;
+    } else {
+      standingStatus = 'आपका खाता पूर्णतः चुकता (₹0) है।';
+    }
+  } else if (typeof params.totalAdvance === 'number') {
+    standingStatus = `आपका कुल बकाया एडवांस: ₹${formatINR(params.totalAdvance)} (कंपनी को लेना है)।`;
+  }
+
+  return `नमस्ते ${params.riderName}, आपके खाते में ${dateText}₹${formatINR(params.amount)} एडवांस दर्ज किया गया (${reasonText})। ${standingStatus} विस्तृत खाता लेजर देखें: ${safeStatementUrl}`;
 }
 
 /**

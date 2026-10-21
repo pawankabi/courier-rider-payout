@@ -425,23 +425,33 @@ export function reindexAndSanitizeRiderBalances(
       (s) => s.riderId === rider.id && (!s.status || s.status.trim().toUpperCase() === 'PAID')
     );
 
-    // 1. Lifetime earnings and cash disbursed from paid settlements
-    const totalGrossEarned = riderPaidSettlements.reduce((sum, s) => sum + (Number(s.grossTotal) || 0), 0);
-    const totalCashDisbursed = riderPaidSettlements.reduce((sum, s) => sum + Math.max(0, Number(s.netTotal) || 0), 0);
-    // Lifetime earnings used towards advances:
-    const totalAdvanceCoveredByEarnings = Math.max(0, totalGrossEarned - totalCashDisbursed);
+    // 1. Gather all explicitly settled advance and incentive IDs from paid settlements
+    const settledAdvIdSet = new Set<string>();
+    const settledIncIdSet = new Set<string>();
+    const settledPayoutIdSet = new Set<string>();
+    let legacySettlementAdvanceDeductionTotal = 0;
+    let latestLegacySettlementDate = '';
 
-    // Lifetime advances taken & recoveries:
-    // Strictly filter out any synthetic/phantom duplicates (adv_cf_, settle_adj, etc.)
+    riderPaidSettlements.forEach((s) => {
+      settledPayoutIdSet.add(String(s.id).trim());
+      if (Array.isArray(s.settledAdvanceIds) && s.settledAdvanceIds.length > 0) {
+        s.settledAdvanceIds.forEach((id) => settledAdvIdSet.add(String(id).trim()));
+      } else if (Number(s.advanceAmount) > 0) {
+        legacySettlementAdvanceDeductionTotal += Number(s.advanceAmount);
+        if (!latestLegacySettlementDate || s.endDate > latestLegacySettlementDate) {
+          latestLegacySettlementDate = s.endDate;
+        }
+      }
+
+      if (Array.isArray(s.settledIncentiveIds) && s.settledIncentiveIds.length > 0) {
+        s.settledIncentiveIds.forEach((id) => settledIncIdSet.add(String(id).trim()));
+      }
+    });
+
+    // 2. Filter out phantom/duplicate synthetic entries
     const originalAdvances = purgePhantomAdvances(rider.advances || []);
     const regularAdvances = originalAdvances.filter((a) => !a.isRecovery && a.type !== 'recovery');
     const recoveries = originalAdvances.filter((a) => a.isRecovery || a.type === 'recovery');
-
-    const totalAdvancesTaken = regularAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-    const totalRecoveries = recoveries.reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
-
-    // True mathematical unrecovered advance debt
-    const netUnrecoveredDebt = Math.max(0, totalAdvancesTaken - totalAdvanceCoveredByEarnings - totalRecoveries);
 
     // Sort regular advances chronologically oldest to newest
     const sortedRegular = [...regularAdvances].sort((a, b) => {
@@ -450,12 +460,21 @@ export function reindexAndSanitizeRiderBalances(
       return timeA - timeB;
     });
 
-    let allowanceToSettle = totalAdvanceCoveredByEarnings + totalRecoveries;
+    let legacyAllowance = legacySettlementAdvanceDeductionTotal;
     const sanitizedAdvances: RiderAdvanceEntry[] = [];
 
-    // If net debt is zero, ALL advances are completely settled (Clean slate: 0)
-    if (netUnrecoveredDebt === 0) {
-      sortedRegular.forEach((adv) => {
+    sortedRegular.forEach((adv) => {
+      const advId = String(adv.id || (adv as any)._id || '').trim();
+      const advAmt = Number(adv.amount) || 0;
+      const advDate = adv.date || (adv.createdAt ? adv.createdAt.split('T')[0] : '');
+
+      // Explicit check: Was this advance settled in a recorded paid settlement?
+      const isExplicitlySettled =
+        settledAdvIdSet.has(advId) ||
+        (adv.settlementId && settledPayoutIdSet.has(String(adv.settlementId).trim())) ||
+        (adv.settledPayoutId && settledPayoutIdSet.has(String(adv.settledPayoutId).trim()));
+
+      if (isExplicitlySettled) {
         if (!adv.isSettled || !adv.isDeducted || (adv as any).status !== 'PAID') {
           riderChanged = true;
         }
@@ -465,83 +484,45 @@ export function reindexAndSanitizeRiderBalances(
           isDeducted: true,
           status: 'PAID',
         });
-      });
-    } else {
-      // Partially unrecovered debt: Settle up to allowance, keep remainder strictly active
-      sortedRegular.forEach((adv) => {
-        const amt = Number(adv.amount) || 0;
-        if (allowanceToSettle >= amt) {
-          allowanceToSettle -= amt;
-          if (!adv.isSettled || !adv.isDeducted || (adv as any).status !== 'PAID') {
-            riderChanged = true;
-          }
-          sanitizedAdvances.push({
-            ...adv,
-            isSettled: true,
-            isDeducted: true,
-            status: 'PAID',
-          });
-        } else if (allowanceToSettle > 0) {
-          const coveredAmt = allowanceToSettle;
-          const unrecoveredAmt = amt - coveredAmt;
-          allowanceToSettle = 0;
+        return;
+      }
+
+      // Check legacy settlements without settledAdvanceIds (only strictly dated on or before legacy settlement date)
+      if (
+        legacyAllowance >= advAmt &&
+        latestLegacySettlementDate &&
+        advDate &&
+        advDate <= latestLegacySettlementDate
+      ) {
+        legacyAllowance -= advAmt;
+        if (!adv.isSettled || !adv.isDeducted || (adv as any).status !== 'PAID') {
           riderChanged = true;
-
-          // 1. Covered portion marked settled
-          sanitizedAdvances.push({
-            ...adv,
-            amount: coveredAmt,
-            isSettled: true,
-            isDeducted: true,
-            status: 'PAID',
-          });
-          // 2. Active unrecovered portion
-          const remId = adv.id.endsWith('_rem') ? adv.id : `${adv.id}_rem`;
-          sanitizedAdvances.push({
-            id: remId,
-            riderId: rider.id,
-            amount: unrecoveredAmt,
-            date: adv.date,
-            createdAt: adv.createdAt || new Date().toISOString(),
-            reason: adv.reason || 'बकाया एडवांस (Carry Forward Debt)',
-            isSettled: false,
-            isDeducted: false,
-            status: 'UNPAID',
-            runningBalance: unrecoveredAmt,
-          });
-        } else {
-          // Entirely active unrecovered advance
-          if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID') {
-            riderChanged = true;
-          }
-          sanitizedAdvances.push({
-            ...adv,
-            isSettled: false,
-            isDeducted: false,
-            status: 'UNPAID',
-          });
         }
-      });
-    }
+        sanitizedAdvances.push({
+          ...adv,
+          isSettled: true,
+          isDeducted: true,
+          status: 'PAID',
+        });
+        return;
+      }
 
-    // Include recoveries in sanitizedAdvances
-    recoveries.forEach((rec) => {
-      sanitizedAdvances.push(rec);
+      // Advance has NEVER been settled by any settlement -> MUST BE ACTIVE!
+      if (adv.isSettled !== false || adv.isDeducted !== false || (adv as any).status === 'PAID') {
+        riderChanged = true;
+      }
+      sanitizedAdvances.push({
+        ...adv,
+        isSettled: false,
+        isDeducted: false,
+        status: 'UNPAID',
+      });
     });
 
-    // Check if rider's advances list or totalAdvance changed
-    if (rider.advances?.length !== sanitizedAdvances.length) {
-      riderChanged = true;
-    }
-    if (rider.totalAdvance !== netUnrecoveredDebt) {
-      riderChanged = true;
-    }
+    // Recoveries
+    recoveries.forEach((rec) => sanitizedAdvances.push(rec));
 
-    // 2. Sanitize Incentives with lifetime double-entry math
-    const totalIncentivesEarned = (rider.incentives || []).reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
-    const totalIncentivesSettledInPayouts = riderPaidSettlements.reduce((sum, s) => sum + (Number(s.incentiveAmount) || 0), 0);
-    let allowanceToPayIncentive = totalIncentivesSettledInPayouts;
-
+    // 3. Sanitize Incentives
     const sortedIncentives = [...(rider.incentives || [])].sort((a, b) => {
       const timeA = new Date(a.date || a.createdAt || 0).getTime();
       const timeB = new Date(b.date || b.createdAt || 0).getTime();
@@ -550,14 +531,15 @@ export function reindexAndSanitizeRiderBalances(
 
     const sanitizedIncentives: RiderIncentiveEntry[] = [];
     sortedIncentives.forEach((inc) => {
-      const amt = Number(inc.amount) || 0;
-      if (amt <= 0) return;
+      const incId = String(inc.id || '').trim();
+      const isSettled =
+        settledIncIdSet.has(incId) ||
+        (inc.settlementId && settledPayoutIdSet.has(String(inc.settlementId).trim())) ||
+        (inc.settledPayoutId && settledPayoutIdSet.has(String(inc.settledPayoutId).trim())) ||
+        inc.isSettled === true ||
+        inc.isPaid === true;
 
-      if (allowanceToPayIncentive >= amt) {
-        allowanceToPayIncentive -= amt;
-        if (!inc.isSettled || !inc.isPaid || (inc as any).status !== 'PAID') {
-          riderChanged = true;
-        }
+      if (isSettled) {
         sanitizedIncentives.push({
           ...inc,
           isSettled: true,
@@ -565,9 +547,6 @@ export function reindexAndSanitizeRiderBalances(
           status: 'PAID',
         });
       } else {
-        if (inc.isSettled || inc.isPaid || (inc as any).status === 'PAID') {
-          riderChanged = true;
-        }
         sanitizedIncentives.push({
           ...inc,
           isSettled: false,
@@ -577,25 +556,28 @@ export function reindexAndSanitizeRiderBalances(
       }
     });
 
+    // Calculate real active advance total using authentic calculateActiveAdvanceTotal
     const newActiveAdv = calculateActiveAdvanceTotal(sanitizedAdvances, settlements, rider.id);
-    const newActiveInc = calculateActiveIncentiveTotal(sanitizedIncentives, settlements, rider.id);
+    if (rider.totalAdvance !== newActiveAdv) {
+      riderChanged = true;
+    }
 
-    if (rider.totalAdvance !== newActiveAdv || rider.totalIncentive !== newActiveInc) {
+    const newActiveInc = calculateActiveIncentiveTotal(sanitizedIncentives, settlements, rider.id);
+    if (rider.totalIncentive !== newActiveInc) {
       riderChanged = true;
     }
 
     if (riderChanged) {
       hasAnyChange = true;
-      return {
-        ...rider,
-        advances: sanitizedAdvances,
-        incentives: sanitizedIncentives,
-        totalAdvance: newActiveAdv,
-        totalIncentive: newActiveInc,
-      };
     }
 
-    return rider;
+    return {
+      ...rider,
+      advances: sanitizedAdvances,
+      totalAdvance: newActiveAdv,
+      incentives: sanitizedIncentives,
+      totalIncentive: newActiveInc,
+    };
   });
 
   return { updatedRiders, hasChanges: hasAnyChange };

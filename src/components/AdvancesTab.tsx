@@ -143,24 +143,33 @@ export const AdvancesTab: React.FC<Props> = ({
 
     setIsSubmitting(true);
     try {
-      const prevTotal = Number(targetRider.totalAdvance) || 0;
-      const newTotal = prevTotal + num;
       const advId = `adv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const activeUnsettled = (targetRider.advances || []).filter(
+        (a) => !a.isSettled && (a as any).status !== 'PAID' && (Number(a.remainingAmount ?? a.amount) > 0)
+      );
+      const totalPendingAdvance = activeUnsettled.reduce(
+        (sum, a) => sum + Number(a.remainingAmount ?? a.amount ?? 0),
+        0
+      ) + num;
 
       const newAdvEntry: RiderAdvanceEntry = {
         id: advId,
         riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
         amount: num,
+        remainingAmount: num,
         date: date || getTodayDateString(),
         reason: reason.trim() || 'सामान्य एडवांस',
-        runningBalance: newTotal,
+        isSettled: false,
+        runningBalance: totalPendingAdvance,
         createdAt: new Date().toISOString(),
       };
 
       const updatedAdvances = [newAdvEntry, ...(targetRider.advances || [])];
       const updatedRider: Rider = {
         ...targetRider,
-        totalAdvance: newTotal,
+        totalAdvance: totalPendingAdvance,
         advances: updatedAdvances,
       };
 
@@ -172,7 +181,9 @@ export const AdvancesTab: React.FC<Props> = ({
         riderName: targetRider.name,
         amount: num,
         reason: reason.trim() || 'सामान्य एडवांस',
-        totalAdvance: newTotal,
+        date: newAdvEntry.date,
+        totalAdvance: totalPendingAdvance,
+        netBalance: totalPendingAdvance,
         statementUrl,
       });
 
@@ -184,13 +195,6 @@ export const AdvancesTab: React.FC<Props> = ({
         type: 'advance',
         statementUrl,
       }).catch((e) => console.warn('Advance background SMS notice:', e));
-
-      const cleanPhone = (targetRider.phone || '').trim().replace(/\D/g, '').slice(-10);
-      if (isNativeAndroid() && cleanPhone.length === 10) {
-        sendNativeBackgroundSms(cleanPhone, smsText).catch((smsErr) =>
-          console.warn('Native SIM background advance SMS error:', smsErr)
-        );
-      }
 
       setAmount('');
       setReason('');

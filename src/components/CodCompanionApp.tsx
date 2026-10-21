@@ -1082,12 +1082,6 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             type: 'advance',
             statementUrl,
           }).catch((e) => console.warn('COD companion shortage SMS notice:', e));
-
-          if (isNativeAndroid() && cleanPhone.length === 10) {
-            sendNativeBackgroundSms(cleanPhone, smsText).catch((e) =>
-              console.warn('Native SIM shortage SMS error:', e)
-            );
-          }
         } catch (smsErr) {
           console.warn('COD companion shortage SMS hook error:', smsErr);
         }
@@ -1162,12 +1156,6 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             type: 'general',
             statementUrl,
           }).catch((e) => console.warn('COD companion surplus SMS notice:', e));
-
-          if (isNativeAndroid() && cleanPhone.length === 10) {
-            sendNativeBackgroundSms(cleanPhone, smsText).catch((e) =>
-              console.warn('Native SIM surplus SMS error:', e)
-            );
-          }
         } catch (surplusErr) {
           console.warn('COD companion surplus sync error:', surplusErr);
         }
@@ -2689,21 +2677,52 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                     <span>💵 नोट विवरण (Denomination)</span>
                   </button>
                 </div>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  placeholder="0"
-                  disabled={isRider && Boolean(editingEntry.isCashLocked)}
-                  readOnly={isRider && Boolean(editingEntry.isCashLocked)}
-                  value={editCash}
-                  onChange={(e) => setEditCash(e.target.value)}
-                  className={`w-full px-3.5 py-2.5 rounded-xl font-mono text-lg font-bold focus:outline-none transition ${
-                    isRider && Boolean(editingEntry.isCashLocked)
-                      ? 'bg-slate-100 border border-slate-300 text-slate-500 cursor-not-allowed opacity-90'
-                      : 'bg-emerald-50/50 border border-emerald-300 text-emerald-700 focus:ring-2 focus:ring-emerald-500 focus:bg-white'
-                  }`}
-                />
+                <div className="relative">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    placeholder="0"
+                    disabled={isRider && Boolean(editingEntry.isCashLocked)}
+                    readOnly={isRider}
+                    value={editCash}
+                    onClick={() => {
+                      if (isRider && !editingEntry.isCashLocked) {
+                        setIsDenominationModalOpen(true);
+                      }
+                    }}
+                    onChange={(e) => {
+                      if (!isRider) {
+                        setEditCash(e.target.value);
+                      }
+                    }}
+                    className={`w-full px-3.5 py-2.5 rounded-xl font-mono text-lg font-bold focus:outline-none transition ${
+                      isRider && Boolean(editingEntry.isCashLocked)
+                        ? 'bg-slate-100 border border-slate-300 text-slate-500 cursor-not-allowed opacity-90'
+                        : isRider
+                        ? 'bg-emerald-50 border border-emerald-300 text-emerald-800 cursor-pointer hover:bg-emerald-100/60'
+                        : 'bg-emerald-50/50 border border-emerald-300 text-emerald-700 focus:ring-2 focus:ring-emerald-500 focus:bg-white'
+                    }`}
+                  />
+                  {isRider && !editingEntry.isCashLocked && (
+                    <button
+                      type="button"
+                      onClick={() => setIsDenominationModalOpen(true)}
+                      className="absolute right-2 top-2.5 px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm cursor-pointer"
+                    >
+                      <Banknote className="w-3.5 h-3.5" />
+                      <span>नोट भरें</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Rider Mandated Denomination Helper Notice */}
+                {isRider && !editingEntry.isCashLocked && (
+                  <p className="mt-1.5 text-[11px] text-emerald-700 font-semibold flex items-center gap-1 bg-emerald-50/80 p-1.5 rounded-lg border border-emerald-200">
+                    <Banknote className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>कैश डायरेक्ट टाइपिंग बंद है। नोट विवरण (500, 200, 100...) भरकर ही कैश जमा करें।</span>
+                  </p>
+                )}
 
                 {/* Warning notice when Cash is auto-locked */}
                 {isRider && Boolean(editingEntry.isCashLocked) && (

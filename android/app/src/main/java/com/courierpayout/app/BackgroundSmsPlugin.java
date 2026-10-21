@@ -146,12 +146,21 @@ public class BackgroundSmsPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    private void dispatchSmsWithManager(SmsManager smsManager, String targetNumber, String message) {
+        ArrayList<String> parts = smsManager.divideMessage(message);
+        if (parts != null && parts.size() > 1) {
+            smsManager.sendMultipartTextMessage(targetNumber, null, parts, null, null);
+        } else {
+            smsManager.sendTextMessage(targetNumber, null, message, null, null);
+        }
+    }
+
     @PluginMethod
     public void sendSms(PluginCall call) {
         String phoneNumber = call.getString("phoneNumber");
         String message = call.getString("message");
 
-        if (phoneNumber == null || phoneNumber.isEmpty() || message == null || message.isEmpty()) {
+        if (phoneNumber == null || phoneNumber.trim().isEmpty() || message == null || message.trim().isEmpty()) {
             call.reject("Phone number and message are required");
             return;
         }
@@ -161,17 +170,45 @@ public class BackgroundSmsPlugin extends Plugin {
             return;
         }
 
+        // Clean phone number: keep digits and optional leading plus
+        String cleanNumber = phoneNumber.trim().replaceAll("[^0-9+]", "");
+        if (cleanNumber.isEmpty()) {
+            call.reject("Invalid phone number format");
+            return;
+        }
+
         try {
-            SmsManager smsManager = SmsManager.getDefault();
-            ArrayList<String> parts = smsManager.divideMessage(message);
-            if (parts.size() > 1) {
-                smsManager.sendMultipartTextMessage(phoneNumber, null, parts, null, null);
-            } else {
-                smsManager.sendTextMessage(phoneNumber, null, message, null, null);
+            SmsManager smsManager = null;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                try {
+                    smsManager = getContext().getSystemService(SmsManager.class);
+                } catch (Exception ignored) {}
             }
+            if (smsManager == null) {
+                smsManager = SmsManager.getDefault();
+            }
+            if (smsManager == null) {
+                call.reject("SmsManager is not available on this device");
+                return;
+            }
+
+            try {
+                dispatchSmsWithManager(smsManager, cleanNumber, message);
+            } catch (Exception primaryEx) {
+                // Carrier fallback: if +91 failed, try 10 digits without +91, or vice versa
+                if (cleanNumber.startsWith("+91") && cleanNumber.length() == 13) {
+                    String localTenDigits = cleanNumber.substring(3);
+                    dispatchSmsWithManager(smsManager, localTenDigits, message);
+                } else if (cleanNumber.length() == 10) {
+                    dispatchSmsWithManager(smsManager, "+91" + cleanNumber, message);
+                } else {
+                    throw primaryEx;
+                }
+            }
+
             JSObject ret = new JSObject();
             ret.put("success", true);
-            ret.put("message", "SMS sent successfully");
+            ret.put("message", "SMS sent successfully via SIM");
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("Failed to send SMS: " + e.getMessage());

@@ -56,7 +56,19 @@ import {
   subscribeToDailyCodSheet
 } from '../services/codService';
 import { formatINR, formatDateDisplay, getTodayDateString, getDaysAgoDateString } from '../utils/formatters';
-import { isEntityOwnedByUser } from '../services/firestoreSync';
+import { 
+  isEntityOwnedByUser,
+  writeAdvanceEntryToFirestore, 
+  writeIncentiveEntryToFirestore, 
+  saveRiderToFirestore, 
+  syncPublicRiderStatement 
+} from '../services/firestoreSync';
+import { 
+  formatAdvanceSmsText, 
+  dispatchAutomatedSms 
+} from '../services/smsService';
+import { getRiderStatementUrl } from '../utils/shareLink';
+import { RiderAdvanceEntry, RiderIncentiveEntry } from '../types';
 import { purgeLegacyMockStorage } from '../utils/storage';
 
 interface Props {
@@ -308,6 +320,231 @@ export const CodManagementModal: React.FC<Props> = ({
     return gridEntries.length > 0 && gridEntries.every((e) => e.status === 'locked');
   }, [gridEntries]);
 
+  // Current Staff profile if logged in via PIN
+  const currentStaff = useMemo(() => {
+    return staffUsers.find((s) => s.id === activeUser.id);
+  }, [staffUsers, activeUser.id]);
+
+  // Check if current user is allowed to edit entries
+  // Rule: By default, all office staff edit permissions are OFF (read-only/tally only).
+  const canUserEdit = useMemo(() => {
+    if (activeUser.role === 'owner' || isSuperAdmin) return true;
+    if (currentStaff?.canEditEntries === true) return true;
+    return false;
+  }, [activeUser.role, isSuperAdmin, currentStaff?.canEditEntries]);
+
+  // 1-Click Transfer COD Difference / Shortage to Advances Tab (Strict Date: selectedDate)
+  const handleTransferDifferenceToAdvance = async (row: CodDailyEntry, shortAmount: number) => {
+    if (!shortAmount || shortAmount <= 0) return;
+    if (row.balanceSyncedToAdvance) {
+      showToast(`⚠️ यह ₹${shortAmount} शॉर्टेज पहले ही एडवांस खाते में जुड़ चुका है!`, 'info');
+      return;
+    }
+
+    const reasonText = `दैनिक COD शॉर्टेज: कम पैसा जमा किया (${selectedDate})`;
+    const targetRider = riders.find((r) => r.id === row.riderId);
+    const riderName = targetRider ? targetRider.name : row.riderName;
+    const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
+    const previousPendingAdvance = Number(targetRider?.totalAdvance) || 0;
+    const newTotalAdvance = previousPendingAdvance + shortAmount;
+
+    try {
+      const advId = await writeAdvanceEntryToFirestore(userId, {
+        riderId: row.riderId,
+        riderName,
+        riderPhone,
+        amount: shortAmount,
+        remainingAmount: shortAmount,
+        date: selectedDate, // Backdated date of COD sheet!
+        reason: reasonText,
+        runningBalance: newTotalAdvance,
+        isSettled: false,
+        status: 'PENDING',
+      });
+
+      if (targetRider) {
+        const newAdvanceItem: RiderAdvanceEntry = {
+          id: advId,
+          riderId: targetRider.id,
+          riderName: targetRider.name,
+          riderPhone: targetRider.phone,
+          amount: shortAmount,
+          remainingAmount: shortAmount,
+          date: selectedDate,
+          reason: reasonText,
+          runningBalance: newTotalAdvance,
+          isSettled: false,
+          status: 'PENDING',
+          createdAt: new Date().toISOString(),
+          createdBy: activeUser.name,
+        };
+        const updatedAdvances = [newAdvanceItem, ...(targetRider.advances || [])];
+        const updatedRider: Rider = {
+          ...targetRider,
+          totalAdvance: newTotalAdvance,
+          advances: updatedAdvances,
+        };
+        await saveRiderToFirestore(userId, updatedRider);
+        try {
+          await syncPublicRiderStatement(updatedRider, updatedAdvances);
+        } catch (e) {
+          console.warn('Notice syncing statement for shortage advance:', e);
+        }
+      }
+
+      const updatedEntries = gridEntries.map((e) => {
+        if (e.riderId !== row.riderId) return e;
+        return {
+          ...e,
+          balanceSyncedToAdvance: true,
+          syncedAdvanceId: advId,
+          updatedAt: new Date().toISOString(),
+          updatedBy: activeUser.name,
+        };
+      });
+      setGridEntries(updatedEntries);
+      await saveCodDailyEntries(userId, selectedDate, updatedEntries);
+
+      const statementUrl = getRiderStatementUrl(row.riderId);
+      const smsText = formatAdvanceSmsText({
+        riderName,
+        amount: shortAmount,
+        reason: reasonText,
+        totalAdvance: newTotalAdvance,
+        statementUrl,
+      });
+
+      dispatchAutomatedSms({
+        riderName,
+        riderPhone,
+        amount: shortAmount,
+        message: smsText,
+        type: 'advance',
+        statementUrl,
+      }).catch((e) => console.warn('Background shortage SMS notice:', e));
+
+      showToast(`✅ ₹${shortAmount} COD शॉर्टेज दिनांक ${formatDateDisplay(selectedDate)} एडवांस टैब में जुड़ गया एवं SMS भेजा गया!`, 'success');
+    } catch (err: any) {
+      console.error('Error transferring difference to advance:', err);
+      showToast('एडवांस खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
+    }
+  };
+
+  // 1-Click Transfer COD Surplus to Incentives Tab (Strict Date: selectedDate)
+  const handleTransferDifferenceToIncentive = async (row: CodDailyEntry, surplusAmount: number) => {
+    if (!surplusAmount || surplusAmount <= 0) return;
+    if (row.balanceSyncedToIncentive) {
+      showToast(`⚠️ यह ₹${surplusAmount} अतिरिक्त राशि पहले ही इंसेंटिव खाते में जुड़ चुकी है!`, 'info');
+      return;
+    }
+
+    const reasonText = `दैनिक COD अतिरिक्त जमा: Surplus (${selectedDate})`;
+    const targetRider = riders.find((r) => r.id === row.riderId);
+    const riderName = targetRider ? targetRider.name : row.riderName;
+    const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
+
+    try {
+      const incId = await writeIncentiveEntryToFirestore(userId, {
+        riderId: row.riderId,
+        riderName,
+        riderPhone,
+        amount: surplusAmount,
+        date: selectedDate, // Backdated date of COD sheet!
+        reason: reasonText,
+        source: 'surplus',
+        createdBy: activeUser.name,
+      });
+
+      if (targetRider) {
+        const prevTotal = Number(targetRider.totalIncentive) || 0;
+        const newTotalIncentive = prevTotal + surplusAmount;
+        const newIncItem: RiderIncentiveEntry = {
+          id: incId,
+          riderId: targetRider.id,
+          riderName: targetRider.name,
+          riderPhone: targetRider.phone,
+          amount: surplusAmount,
+          date: selectedDate,
+          reason: reasonText,
+          source: 'surplus',
+          createdAt: new Date().toISOString(),
+          createdBy: activeUser.name,
+        };
+        const updatedIncentives = [newIncItem, ...(targetRider.incentives || [])];
+        const updatedRider: Rider = {
+          ...targetRider,
+          totalIncentive: newTotalIncentive,
+          incentives: updatedIncentives,
+        };
+        await saveRiderToFirestore(userId, updatedRider);
+        try {
+          await syncPublicRiderStatement(updatedRider, updatedRider.advances || []);
+        } catch (e) {
+          console.warn('Notice syncing statement for surplus incentive:', e);
+        }
+      }
+
+      const updatedEntries = gridEntries.map((e) => {
+        if (e.riderId !== row.riderId) return e;
+        return {
+          ...e,
+          balanceSyncedToIncentive: true,
+          syncedIncentiveId: incId,
+          updatedAt: new Date().toISOString(),
+          updatedBy: activeUser.name,
+        };
+      });
+      setGridEntries(updatedEntries);
+      await saveCodDailyEntries(userId, selectedDate, updatedEntries);
+
+      const statementUrl = getRiderStatementUrl(row.riderId);
+      const smsText = `नमस्ते ${riderName}, दिनांक ${formatDateDisplay(selectedDate)} को COD में जमा की गई आपकी अतिरिक्त राशि ₹${surplusAmount} इंसेंटिव में जोड़ दी गई है। खाता विवरण: ${statementUrl}`;
+
+      dispatchAutomatedSms({
+        riderName,
+        riderPhone,
+        amount: surplusAmount,
+        message: smsText,
+        type: 'general',
+        statementUrl,
+      }).catch((e) => console.warn('Background surplus SMS notice:', e));
+
+      showToast(`🎉 ₹${surplusAmount} अतिरिक्त राशि दिनांक ${formatDateDisplay(selectedDate)} इंसेंटिव खाते में जुड़ गई एवं SMS भेजा गया!`, 'success');
+    } catch (err: any) {
+      console.error('Error transferring difference to incentive:', err);
+      showToast('इंसेंटिव खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
+    }
+  };
+
+  // Day Reconciled Status
+  const isDayReconciled = useMemo(() => {
+    if (gridEntries.length === 0) return false;
+    return gridEntries.every((e) => e.status === 'verified' || e.status === 'locked');
+  }, [gridEntries]);
+
+  const handleToggleDayReconciled = async () => {
+    if (gridEntries.length === 0) {
+      showToast('⚠️ इस तारीख के लिए कोई रिकॉर्ड नहीं है।', 'info');
+      return;
+    }
+    const nextStatus = isDayReconciled ? 'submitted' : 'verified';
+    const updated = gridEntries.map((e) => ({
+      ...e,
+      status: nextStatus as any,
+      verifiedAt: nextStatus === 'verified' ? new Date().toISOString() : undefined,
+      verifiedBy: nextStatus === 'verified' ? activeUser.name : undefined,
+      updatedAt: new Date().toISOString(),
+      updatedBy: activeUser.name,
+    }));
+    setGridEntries(updated);
+    await saveCodDailyEntries(userId, selectedDate, updated);
+    if (nextStatus === 'verified') {
+      showToast(`✅ तारीख ${formatDateDisplay(selectedDate)} का हिसाब पूर्ण व टैली (Reconciled & Done) मार्क हो गया!`, 'success');
+    } else {
+      showToast(`दिनांक ${formatDateDisplay(selectedDate)} का हिसाब अन-टैली (Pending) कर दिया गया।`, 'info');
+    }
+  };
+
   // Handle cell edit in Excel Grid
   const handleCellChange = (
     riderId: string,
@@ -315,15 +552,14 @@ export const CodManagementModal: React.FC<Props> = ({
     value: string
   ) => {
     // Permission check
-    const isOwnerOrIncharge = activeUser.role === 'hub_incharge' || activeUser.role === 'owner';
     const isRiderEditingSelf = activeUser.role === 'rider' && activeUser.riderId === riderId;
 
-    if (!isOwnerOrIncharge && !isRiderEditingSelf) {
-      showToast('You can only edit your own assigned row.', 'error');
+    if (!canUserEdit && !isRiderEditingSelf) {
+      showToast('🔒 ऑफिस स्टाफ के लिए एंट्री एडिट बंद है। केवल ✓ मिलान (Tally) की अनुमति है।', 'error');
       return;
     }
 
-    if (isDayLocked && !isOwnerOrIncharge) {
+    if (isDayLocked && !canUserEdit) {
       showToast('This day has been locked by the Hub Incharge.', 'error');
       return;
     }
@@ -1085,20 +1321,58 @@ export const CodManagementModal: React.FC<Props> = ({
                               {formatINR(row.totalDeposit)}
                             </td>
 
-                            {/* 8. Difference / Balance */}
+                            {/* 8. Difference / Balance (Clickable: Shortage -> Advance, Surplus -> Incentive with SMS) */}
                             <td className="p-3 text-center">
                               {row.balance === 0 ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                                   ✓ Tally / ₹0
                                 </span>
                               ) : row.balance > 0 ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                                  ⚠️ Due: {formatINR(row.balance)}
-                                </span>
+                                row.balanceSyncedToAdvance ? (
+                                  <span 
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-xs"
+                                    title={`₹${formatINR(row.balance)} शॉर्टेज एडवांस टैब में दिनांक ${formatDateDisplay(selectedDate)} पर दर्ज हो चुका है`}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span>✓ एडवांस में दर्ज ({formatINR(row.balance)})</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTransferDifferenceToAdvance(row, row.balance)}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-black bg-rose-500/20 hover:bg-rose-500/35 text-rose-300 border border-rose-500/50 hover:border-rose-400 shadow-sm transition active:scale-95 cursor-pointer group"
+                                    title={`क्लिक करें: ₹${formatINR(row.balance)} कम पैसा (Shortage) तुरंत एडवांस टैब में जोड़ें और SMS भेजें (तारीख: ${formatDateDisplay(selectedDate)})`}
+                                  >
+                                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400 group-hover:scale-110 transition shrink-0" />
+                                    <span>Due: {formatINR(row.balance)}</span>
+                                    <span className="text-[9px] bg-rose-600 hover:bg-rose-500 text-white px-1.5 py-0.5 rounded font-extrabold shadow-2xs">
+                                      + एडवांस
+                                    </span>
+                                  </button>
+                                )
                               ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40">
-                                  🔵 Surplus: {formatINR(Math.abs(row.balance))}
-                                </span>
+                                row.balanceSyncedToIncentive ? (
+                                  <span 
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40 shadow-xs"
+                                    title={`₹${formatINR(Math.abs(row.balance))} सरप्लस इंसेंटिव टैब में दिनांक ${formatDateDisplay(selectedDate)} पर दर्ज हो चुका है`}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                                    <span>✓ इंसेंटिव में दर्ज ({formatINR(Math.abs(row.balance))})</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTransferDifferenceToIncentive(row, Math.abs(row.balance))}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-blue-500/20 hover:bg-blue-500/35 text-blue-300 border border-blue-500/50 hover:border-blue-400 shadow-sm transition active:scale-95 cursor-pointer group"
+                                    title={`क्लिक करें: ₹${formatINR(Math.abs(row.balance))} अतिरिक्त पैसा तुरंत इंसेंटिव में जोड़ें और SMS भेजें (तारीख: ${formatDateDisplay(selectedDate)})`}
+                                  >
+                                    <Check className="w-3.5 h-3.5 text-blue-400 group-hover:scale-110 transition shrink-0" />
+                                    <span>Surplus: {formatINR(Math.abs(row.balance))}</span>
+                                    <span className="text-[9px] bg-blue-600 hover:bg-blue-500 text-white px-1.5 py-0.5 rounded font-extrabold shadow-2xs">
+                                      + इंसेंटिव
+                                    </span>
+                                  </button>
+                                )
                               )}
                             </td>
 
@@ -1192,6 +1466,61 @@ export const CodManagementModal: React.FC<Props> = ({
                 </table>
               </div>
 
+              {/* 2.5 DAY RECONCILED TALLY TOGGLE BAR */}
+              <div className={`mt-3 p-3.5 sm:p-4 rounded-2xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg ${
+                isDayReconciled
+                  ? 'bg-gradient-to-r from-emerald-950/90 via-slate-900 to-teal-950/90 border-emerald-500/70 text-emerald-100 shadow-emerald-950/40'
+                  : 'bg-slate-900/90 border-slate-800 hover:border-slate-700 text-slate-200'
+              }`}>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    id="modal-toggle-day-reconciled-btn"
+                    onClick={handleToggleDayReconciled}
+                    className={`w-11 h-11 rounded-xl flex items-center justify-center font-black text-xl transition shadow-md cursor-pointer shrink-0 active:scale-95 ${
+                      isDayReconciled
+                        ? 'bg-emerald-500 text-white hover:bg-emerald-400 ring-4 ring-emerald-400/40 shadow-emerald-900/50'
+                        : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 border border-slate-600'
+                    }`}
+                    title={isDayReconciled ? 'दिन का हिसाब पूर्ण चिह्नित है (अनमार्क करने हेतु क्लिक करें)' : 'दिन का हिसाब पूर्ण व टैली मार्क करने हेतु क्लिक करें'}
+                  >
+                    {isDayReconciled ? <Check className="w-6 h-6 stroke-[3]" /> : '✓'}
+                  </button>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-black text-sm sm:text-base text-white">
+                        {isDayReconciled 
+                          ? '✓ इस दिन का संपूर्ण हिसाब-किताब पूर्ण व टैली है (Reconciled & Done)' 
+                          : 'तारीख का हिसाब मिलान पूरा करें (Mark Day as Reconciled)'}
+                      </span>
+                      <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${
+                        isDayReconciled 
+                          ? 'bg-emerald-500/30 text-emerald-300 border-emerald-400/60' 
+                          : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      }`}>
+                        {isDayReconciled ? '✓ टैली पूर्ण (VERIFIED)' : 'मिलान शेष (PENDING)'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      तारीख: <strong className="text-amber-300">{formatDateDisplay(selectedDate)}</strong> • टिक लगाने से स्पष्ट रहेगा कि इस दिन का हिसाब-किताब फाइनल हो चुका है।
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleToggleDayReconciled}
+                  className={`inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition shadow-sm cursor-pointer shrink-0 active:scale-95 ${
+                    isDayReconciled
+                      ? 'bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/50'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/50'
+                  }`}
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isDayReconciled ? '✓ हिसाब मिला हुआ है' : '✓ इस दिन का हिसाब पूरा हो गया'}</span>
+                </button>
+              </div>
+
               {/* Daily Consolidated Hub Denomination Summary */}
               <div className="mt-4">
                 <DailyConsolidatedDenominationSummary
@@ -1281,6 +1610,29 @@ export const CodManagementModal: React.FC<Props> = ({
                           }`}>
                             {staff.role.replace('_', ' ')}
                           </span>
+
+                          {staff.role !== 'rider' && (
+                            <label 
+                              className={`flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded border text-[10px] mt-1 transition ${
+                                staff.canEditEntries 
+                                  ? 'bg-amber-950/70 border-amber-500/60 text-amber-300 font-bold' 
+                                  : 'bg-slate-900 border-slate-800 text-slate-400'
+                              }`}
+                              title="डिफ़ॉल्ट बंद: यदि चालू करेंगे तो यह स्टाफ मेंबर राइडर एंट्री एडिट कर सकेगा"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={staff.canEditEntries ?? false}
+                                onChange={(e) => {
+                                  setStaffUsers((prev) =>
+                                    prev.map((s) => (s.id === staff.id ? { ...s, canEditEntries: e.target.checked } : s))
+                                  );
+                                }}
+                                className="rounded border-slate-700 text-amber-500 focus:ring-0"
+                              />
+                              <span>✏️ Edit {staff.canEditEntries ? 'On' : 'Off'}</span>
+                            </label>
+                          )}
                         </div>
                       </div>
 

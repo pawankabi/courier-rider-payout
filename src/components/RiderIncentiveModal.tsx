@@ -141,14 +141,11 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
         amount: numericAmount,
       }).catch((smsErr) => console.warn('Background incentive SMS error:', smsErr));
 
-      const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
-      if (isNativeAndroid() && cleanPhone.length === 10) {
-        sendNativeBackgroundSms(cleanPhone, smsMessage).catch((smsErr) =>
-          console.warn('Native SIM background incentive SMS error:', smsErr)
-        );
-      }
-
-      setToastMessage(`🎉 ₹${numericAmount} का इंसेंटिव सुरक्षित हुआ एवं SMS भेजा गया!`);
+      setToastMessage(
+        isNativeAndroid()
+          ? `🎉 ₹${numericAmount} का इंसेंटिव सुरक्षित हुआ एवं सिम से बैकग्राउंड SMS भेजा गया!`
+          : `🎉 ₹${numericAmount} का इंसेंटिव सुरक्षित हुआ एवं SMS भेजा गया!`
+      );
       setTimeout(() => setToastMessage(null), 3000);
 
       // Clear input

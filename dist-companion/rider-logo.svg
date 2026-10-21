@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Dark Squircle Gradients -->
+    <linearGradient id="riderSquircle" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="50%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="riderSquircleBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F2FE"/>
+      <stop offset="50%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+
+    <!-- Speed Orbit Gradients -->
+    <linearGradient id="speedOrbit1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F2FE"/>
+      <stop offset="50%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#60A5FA"/>
+    </linearGradient>
+    <linearGradient id="speedOrbit2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="60%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+
+    <!-- Helmet Gradients -->
+    <linearGradient id="helmetShell" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60A5FA"/>
+      <stop offset="30%" stop-color="#2563EB"/>
+      <stop offset="80%" stop-color="#1D4ED8"/>
+      <stop offset="100%" stop-color="#172554"/>
+    </linearGradient>
+    <linearGradient id="helmetVisor" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="40%" stop-color="#0284C7"/>
+      <stop offset="85%" stop-color="#082F49"/>
+      <stop offset="100%" stop-color="#031525"/>
+    </linearGradient>
+    <linearGradient id="visorReflection" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E0F2FE" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#0284C7" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- GPS Map Pin Gradients -->
+    <linearGradient id="pinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F43F5E"/>
+      <stop offset="60%" stop-color="#E11D48"/>
+      <stop offset="100%" stop-color="#9F1239"/>
+    </linearGradient>
+    <radialGradient id="pinGlowRadial" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FDA4AF"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </radialGradient>
+
+    <!-- Parcel Box Gradients -->
+    <linearGradient id="miniBoxTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="miniBoxLeft" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D97706"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+    <linearGradient id="miniBoxRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#B45309"/>
+      <stop offset="100%" stop-color="#78350F"/>
+    </linearGradient>
+
+    <!-- Drop Shadows & Glow -->
+    <filter id="riderShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="cyanGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 1. Dark Squircle Outer Container -->
+  <rect x="8" y="8" width="496" height="496" rx="120" fill="url(#riderSquircle)" filter="url(#riderShadow)"/>
+  <rect x="12" y="12" width="488" height="488" rx="116" fill="none" stroke="url(#riderSquircleBorder)" stroke-width="4" stroke-opacity="0.8"/>
+
+  <!-- 2. Cyan-Neon Speed Orbits encasing the helmet -->
+  <g filter="url(#cyanGlow)" opacity="0.9">
+    <!-- Primary Outer Orbit -->
+    <ellipse cx="256" cy="275" rx="190" ry="85" fill="none" stroke="url(#speedOrbit1)" stroke-width="6" transform="rotate(-25 256 275)" stroke-dasharray="260 50 140 30"/>
+    <!-- Secondary Dynamic Orbit -->
+    <ellipse cx="256" cy="270" rx="175" ry="70" fill="none" stroke="url(#speedOrbit2)" stroke-width="4" transform="rotate(35 256 270)" stroke-dasharray="180 80 100 40" opacity="0.75"/>
+    
+    <!-- Speed Motion Trails behind helmet -->
+    <path d="M70 240 L130 240" stroke="#38BDF8" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
+    <path d="M50 275 L120 275" stroke="#00F2FE" stroke-width="10" stroke-linecap="round"/>
+    <path d="M80 310 L135 310" stroke="#38BDF8" stroke-width="7" stroke-linecap="round" opacity="0.7"/>
+
+    <!-- Glowing Speed Particles -->
+    <circle cx="110" cy="205" r="4" fill="#00F2FE"/>
+    <circle cx="410" cy="215" r="5" fill="#38BDF8"/>
+    <circle cx="370" cy="380" r="4.5" fill="#60A5FA"/>
+  </g>
+
+  <!-- 3. Sleek Blue Rider Delivery Helmet (Side-Angled Dynamic Profile) -->
+  <g filter="url(#riderShadow)">
+    <!-- Helmet Main Outer Shell Dome -->
+    <path d="M150 280 C150 175, 230 140, 335 155 C395 165, 420 215, 420 285 C420 340, 395 385, 345 390 C290 395, 235 395, 185 380 C155 365, 150 315, 150 280 Z" fill="url(#helmetShell)"/>
+    
+    <!-- Helmet Aerodynamic Vent Line Accents -->
+    <path d="M220 165 C280 170, 350 200, 385 240" fill="none" stroke="#93C5FD" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+    <path d="M185 220 C235 210, 300 225, 345 255" fill="none" stroke="#60A5FA" stroke-width="3" stroke-linecap="round" opacity="0.4"/>
+
+    <!-- Aerodynamic Rear Spoiler Trim -->
+    <path d="M152 275 C140 285, 135 320, 160 345 C175 350, 180 330, 175 305 Z" fill="#1E3A8A"/>
+
+    <!-- Helmet Tinted Visor (Panoramic Curved Shield) -->
+    <path d="M255 220 C320 215, 395 240, 412 285 C416 295, 410 325, 385 338 C345 355, 290 350, 245 335 C230 330, 225 315, 230 295 C235 255, 242 225, 255 220 Z" fill="url(#helmetVisor)"/>
+    
+    <!-- Glossy Curved Visor Reflection -->
+    <path d="M260 225 C310 222, 375 242, 395 275 C365 260, 310 250, 265 255 Z" fill="url(#visorReflection)"/>
+
+    <!-- Helmet Chin Guard & Lower Strap Trim -->
+    <path d="M185 355 C220 375, 275 380, 325 375 C345 372, 355 360, 355 348 C310 355, 260 350, 220 338 C195 332, 185 342, 185 355 Z" fill="#0F172A"/>
+    <!-- Neon Cyan Chin Accent Stripe -->
+    <path d="M225 362 C265 370, 305 368, 335 360" fill="none" stroke="#00F2FE" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <!-- 4. Glowing GPS Map Pin (Floating at Top Right of Helmet) -->
+  <g filter="url(#cyanGlow)" transform="translate(370, 135)">
+    <!-- GPS Pin Body -->
+    <path d="M0 -45 C25 -45, 42 -25, 42 0 C42 28, 12 55, 0 75 C-12 55, -42 28, -42 0 C-42 -25, -25 -45, 0 -45 Z" fill="url(#pinGrad)"/>
+    <!-- Pin Center Core Light -->
+    <circle cx="0" cy="0" r="16" fill="#FFFFFF"/>
+    <circle cx="0" cy="0" r="10" fill="url(#pinGlowRadial)"/>
+    <!-- Pulse Ripple Ring around pin -->
+    <circle cx="0" cy="0" r="32" fill="none" stroke="#FDA4AF" stroke-width="2.5" opacity="0.6" stroke-dasharray="8 6"/>
+  </g>
+
+  <!-- 5. Courier Parcel Box (Front-Bottom Right with Motion) -->
+  <g filter="url(#riderShadow)" transform="translate(325, 345)">
+    <!-- Mini Isometric Box -->
+    <path d="M0 -35 L45 -12 L0 10 L-45 -12 Z" fill="url(#miniBoxTop)"/>
+    <path d="M-45 -12 L0 10 L0 55 L-45 32 Z" fill="url(#miniBoxLeft)"/>
+    <path d="M45 -12 L0 10 L0 55 L45 32 Z" fill="url(#miniBoxRight)"/>
+    <!-- Box Tape -->
+    <path d="M-8 -31 L0 -35 L8 -31 L8 14 L0 10 L-8 14 Z" fill="#FEF08A" opacity="0.9"/>
+    <path d="M-8 14 L0 10 L0 55 L-8 51 Z" fill="#FDE047" opacity="0.9"/>
+    <path d="M0 10 L8 14 L8 51 L0 55 Z" fill="#EAB308" opacity="0.9"/>
+  </g>
+</svg>

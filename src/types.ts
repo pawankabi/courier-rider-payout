@@ -1,7 +1,10 @@
 export interface RiderAdvanceEntry {
   id: string;
   riderId: string;
+  riderName?: string;
+  riderPhone?: string;
   amount: number;
+  remainingAmount?: number;
   date?: string; // Optional date (YYYY-MM-DD or empty)
   reason?: string; // e.g. "Bike repair", "Fuel", "Festival emergency"
   runningBalance?: number; // previousAdvanceTotal + newAdvanceAmount = currentTotalAdvance
@@ -397,6 +400,7 @@ export interface CodStaffUser {
   canVerifyCod?: boolean; // Permission: Can verify Company 1 & 2 COD
   canVerifyCash?: boolean; // Permission: Can verify Cash Deposit
   canVerifyOnline?: boolean; // Permission: Can verify Online UPI / QR Deposit
+  canEditEntries?: boolean; // Permission: Can edit rider rows & amounts (Strictly false by default for all staff)
   createdAt: string;
   updatedAt?: string;
   hubId?: string; // Parent Hub / Owner account UID for multi-tenant isolation
@@ -489,6 +493,10 @@ export interface CodDailyEntry {
   shortageConvertedAt?: string;
   shortageConvertedBy?: string;
   shortageAdvanceId?: string;
+  balanceSyncedToAdvance?: boolean;
+  balanceSyncedToIncentive?: boolean;
+  syncedAdvanceId?: string;
+  syncedIncentiveId?: string;
 
   // Per-Field Discrepancy & Shortage Tracking
   company1Shortage?: number; // Short amount

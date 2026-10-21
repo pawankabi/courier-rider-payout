@@ -208,6 +208,65 @@ export function saveRidersToStorage(riders: Rider[], userId?: string): void {
 }
 
 /**
+ * TARGETED PURGE (UNSETTLED ONLY):
+ * Wipes ONLY unsettled/pending advance records (`isSettled === false` or `!isSettled`).
+ * Retains ALL historical settled advances (`isSettled === true`) so past audit history
+ * and completed settlement statements remain 100% intact.
+ */
+export function purgeUnsettledAdvancesFromStorage(userId?: string): Rider[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const riders = loadRidersFromStorage(userId);
+    const updatedRiders = riders.map((rider) => {
+      const settledAdvancesOnly = (rider.advances || []).filter(
+        (adv) => adv.isSettled === true || (adv as any).status === 'PAID' || adv.isDeducted === true
+      );
+      const newTotalAdvance = settledAdvancesOnly.reduce(
+        (sum, adv) => sum + Number(adv.remainingAmount || 0),
+        0
+      );
+      return {
+        ...rider,
+        advances: settledAdvancesOnly,
+        totalAdvance: newTotalAdvance,
+      };
+    });
+
+    saveRidersToStorage(updatedRiders, userId);
+
+    // Also scan all localStorage keys containing 'rider' to ensure no ghost unsettled advances remain
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('cp_cache_riders_') || key.startsWith('courier_riders_u_'))) {
+        try {
+          const val = localStorage.getItem(key);
+          if (val) {
+            const list = JSON.parse(val);
+            if (Array.isArray(list)) {
+              const cleaned = list.map((r: any) => ({
+                ...r,
+                advances: Array.isArray(r.advances)
+                  ? r.advances.filter(
+                      (adv: any) => adv.isSettled === true || adv.status === 'PAID' || adv.isDeducted === true
+                    )
+                  : [],
+                totalAdvance: 0,
+              }));
+              localStorage.setItem(key, JSON.stringify(cleaned));
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return updatedRiders;
+  } catch (err) {
+    console.error('Error during purgeUnsettledAdvancesFromStorage:', err);
+    return [];
+  }
+}
+
+/**
  * Loads authentic user deliveries from local cache.
  * Returns empty array [] if no cached data exists. Never returns fake rows.
  */

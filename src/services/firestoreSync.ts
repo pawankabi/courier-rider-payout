@@ -45,6 +45,7 @@ import {
   setCachedAuthUserId 
 } from '../utils/storage';
 import { purgePhantomAdvances } from '../utils/pureLedgerEngine';
+import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
 
 export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
 
@@ -1723,10 +1724,46 @@ export function subscribeToUserData(
   const ridersMap = new Map<string, Rider>();
   const deliveriesMap = new Map<string, DeliveryEntry>();
   const settlementsMap = new Map<string, SettlementRecord>();
+  const advancesMap = new Map<string, RiderAdvanceEntry>();
 
   const notifyRiders = () => {
     // Strictly isolate: only include riders created by or belonging to this user's workspace
-    const list = Array.from(ridersMap.values()).filter((r) => isEntityOwnedByUser(r, userId, effectiveEmail));
+    const rawList = Array.from(ridersMap.values()).filter((r) => isEntityOwnedByUser(r, userId, effectiveEmail));
+    const allWorkspaceAdvances = Array.from(advancesMap.values());
+    const settlementsList = Array.from(settlementsMap.values());
+
+    const list = rawList.map((r) => {
+      // Merge advances from rider doc and workspace advances collection
+      const combined = [...(r.advances || [])];
+      allWorkspaceAdvances.forEach((adv) => {
+        const matchesId = String(adv.riderId || '').trim() === String(r.id).trim();
+        const cleanAdvPhone = String((adv as any).riderPhone || '').replace(/\D/g, '').slice(-10);
+        const cleanRiderPhone = String(r.phone || '').replace(/\D/g, '').slice(-10);
+        const matchesPhone = Boolean(cleanAdvPhone && cleanRiderPhone && cleanAdvPhone === cleanRiderPhone);
+        if (matchesId || matchesPhone) {
+          combined.push(adv);
+        }
+      });
+
+      // Deduplicate advances cleanly
+      const seen = new Set<string>();
+      const dedupedAdvances: RiderAdvanceEntry[] = [];
+      combined.forEach((a) => {
+        const key = a.id || `${a.date}_${a.amount}_${a.reason}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          dedupedAdvances.push(a);
+        }
+      });
+
+      const totalAdv = calculateActiveAdvanceTotal(dedupedAdvances, settlementsList, r.id);
+      return {
+        ...r,
+        advances: dedupedAdvances,
+        totalAdvance: totalAdv,
+      };
+    });
+
     list.sort((a, b) => {
       const orderA = typeof a.order === 'number' ? a.order : 99999;
       const orderB = typeof b.order === 'number' ? b.order : 99999;
@@ -1770,6 +1807,7 @@ export function subscribeToUserData(
   const workspaceRidersRef = collection(db, 'workspaces', userId, 'riders');
   const workspaceEntriesRef = collection(db, 'workspaces', userId, 'entries');
   const workspaceSettlementsRef = collection(db, 'workspaces', userId, 'settlements');
+  const workspaceAdvancesRef = collection(db, 'workspaces', userId, 'advances');
 
   const unsubRiders = onSnapshot(
     workspaceRidersRef,
@@ -1789,6 +1827,21 @@ export function subscribeToUserData(
     (error) => {
       console.warn('Warning listening to workspace riders collection:', error);
       callbacks.onError?.(error);
+    }
+  );
+
+  const unsubAdvances = onSnapshot(
+    workspaceAdvancesRef,
+    (snapshot) => {
+      advancesMap.clear();
+      snapshot.forEach((docSnap) => {
+        const adv = docSnap.data() as RiderAdvanceEntry;
+        advancesMap.set(docSnap.id, adv);
+      });
+      notifyRiders();
+    },
+    (error) => {
+      console.warn('Warning listening to workspace advances collection:', error);
     }
   );
 
@@ -1834,6 +1887,7 @@ export function subscribeToUserData(
 
   return () => {
     unsubRiders();
+    unsubAdvances();
     unsubEntries();
     unsubSettlements();
   };
@@ -2725,8 +2779,11 @@ export async function writeAdvanceEntryToFirestore(
     riderName?: string;
     riderPhone?: string;
     amount: number;
+    remainingAmount?: number;
     date: string;
     reason?: string;
+    isSettled?: boolean;
+    status?: 'PENDING' | 'SETTLED' | string;
     runningBalance?: number;
   }
 ): Promise<string> {
@@ -2737,6 +2794,9 @@ export async function writeAdvanceEntryToFirestore(
     riderName: advance.riderName || '',
     riderPhone: advance.riderPhone || '',
     amount: advance.amount,
+    remainingAmount: advance.remainingAmount !== undefined ? advance.remainingAmount : advance.amount,
+    isSettled: Boolean(advance.isSettled),
+    status: Boolean(advance.isSettled) ? 'SETTLED' : 'PENDING',
     date: advance.date,
     reason: advance.reason,
     runningBalance: advance.runningBalance || advance.amount,
@@ -2762,6 +2822,42 @@ export async function writeAdvanceEntryToFirestore(
   }
 
   return advId;
+}
+
+/**
+ * Wipe ONLY unsettled/pending advance records from Firestore backend
+ * while retaining all historical settled advances (isSettled === true).
+ */
+export async function purgeUnsettledAdvancesFromFirestore(userId?: string): Promise<void> {
+  try {
+    // 1. Root /advances collection
+    const q1 = query(collection(db, 'advances'), where('isSettled', '!=', true));
+    const snap1 = await getDocs(q1);
+    for (const d of snap1.docs) {
+      const data = d.data();
+      // Double check it's not settled or paid
+      if (data.isSettled !== true && data.status !== 'PAID') {
+        await deleteDoc(d.ref).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn('Notice purging root unsettled advances:', err);
+  }
+
+  if (userId) {
+    try {
+      const qWs = query(collection(db, 'workspaces', userId, 'advances'), where('isSettled', '!=', true));
+      const snapWs = await getDocs(qWs);
+      for (const d of snapWs.docs) {
+        const data = d.data();
+        if (data.isSettled !== true && data.status !== 'PAID') {
+          await deleteDoc(d.ref).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.warn('Notice purging workspace unsettled advances:', err);
+    }
+  }
 }
 
 /**

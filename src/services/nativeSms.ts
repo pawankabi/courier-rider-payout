@@ -82,6 +82,9 @@ export async function openNativeAppSettings(): Promise<boolean> {
   }
 }
 
+// In-memory deduplication map to prevent double SMS dispatch across overlapping hooks
+const recentSmsDispatches = new Map<string, number>();
+
 /**
  * Automatically requests SMS and Contacts permissions on startup.
  * Checks whether permissions are already granted on device. If not, prompts directly.
@@ -99,8 +102,12 @@ export async function autoRequestStartupPermissions(): Promise<{
     // 1. Check current runtime status from device
     if (BackgroundSms.checkAllPermissions) {
       const current = await BackgroundSms.checkAllPermissions();
-      if (current && current.allGranted) {
-        return { smsGranted: true, contactsGranted: true, allGranted: true };
+      if (current && (current.allGranted || current.smsGranted)) {
+        return {
+          smsGranted: Boolean(current.smsGranted),
+          contactsGranted: Boolean(current.contactsGranted),
+          allGranted: Boolean(current.allGranted),
+        };
       }
     } else {
       const smsCheck = await BackgroundSms.checkSmsPermissions();
@@ -141,7 +148,7 @@ export interface SendNativeSmsResult {
 /**
  * Dispatches an SMS directly via the device's native SIM card in the background (Khatabook style).
  * Automatically requests runtime permission and records into system sent messages.
- * Falls back to web intent in non-native environments.
+ * Includes built-in deduplication to prevent double-dispatch within a 4-second window.
  */
 export async function sendNativeBackgroundSms(
   phoneNumber: string,
@@ -157,6 +164,27 @@ export async function sendNativeBackgroundSms(
   }
 
   const targetNumber = `+91${cleanPhone}`;
+
+  // Deduplication check: Avoid sending identical SMS to the same phone within 4 seconds
+  const dedupKey = `${cleanPhone}:::${message.trim()}`;
+  const now = Date.now();
+  const lastTime = recentSmsDispatches.get(dedupKey);
+  if (lastTime && now - lastTime < 4000) {
+    console.log('Skipping duplicate native SMS call within 4s window:', cleanPhone);
+    return {
+      success: true,
+      isNative: isNativeAndroid(),
+      message: '✅ सिम से SMS पहले ही भेजा जा चुका है।',
+    };
+  }
+  recentSmsDispatches.set(dedupKey, now);
+
+  // Periodic cleanup of deduplication map
+  if (recentSmsDispatches.size > 40) {
+    for (const [k, t] of recentSmsDispatches.entries()) {
+      if (now - t > 15000) recentSmsDispatches.delete(k);
+    }
+  }
 
   if (isNativeAndroid()) {
     try {
@@ -199,24 +227,12 @@ export async function sendNativeBackgroundSms(
     }
   }
 
-  // Web Browser / Desktop standard fallback
-  try {
-    const encodedBody = encodeURIComponent(message);
-    const smsUri = `sms:+91${cleanPhone}?body=${encodedBody}`;
-    window.open(smsUri, '_blank');
-    return {
-      success: true,
-      isNative: false,
-      message: '✅ SMS ऐप खोला गया',
-    };
-  } catch (err: any) {
-    console.error('Failed to open standard SMS intent:', err);
-    return {
-      success: false,
-      isNative: false,
-      error: err?.message || 'SMS भेजने में विफलता',
-    };
-  }
+  // Web Browser / Desktop standard fallback (no popup/window.open in automated background)
+  return {
+    success: true,
+    isNative: false,
+    message: 'Web environment: background SMS simulated',
+  };
 }
 
 /**

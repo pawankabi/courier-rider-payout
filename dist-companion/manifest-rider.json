@@ -1,0 +1,21 @@
+{
+  "id": "/cod-entry",
+  "name": "Rider Companion (COD Entry & हिसाब किताब)",
+  "short_name": "RiderEntry",
+  "description": "Rider Delivery Companion App for Daily Cash-on-Delivery (COD) reconciliation and hisaab kitaab.",
+  "theme_color": "#030712",
+  "background_color": "#030712",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
+  "orientation": "portrait",
+  "start_url": "/#cod-entry",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/rider-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

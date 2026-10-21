@@ -67,7 +67,7 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
+define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
 
   self.skipWaiting();
   workbox.clientsClaim();
@@ -77,6 +77,9 @@ define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
+    "url": "rider-logo.svg",
+    "revision": "142e513c97461268beddf40e123b02b1"
+  }, {
     "url": "pwa-maskable-512x512.png",
     "revision": "244e3e0340aec312855153ab7c5bb6c3"
   }, {
@@ -87,24 +90,27 @@ define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
     "revision": "aa07c895c7e9965a366d532e2da256ca"
   }, {
     "url": "index.html",
-    "revision": "437423ffbe91d9fa3b9b31f63d7d8154"
+    "revision": "e04a5ff12c2807f36b3ba297ebd77a05"
   }, {
     "url": "icon.svg",
-    "revision": "86fdebc55d4f142947971951437ca70d"
+    "revision": "71ec083ef2733f3feaf10cff3875f9ce"
   }, {
     "url": "apple-touch-icon.png",
     "revision": "b3ea2e34925e1c8c3e73a10afc6acdaa"
   }, {
-    "url": "assets/web-DiefYeuk.js",
+    "url": "admin-logo.svg",
+    "revision": "71ec083ef2733f3feaf10cff3875f9ce"
+  }, {
+    "url": "assets/web-XtEqr0je.js",
     "revision": null
   }, {
-    "url": "assets/web-D6ISaUks.js",
+    "url": "assets/web-Dmu-Bgnf.js",
     "revision": null
   }, {
-    "url": "assets/web-CEY7c3-x.js",
+    "url": "assets/web-BLGzOeHd.js",
     "revision": null
   }, {
-    "url": "assets/web-BotgK4P0.js",
+    "url": "assets/web-B7lp8Q-2.js",
     "revision": null
   }, {
     "url": "assets/vendor-react-jrF7e2F0.js",
@@ -119,26 +125,26 @@ define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
     "url": "assets/purify.es-DedTAGkB.js",
     "revision": null
   }, {
-    "url": "assets/native-qHU4o7Sx.js",
+    "url": "assets/native-y4uUnXzG.js",
     "revision": null
   }, {
     "url": "assets/index.es-CsLtj_j5.js",
     "revision": null
   }, {
-    "url": "assets/index-CurJ-dPf.js",
+    "url": "assets/index-BiZ_SVCP.css",
     "revision": null
   }, {
-    "url": "assets/index-C8fNwXEO.css",
+    "url": "assets/index--YvqG_k3.js",
     "revision": null
   }, {
-    "url": "assets/base-DtTBtuDo.js",
+    "url": "assets/base-Bsa3YD8J.js",
     "revision": null
   }, {
     "url": "apple-touch-icon.png",
     "revision": "b3ea2e34925e1c8c3e73a10afc6acdaa"
   }, {
     "url": "icon.svg",
-    "revision": "86fdebc55d4f142947971951437ca70d"
+    "revision": "71ec083ef2733f3feaf10cff3875f9ce"
   }, {
     "url": "pwa-192x192.png",
     "revision": "aa07c895c7e9965a366d532e2da256ca"
@@ -158,21 +164,32 @@ define(['./workbox-b38717c4'], (function (workbox) { 'use strict';
   }));
   workbox.registerRoute(({
     request
-  }) => request.mode === "navigate", new workbox.StaleWhileRevalidate({
+  }) => request.mode === "navigate", new workbox.NetworkFirst({
     "cacheName": "pwa-app-shell",
+    "networkTimeoutSeconds": 3,
     plugins: [new workbox.CacheableResponsePlugin({
       statuses: [0, 200]
     })]
   }), 'GET');
   workbox.registerRoute(({
     request
-  }) => request.destination === "script" || request.destination === "style" || request.destination === "worker", new workbox.CacheFirst({
+  }) => request.destination === "script" || request.destination === "style" || request.destination === "worker", new workbox.NetworkFirst({
     "cacheName": "pwa-static-assets",
+    "networkTimeoutSeconds": 3,
     plugins: [new workbox.CacheableResponsePlugin({
       statuses: [0, 200]
     }), new workbox.ExpirationPlugin({
       maxEntries: 100,
       maxAgeSeconds: 2592000
+    })]
+  }), 'GET');
+  workbox.registerRoute(({
+    url
+  }) => url.pathname.includes("/statement") || url.pathname.includes("/public_statements") || url.hostname.includes("firestore.googleapis.com"), new workbox.NetworkFirst({
+    "cacheName": "pwa-ledger-data",
+    "networkTimeoutSeconds": 2.5,
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
     })]
   }), 'GET');
   workbox.registerRoute(({

@@ -251,6 +251,7 @@ export function createNewStaffUser(params: {
   canVerifyCod?: boolean;
   canVerifyCash?: boolean;
   canVerifyOnline?: boolean;
+  canEditEntries?: boolean;
 }): CodStaffUser {
   return {
     id: `staff_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -262,6 +263,7 @@ export function createNewStaffUser(params: {
     canVerifyCod: params.canVerifyCod ?? (params.role !== 'rider'),
     canVerifyCash: params.canVerifyCash ?? (params.role === 'hub_incharge' || params.role === 'supervisor'),
     canVerifyOnline: params.canVerifyOnline ?? (params.role !== 'rider'),
+    canEditEntries: params.canEditEntries ?? false,
     createdAt: new Date().toISOString(),
   };
 }
@@ -2088,9 +2090,6 @@ export async function convertCodShortageToAdvance(
     // "Hub Alert: Aapke aaj ke COD shortage ka ₹{shortageAmount} advance account me jod diya gaya hai."
     const smsMessage = `Hub Alert: Aapke aaj ke COD shortage ka ₹${shortageAmount} advance account me jod diya gaya hai.`;
     if (cleanPhone) {
-      if (isNativeAndroid()) {
-        sendNativeBackgroundSms(cleanPhone, smsMessage).catch(() => {});
-      }
       dispatchAutomatedSms({
         riderPhone: cleanPhone,
         riderName,

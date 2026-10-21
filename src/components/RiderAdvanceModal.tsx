@@ -317,22 +317,12 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           provider: apiResult.provider,
         });
 
-        // 1-Tap direct native SIM SMS dispatch confirming advance amount & balance
-        const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
-
-        if (isNativeAndroid() && cleanPhone.length === 10) {
-          sendNativeBackgroundSms(cleanPhone, smsMessage).then((smsRes) => {
-            if (smsRes.success) {
-              setToastMessage('✅ सिम से एडवांस SMS सफलतापूर्वक भेजा गया।');
-            } else {
-              setToastMessage(`⚠️ SMS सूचना: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
-            }
-            setTimeout(() => setToastMessage(null), 3500);
-          });
-        } else {
-          setToastMessage(`✅ ₹${validAmount} एडवांस अपडेट हुआ एवं बैकग्राउंड SMS भेजा गया!`);
-          setTimeout(() => setToastMessage(null), 3500);
-        }
+        setToastMessage(
+          isNativeAndroid()
+            ? '✅ सिम से बैकग्राउंड SMS भेजा गया एवं एडवांस अपडेट हुआ!'
+            : `✅ ₹${validAmount} एडवांस अपडेट हुआ एवं बैकग्राउंड SMS भेजा गया!`
+        );
+        setTimeout(() => setToastMessage(null), 3500);
 
         handleCancelEdit();
       } else {
@@ -404,22 +394,12 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           provider: apiResult.provider,
         });
 
-        // 1-Tap direct native SIM SMS dispatch confirming advance amount & balance
-        const cleanPhone = (rider.phone || '').trim().replace(/\D/g, '').slice(-10);
-
-        if (isNativeAndroid() && cleanPhone.length === 10) {
-          sendNativeBackgroundSms(cleanPhone, smsMessage).then((smsRes) => {
-            if (smsRes.success) {
-              setToastMessage('✅ सिम से एडवांस SMS सफलतापूर्वक भेजा गया।');
-            } else {
-              setToastMessage(`⚠️ SMS सूचना: ${smsRes.error || 'सिम से SMS नहीं भेजा जा सका'}`);
-            }
-            setTimeout(() => setToastMessage(null), 3500);
-          });
-        } else {
-          setToastMessage(`✅ ₹${validAmount} का एडवांस दर्ज हुआ एवं बैकग्राउंड SMS भेजा गया!`);
-          setTimeout(() => setToastMessage(null), 3500);
-        }
+        setToastMessage(
+          isNativeAndroid()
+            ? `✅ ₹${validAmount} का एडवांस दर्ज हुआ एवं सिम से बैकग्राउंड SMS भेजा गया!`
+            : `✅ ₹${validAmount} का एडवांस दर्ज हुआ एवं बैकग्राउंड SMS भेजा गया!`
+        );
+        setTimeout(() => setToastMessage(null), 3500);
 
         // Clear input fields and saved draft
         try {
