@@ -20,6 +20,11 @@ interface Props {
 }
 
 export const PWAInstallBanner: React.FC<Props> = ({ variant = 'banner' }) => {
+  // Completely disable top PWA install banner so it never appears
+  if (variant === 'banner') {
+    return null;
+  }
+
   const { isInstallable, isInstalled, isIOS, isOnline, isInIframe, install } = usePWAInstall();
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);

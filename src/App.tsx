@@ -2410,9 +2410,6 @@ function MainCourierApp() {
         </div>
       )}
 
-      {/* PWA Install Banner - Only visible to Master Admin */}
-      {isAdmin && <PWAInstallBanner variant="banner" />}
-
       {/* Subscription Alert & Renewal Banner - 3-day Expiry Alert */}
       <SubscriptionAlertBanner
         userSubscription={userSubscription}
