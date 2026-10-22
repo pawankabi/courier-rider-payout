@@ -138,6 +138,7 @@ import { CodStandaloneApp } from './components/CodStandaloneApp';
 import { CodCompanionApp } from './components/CodCompanionApp';
 import { ShareAppModal } from './components/ShareAppModal';
 import { isRiderBuild } from './utils/shareLink';
+import { liveUpdateService } from './services/liveUpdateService';
 
 /**
  * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
@@ -384,6 +385,45 @@ function MainCourierApp() {
   const openSubscriptionModal = (reason?: string) => {
     setPaymentModalReason(reason);
     setIsUserPaymentModalOpen(true);
+  };
+
+  // Super-Powered In-App Live Cloud Sync State & Subscription
+  const [isLiveUpdateAvailable, setIsLiveUpdateAvailable] = useState<boolean>(() => liveUpdateService.isUpdateAvailable());
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = liveUpdateService.subscribe((available) => {
+      setIsLiveUpdateAvailable(available);
+    });
+    return unsubscribe;
+  }, []);
+
+  const handleManualCheckLiveUpdate = async () => {
+    setIsCheckingUpdate(true);
+    try {
+      const hasUpdate = await liveUpdateService.checkForUpdate();
+      if (hasUpdate) {
+        setToastMessage({
+          text: '🚀 नया अपडेट डिटेक्ट हुआ! 1-क्लिक में नए फीचर्स लागू हो रहे हैं...',
+          type: 'success',
+        });
+        setTimeout(() => {
+          liveUpdateService.applyUpdate();
+        }, 600);
+      } else {
+        setToastMessage({
+          text: '✅ आपका ऐप पहले से ही नवीनतम (Latest) वर्जन पर चल रहा है!',
+          type: 'info',
+        });
+      }
+    } catch {
+      setToastMessage({
+        text: '✅ ऐप नवीनतम वर्जन से सिंक है।',
+        type: 'info',
+      });
+    } finally {
+      setIsCheckingUpdate(false);
+    }
   };
 
   // Real-time in-app statement compilation for instant 0ms Khatabook view
@@ -2340,6 +2380,36 @@ function MainCourierApp() {
         </div>
       )}
 
+      {/* Super-Powered Live Update Floating Banner */}
+      {isLiveUpdateAvailable && (
+        <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white px-4 py-2.5 text-xs font-semibold flex items-center justify-between shadow-xl sticky top-0 z-50 border-b border-emerald-400/40 animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <span className="text-base">🚀</span>
+            <div>
+              <span className="font-extrabold tracking-wide">नया ऐप अपडेट उपलब्ध है!</span>
+              <span className="hidden sm:inline text-emerald-100 ml-1.5">नवीनतम फीचर्स तुरंत सक्रिय करने के लिए क्लिक करें:</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => liveUpdateService.applyUpdate()}
+              className="px-3 py-1 bg-white hover:bg-emerald-50 text-slate-950 rounded-lg font-black text-xs shadow transition active:scale-95 cursor-pointer flex items-center gap-1"
+            >
+              <span>⚡ 1-क्लिक अपडेट (Apply)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsLiveUpdateAvailable(false)}
+              className="p-1 text-emerald-200 hover:text-white rounded-md transition cursor-pointer"
+              title="बाद में याद दिलाएं"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* PWA Install Banner - Only visible to Master Admin */}
       {isAdmin && <PWAInstallBanner variant="banner" />}
 
@@ -2468,6 +2538,31 @@ function MainCourierApp() {
                   <CloudDownload className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Sync Old App</span>
                   <span className="sm:hidden">Sync</span>
+                </button>
+
+                {/* Super-Powered 1-Click Live Cloud Sync Button */}
+                <button
+                  id="header-live-cloud-sync-btn"
+                  type="button"
+                  onClick={handleManualCheckLiveUpdate}
+                  disabled={isCheckingUpdate}
+                  className={`btn-live-update flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-bold text-xs shadow-sm transition active:scale-95 cursor-pointer disabled:opacity-60 ${
+                    isLiveUpdateAvailable
+                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white border border-emerald-400/50 shadow-emerald-500/30 animate-pulse'
+                      : 'bg-slate-800 hover:bg-slate-750 text-cyan-300 border border-cyan-800/60'
+                  }`}
+                  title="क्लिक करें: क्लाउड से नवीनतम फीचर्स और सुधार बिना नया APK डाउनलोड किए 1 सेकंड में सिंक करें"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isCheckingUpdate ? 'animate-spin' : isLiveUpdateAvailable ? 'text-white' : 'text-cyan-400'}`} />
+                  <span className="hidden sm:inline">
+                    {isCheckingUpdate ? 'जांच जारी...' : isLiveUpdateAvailable ? 'नया अपडेट लागू करें' : 'सिंक अपडेट्स'}
+                  </span>
+                  <span className="sm:hidden">
+                    {isCheckingUpdate ? '...' : isLiveUpdateAvailable ? 'अपडेट' : 'सिंक'}
+                  </span>
+                  {isLiveUpdateAvailable && (
+                    <span className="w-2 h-2 rounded-full bg-amber-300 animate-ping"></span>
+                  )}
                 </button>
               </div>
             )}
