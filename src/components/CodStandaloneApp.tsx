@@ -396,12 +396,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
   }, [activeUser.role, isSuperAdmin]);
 
   // Check if current user is authorized to edit financial rows:
-  // Strictly false by default for all office staff unless canEditEntries is explicitly granted.
+  // Strictly false for all office staff: Staff can only inspect & tick (✓) for tally verification.
   const canUserEditEntries = useMemo(() => {
     if (isOwnerOrMasterAdmin || activeUser.role === 'owner') return true;
-    if (currentStaff?.canEditEntries === true) return true;
     return false;
-  }, [isOwnerOrMasterAdmin, activeUser.role, currentStaff]);
+  }, [isOwnerOrMasterAdmin, activeUser.role]);
 
   // Effective Lock state against editing
   const isGridLocked = useMemo(() => {

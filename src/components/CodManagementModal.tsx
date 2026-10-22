@@ -1173,8 +1173,8 @@ export const CodManagementModal: React.FC<Props> = ({
                       filteredRows.map((row, idx) => {
                         const isSelfRider = activeUser.role === 'rider' && activeUser.riderId === row.riderId;
                         const canEditRow = 
-                          (activeUser.role === 'hub_incharge' || activeUser.role === 'owner' || isSelfRider) &&
-                          (!isDayLocked || activeUser.role === 'hub_incharge' || activeUser.role === 'owner');
+                          (activeUser.role === 'owner' || isSuperAdmin || isSelfRider) &&
+                          (!isDayLocked || activeUser.role === 'owner' || isSuperAdmin);
 
                         return (
                           <tr

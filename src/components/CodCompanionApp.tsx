@@ -85,6 +85,13 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   // Authentication State
   const [authUser, setAuthUser] = useState<CodStaffUser | null>(() => getStoredCodCompanionUser());
   const [authenticatedHubId, setAuthenticatedHubId] = useState<string | null>(() => getActiveCompanionHubId());
+  const [loginPortalMode, setLoginPortalMode] = useState<'rider' | 'staff'>(() => {
+    try {
+      const saved = localStorage.getItem('cp_login_portal_mode');
+      if (saved === 'rider' || saved === 'staff') return saved;
+    } catch {}
+    return 'rider';
+  });
   const [phoneInput, setPhoneInput] = useState(() => normalizePhoneNumber(initialPhone || ''));
   const [pinInput, setPinInput] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -427,6 +434,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   };
 
   // Can the current user edit the given row?
+  // Strict Security Rule: Office Staff can ONLY inspect & tick (✓) for tallying collections.
+  // All editing features are strictly disabled for Office Staff.
   const canEditRow = (row: CodDailyEntry): boolean => {
     if (isPastDate) return false; // Fail-Safe Auto Midnight Lock: All past dates are strictly READ-ONLY
     if (isDayEndLocked) return false; // Day-End Lock engages absolute lockdown
@@ -436,27 +445,18 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       return isMatchingRiderRow(row);
     }
 
-    // Hub Incharge can edit any row
-    if (isHubIncharge) return true;
-
-    // Team Leader & Supervisor can review, but primary entry is rider's or incharge's
-    return isSupervisor;
+    // Office Staff Login: All editing features are strictly disabled!
+    // Staff can only inspect and tick (✓) to verify / tally entries.
+    return false;
   };
 
-  // Can verify specific field
-  const canVerifyField = (field: 'company1' | 'company2' | 'cash' | 'online'): boolean => {
+  // Can verify specific field: Office staff is fully authorized to inspect and tick (✓) for tally verification
+  const canVerifyField = (_field: 'company1' | 'company2' | 'cash' | 'online'): boolean => {
     if (isPastDate || isDayEndLocked) return false;
     if (isRider) return false; // Riders can never verify themselves
-    if (isHubIncharge) return true;
-
-    if (field === 'company1' || field === 'company2') {
-      return Boolean(authUser?.canVerifyCod);
-    }
-    if (field === 'cash') {
-      return Boolean(authUser?.canVerifyCash);
-    }
-    if (field === 'online') {
-      return Boolean(authUser?.canVerifyOnline);
+    // Office staff (supervisor, team leader, incharge) is fully authorized to inspect & tick (✓)
+    if (!isRider) {
+      return true;
     }
     return false;
   };
@@ -658,6 +658,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       return;
     }
 
+    if (!isRider) {
+      showToast('🔒 ऑफिस स्टाफ के लिए एडिट बंद है। आप केवल जांच कर (✓) टिक कर सकते हैं।', 'info');
+      return;
+    }
+
     if (!canEditRow(targetRow)) {
       if (isPastDate) {
         showToast('🔒 पुरानी तारीख का हिसाब केवल पढ़ने के लिए है (Read-Only)', 'error');
@@ -698,6 +703,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   // Save Row with instant optimistic UI update + direct Firestore write
   const handleSaveEditRow = async () => {
     if (!editingEntry || !authUser) return;
+    if (!isRider) {
+      showToast('🔒 ऑफिस स्टाफ के लिए एडिट बंद है। केवल (✓) टिक सत्यापन की अनुमति है।', 'error');
+      setEditingEntry(null);
+      return;
+    }
     if (isRider && !isMatchingRiderRow(editingEntry)) {
       showToast('⚠️ आप केवल अपनी खुद की एंट्री सेव कर सकते हैं।', 'error');
       return;
@@ -1215,259 +1225,486 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   }
 
   // =========================================================================
-  // VIEW 1: CLEAN SIMPLE LOGIN SCREEN (White / Light Theme)
+  // VIEW 1: DUAL-PORTAL LOGIN SCREEN (Rider vs Distinct Multicolor Staff)
   // =========================================================================
   if (!authUser) {
+    const isStaffPortal = loginPortalMode === 'staff';
+
     return (
-      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-emerald-500 selection:text-white">
-        {/* Subtle Background Glow */}
-        <div className="fixed inset-0 pointer-events-none opacity-40">
-          <div className="absolute -top-40 -left-40 w-96 h-96 bg-emerald-100/60 rounded-full blur-3xl" />
-          <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-100/60 rounded-full blur-3xl" />
-        </div>
+      <div className={`min-h-screen flex flex-col justify-center items-center px-4 py-8 font-sans selection:bg-fuchsia-500 selection:text-white transition-colors duration-500 ${
+        isStaffPortal ? 'bg-slate-950 text-white' : 'bg-slate-50 text-slate-900'
+      }`}>
+        {/* Ambient Glowing Orbs */}
+        {isStaffPortal ? (
+          <div className="fixed inset-0 pointer-events-none overflow-hidden">
+            <div className="absolute -top-32 -left-32 w-96 h-96 bg-violet-600/30 rounded-full blur-3xl animate-pulse" />
+            <div className="absolute top-1/4 -right-32 w-96 h-96 bg-fuchsia-600/25 rounded-full blur-3xl" />
+            <div className="absolute -bottom-32 left-1/4 w-96 h-96 bg-cyan-500/25 rounded-full blur-3xl" />
+            <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-amber-500/20 rounded-full blur-3xl" />
+          </div>
+        ) : (
+          <div className="fixed inset-0 pointer-events-none opacity-40">
+            <div className="absolute -top-40 -left-40 w-96 h-96 bg-emerald-100/60 rounded-full blur-3xl" />
+            <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-100/60 rounded-full blur-3xl" />
+          </div>
+        )}
 
         {/* Clear & Prominent Back to Admin Dashboard Header Button */}
         {onBackToMainApp && (
-          <div className="w-full max-w-md mb-4 z-20 animate-in fade-in slide-in-from-top-2">
+          <div className="w-full max-w-md mb-3 z-20 animate-in fade-in slide-in-from-top-2">
             <button
               type="button"
               id="companion-login-top-back-to-admin-btn"
               onClick={onBackToMainApp}
-              className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-xs sm:text-sm shadow-lg transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer border border-slate-700 hover:border-emerald-500/50"
+              className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs shadow-lg transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer border ${
+                isStaffPortal
+                  ? 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border-slate-700/80 hover:border-violet-500/50'
+                  : 'bg-slate-900 hover:bg-slate-800 text-white border-slate-700 hover:border-emerald-500/50'
+              }`}
             >
-              <ChevronLeft className="w-5 h-5 text-emerald-400 shrink-0" />
+              <ChevronLeft className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
             </button>
           </div>
         )}
 
-        {/* Card Container */}
-        <div className="relative w-full max-w-md bg-white border border-slate-200/90 rounded-2xl shadow-xl p-6 sm:p-8 z-10">
-          {/* Logo & Title */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-slate-950 border border-sky-500/40 p-1 shadow-lg shadow-sky-950/40 mb-4 animate-in zoom-in-95">
-              <img src="/rider-logo.svg" alt="Rider Logo" className="w-14 h-14 rounded-xl object-contain" />
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 flex items-center justify-center gap-2">
-              <span>COD Entry</span>
-              <span className="text-emerald-600 font-hindi">(हिसाब किताब)</span>
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
-              डिलीवरी बॉय & हब स्टाफ साथी ऐप • 0s लाइव सिंक
-            </p>
-          </div>
-
-          {/* Form */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleLogin();
-            }}
-            className="space-y-5"
-          >
-            {/* Input 1: Registered Mobile Number (10 digits) */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                रजिस्टर्ड मोबाइल नंबर <span className="text-emerald-600 font-normal">(10 अंक)</span>
-              </label>
-              <div className="relative rounded-xl shadow-inner">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 text-sm font-semibold">
-                  <Phone className="w-4 h-4 mr-1 text-slate-400" />
-                  <span>+91</span>
-                </div>
-                <input
-                  type="tel"
-                  pattern="[0-9]*"
-                  maxLength={10}
-                  inputMode="numeric"
-                  placeholder="9876543210"
-                  value={phoneInput}
-                  onChange={(e) => {
-                    const clean = normalizePhoneNumber(e.target.value);
-                    setPhoneInput(clean);
-                    if (loginError) setLoginError('');
-                  }}
-                  onPaste={(e) => {
-                    const pasted = e.clipboardData?.getData('text') || '';
-                    const clean = normalizePhoneNumber(pasted);
-                    if (clean) {
-                      e.preventDefault();
-                      setPhoneInput(clean);
-                      if (loginError) setLoginError('');
-                    }
-                  }}
-                  autoFocus
-                  required
-                  className="w-full pl-20 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 text-base font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition"
-                />
-              </div>
-            </div>
-
-            {/* Input 2: 4-Digit Security PIN */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                4-अंकों का सिक्योरिटी PIN <span className="text-emerald-600 font-normal">(Security PIN)</span>
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <KeyRound className="w-4 h-4" />
-                </div>
-                <input
-                  type="password"
-                  maxLength={4}
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  placeholder="••••"
-                  value={pinInput}
-                  onChange={(e) => {
-                    const clean = e.target.value.replace(/\D/g, '').slice(0, 4);
-                    setPinInput(clean);
-                    if (loginError) setLoginError('');
-                  }}
-                  required
-                  className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 text-xl font-mono tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition"
-                />
-              </div>
-            </div>
-
-            {/* Error Message in Hindi */}
-            {loginError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
-                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-                <span className="font-medium">{loginError}</span>
-              </div>
-            )}
-
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={isLoggingIn || phoneInput.length !== 10 || pinInput.length !== 4}
-              className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 transition transform active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
-            >
-              {isLoggingIn ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>सत्यापन हो रहा है...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-5 h-5 text-emerald-100" />
-                  <span>लॉगिन करें (Sign In)</span>
-                </>
-              )}
-            </button>
-          </form>
-
-          {/* Quick Demo Login Switcher */}
-          <div className="mt-6 pt-6 border-t border-slate-200">
+        {/* Portal Switcher Tabs: 🏍️ राइडर लॉगिन vs 🏢 ऑफिस स्टाफ लॉगिन */}
+        <div className="w-full max-w-md mb-4 z-20 animate-in fade-in slide-in-from-top-1">
+          <div className={`grid grid-cols-2 p-1.5 rounded-2xl border shadow-xl backdrop-blur-md transition-all ${
+            isStaffPortal
+              ? 'bg-slate-900/90 border-slate-700/80 shadow-purple-950/40'
+              : 'bg-white/90 border-slate-200 shadow-slate-200/50'
+          }`}>
             <button
               type="button"
-              onClick={() => setShowDemoLogins(!showDemoLogins)}
-              className="w-full flex items-center justify-between text-xs text-slate-500 hover:text-emerald-600 py-1 transition"
+              onClick={() => {
+                setLoginPortalMode('rider');
+                setLoginError('');
+                try { localStorage.setItem('cp_login_portal_mode', 'rider'); } catch {}
+              }}
+              className={`py-2.5 px-3 rounded-xl font-extrabold text-xs sm:text-sm transition flex items-center justify-center gap-2 cursor-pointer ${
+                !isStaffPortal
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40 ring-1 ring-emerald-400/50'
+                  : 'text-slate-400 hover:text-white'
+              }`}
             >
-              <span className="flex items-center gap-1.5 font-medium">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <span>त्वरित परीक्षण / डेमो खाते (Instant 1-Click Test)</span>
-              </span>
-              <span className="text-[11px] bg-slate-100 px-2 py-0.5 rounded text-slate-600 font-semibold">
-                {showDemoLogins ? 'छिपाएं' : 'दिखाएं'}
-              </span>
+              <Bike className="w-4 h-4 shrink-0" />
+              <span>🏍️ राइडर लॉगिन</span>
             </button>
 
-            {showDemoLogins && (
-              <div className="mt-3 space-y-2 text-xs animate-in slide-in-from-top-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPhoneInput('9876543210');
-                      setPinInput('1234');
-                      handleLogin('9876543210', '1234');
+            <button
+              type="button"
+              onClick={() => {
+                setLoginPortalMode('staff');
+                setLoginError('');
+                try { localStorage.setItem('cp_login_portal_mode', 'staff'); } catch {}
+              }}
+              className={`py-2.5 px-3 rounded-xl font-extrabold text-xs sm:text-sm transition flex items-center justify-center gap-2 cursor-pointer ${
+                isStaffPortal
+                  ? 'bg-gradient-to-r from-violet-600 via-fuchsia-600 to-cyan-500 text-white shadow-lg shadow-purple-950/60 ring-1 ring-fuchsia-400/50'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Building2 className="w-4 h-4 text-cyan-300 shrink-0" />
+              <span>🏢 ऑफिस स्टाफ</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
+                isStaffPortal ? 'bg-white/20 text-white' : 'bg-violet-100 text-violet-800'
+              }`}>
+                New
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* ================================================================ */}
+        {/* TAB 1: RIDER LOGIN SCREEN (Clean Emerald Theme)                   */}
+        {/* ================================================================ */}
+        {!isStaffPortal && (
+          <div className="relative w-full max-w-md bg-white border border-slate-200/90 rounded-2xl shadow-xl p-6 sm:p-8 z-10 animate-in fade-in duration-200">
+            {/* Logo & Title */}
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-slate-950 border border-sky-500/40 p-1 shadow-lg shadow-sky-950/40 mb-3 animate-in zoom-in-95">
+                <img src="/rider-logo.svg" alt="Rider Logo" className="w-14 h-14 rounded-xl object-contain" />
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 flex items-center justify-center gap-2">
+                <span>COD Entry</span>
+                <span className="text-emerald-600 font-hindi">(राइडर साथी)</span>
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
+                डिलीवरी बॉय कलेक्शन एंट्री • 0s लाइव सिंक
+              </p>
+            </div>
+
+            {/* Rider Form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleLogin();
+              }}
+              className="space-y-4"
+            >
+              {/* Phone Input */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  रजिस्टर्ड मोबाइल नंबर <span className="text-emerald-600 font-normal">(10 अंक)</span>
+                </label>
+                <div className="relative rounded-xl shadow-inner">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 text-sm font-semibold">
+                    <Phone className="w-4 h-4 mr-1 text-slate-400" />
+                    <span>+91</span>
+                  </div>
+                  <input
+                    type="tel"
+                    pattern="[0-9]*"
+                    maxLength={10}
+                    inputMode="numeric"
+                    placeholder="9876543210"
+                    value={phoneInput}
+                    onChange={(e) => {
+                      const clean = normalizePhoneNumber(e.target.value);
+                      setPhoneInput(clean);
+                      if (loginError) setLoginError('');
                     }}
-                    className="p-2.5 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 rounded-xl text-left transition"
+                    autoFocus
+                    required
+                    className="w-full pl-20 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 text-base font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition"
+                  />
+                </div>
+              </div>
+
+              {/* Security PIN */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  4-अंकों का सिक्योरिटी PIN <span className="text-emerald-600 font-normal">(Security PIN)</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <KeyRound className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="password"
+                    maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="••••"
+                    value={pinInput}
+                    onChange={(e) => {
+                      const clean = e.target.value.replace(/\D/g, '').slice(0, 4);
+                      setPinInput(clean);
+                      if (loginError) setLoginError('');
+                    }}
+                    required
+                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 text-xl font-mono tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition"
+                  />
+                </div>
+              </div>
+
+              {/* Error Message */}
+              {loginError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                  <span className="font-medium">{loginError}</span>
+                </div>
+              )}
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={isLoggingIn || phoneInput.length !== 10 || pinInput.length !== 4}
+                className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 transition transform active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {isLoggingIn ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>सत्यापन हो रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-5 h-5 text-emerald-100" />
+                    <span>लॉगिन करें (Sign In Rider)</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            {/* Rider Instant Demo Login */}
+            <div className="mt-5 pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setPhoneInput('9876543210');
+                  setPinInput('1234');
+                  handleLogin('9876543210', '1234');
+                }}
+                className="w-full p-2.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-left transition flex items-center justify-between"
+              >
+                <div>
+                  <div className="font-bold text-emerald-800 text-xs">🏍️ 1-क्लिक राइडर टेस्ट खाता</div>
+                  <div className="text-[11px] text-emerald-600 font-mono">सुरेश कुमार (9876543210 / 1234)</div>
+                </div>
+                <span className="text-[10px] bg-emerald-600 text-white font-bold px-2 py-1 rounded-lg">
+                  लॉगिन करें ➔
+                </span>
+              </button>
+            </div>
+
+            {/* Switch to Staff Portal Link */}
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginPortalMode('staff');
+                  setLoginError('');
+                }}
+                className="text-xs text-violet-700 hover:text-violet-900 font-bold transition inline-flex items-center gap-1.5"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>ऑफिस स्टाफ हैं? यहाँ से स्टाफ पोर्टल पर जाएँ ➔</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================ */}
+        {/* TAB 2: DISTINCT MULTICOLOR OFFICE STAFF LOGIN SCREEN (New Look)  */}
+        {/* ================================================================ */}
+        {isStaffPortal && (
+          <div className="relative w-full max-w-md z-10 animate-in fade-in zoom-in-95 duration-200">
+            {/* Outer Multicolor Gradient Glow Ring */}
+            <div className="relative p-[2px] rounded-3xl bg-gradient-to-r from-violet-500 via-fuchsia-500 via-amber-400 to-cyan-400 shadow-2xl shadow-indigo-950/80">
+              {/* Inner Frosted Dark Card */}
+              <div className="bg-slate-900/95 backdrop-blur-2xl rounded-[22px] p-6 sm:p-8 text-white border border-white/10">
+                {/* Header Insignia & Multicolor Badges */}
+                <div className="text-center mb-6">
+                  {/* Glowing 3D Insignia Badge */}
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-cyan-400 p-[2px] shadow-xl shadow-fuchsia-950/60 mx-auto mb-3">
+                    <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
+                      <Building2 className="w-8 h-8 text-cyan-300" />
+                    </div>
+                  </div>
+
+                  {/* Top Office Portal Pill */}
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-gradient-to-r from-violet-500/30 via-fuchsia-500/30 to-cyan-500/30 border border-violet-400/40 text-violet-200 mb-2 shadow-inner">
+                    <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>HUB OFFICE STAFF PORTAL • TALLY & AUDIT</span>
+                  </div>
+
+                  {/* Gradient Headline */}
+                  <h1 className="text-2xl sm:text-3xl font-black tracking-tight bg-gradient-to-r from-violet-200 via-pink-200 to-cyan-200 bg-clip-text text-transparent">
+                    हब ऑफिस स्टाफ लॉगिन
+                  </h1>
+                  <p className="text-xs sm:text-sm text-slate-300 font-medium mt-1">
+                    निरीक्षण, कैश टैली एवं (✓) सत्यापन काउंटर
+                  </p>
+
+                  {/* 3 Multicolor Feature Badges */}
+                  <div className="grid grid-cols-3 gap-1.5 mt-3 pt-2 border-t border-slate-800 text-[10px] font-bold">
+                    <div className="bg-cyan-950/60 text-cyan-300 border border-cyan-500/30 py-1 px-1.5 rounded-lg flex items-center justify-center gap-1">
+                      <Search className="w-3 h-3 text-cyan-400 shrink-0" />
+                      <span>जांच (Audit)</span>
+                    </div>
+                    <div className="bg-emerald-950/60 text-emerald-300 border border-emerald-500/30 py-1 px-1.5 rounded-lg flex items-center justify-center gap-1">
+                      <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                      <span>(✓) टिक Tally</span>
+                    </div>
+                    <div className="bg-amber-950/60 text-amber-300 border border-amber-500/30 py-1 px-1.5 rounded-lg flex items-center justify-center gap-1">
+                      <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                      <span>नो एडिट सुरक्षित</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Staff Form */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleLogin();
+                  }}
+                  className="space-y-4"
+                >
+                  {/* Phone Input */}
+                  <div>
+                    <label className="block text-xs font-bold text-violet-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>स्टाफ रजिस्टर्ड मोबाइल नंबर</span>
+                      <span className="text-cyan-400 font-normal">(10 अंक)</span>
+                    </label>
+                    <div className="relative rounded-xl">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 text-sm font-semibold">
+                        <Phone className="w-4 h-4 mr-1 text-cyan-400" />
+                        <span className="text-slate-400">+91</span>
+                      </div>
+                      <input
+                        type="tel"
+                        pattern="[0-9]*"
+                        maxLength={10}
+                        inputMode="numeric"
+                        placeholder="9876543211"
+                        value={phoneInput}
+                        onChange={(e) => {
+                          const clean = normalizePhoneNumber(e.target.value);
+                          setPhoneInput(clean);
+                          if (loginError) setLoginError('');
+                        }}
+                        autoFocus
+                        required
+                        className="w-full pl-20 pr-4 py-3 bg-slate-950/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-base font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Security PIN */}
+                  <div>
+                    <label className="block text-xs font-bold text-violet-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>4-अंकों का स्टाफ सिक्योरिटी PIN</span>
+                      <span className="text-fuchsia-400 font-normal">(Security PIN)</span>
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-fuchsia-400">
+                        <KeyRound className="w-4 h-4" />
+                      </div>
+                      <input
+                        type="password"
+                        maxLength={4}
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="••••"
+                        value={pinInput}
+                        onChange={(e) => {
+                          const clean = e.target.value.replace(/\D/g, '').slice(0, 4);
+                          setPinInput(clean);
+                          if (loginError) setLoginError('');
+                        }}
+                        required
+                        className="w-full pl-10 pr-4 py-3 bg-slate-950/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-xl font-mono tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-fuchsia-400 focus:border-fuchsia-400 transition"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Error Message */}
+                  {loginError && (
+                    <div className="p-3 bg-rose-950/80 border border-rose-500/50 rounded-xl text-rose-200 text-xs flex items-center gap-2 animate-in fade-in">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span className="font-medium">{loginError}</span>
+                    </div>
+                  )}
+
+                  {/* Submit Button with Multicolor Gradient */}
+                  <button
+                    type="submit"
+                    disabled={isLoggingIn || phoneInput.length !== 10 || pinInput.length !== 4}
+                    className="w-full py-3.5 px-4 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-cyan-500 hover:from-violet-500 hover:via-fuchsia-500 hover:to-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black rounded-xl shadow-xl shadow-fuchsia-950/50 transition transform active:scale-98 flex items-center justify-center gap-2 cursor-pointer border border-white/20"
                   >
-                    <div className="font-bold text-emerald-700">🏍️ राइडर खाता</div>
-                    <div className="text-[11px] text-slate-500 font-mono">9876543210 / 1234</div>
+                    {isLoggingIn ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin text-cyan-200" />
+                        <span>स्टाफ सत्यापन हो रहा है...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Building2 className="w-5 h-5 text-cyan-200" />
+                        <span>🏢 स्टाफ लॉगिन करें (Sign In Staff)</span>
+                      </>
+                    )}
                   </button>
+                </form>
+
+                {/* Important Security Notice Banner */}
+                <div className="mt-4 p-3 rounded-xl bg-gradient-to-r from-violet-950/60 via-slate-950 to-cyan-950/60 border border-violet-500/30 text-[11px] text-slate-300 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-amber-300">
+                    <span>🔒 ऑडिट सुरक्षा नियम:</span>
+                  </div>
+                  <p className="leading-relaxed">
+                    ऑफिस स्टाफ केवल राइडर के हिसाब की जांच कर सकते हैं और <strong>(✓) टिक</strong> कर सकते हैं। प्रविष्टियों में कोई बदलाव (Edit) नहीं किया जा सकता।
+                  </p>
+                </div>
+
+                {/* Quick Staff Demo Accounts (Multicolor Cards) */}
+                <div className="mt-5 pt-4 border-t border-slate-800">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                    <span>त्वरित टेस्ट स्टाफ खाते (1-Click Test):</span>
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhoneInput('9876543211');
+                        setPinInput('4321');
+                        handleLogin('9876543211', '4321');
+                      }}
+                      className="p-2 rounded-xl bg-gradient-to-b from-cyan-950/60 to-slate-950 border border-cyan-500/40 hover:border-cyan-400 text-left transition active:scale-95 cursor-pointer"
+                    >
+                      <div className="font-extrabold text-cyan-300 text-[11px] truncate">🎖️ टीम लीडर</div>
+                      <div className="text-[9px] text-slate-400 font-mono">9876543211</div>
+                      <div className="text-[9px] text-cyan-400 font-mono">PIN: 4321</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhoneInput('9876543212');
+                        setPinInput('5678');
+                        handleLogin('9876543212', '5678');
+                      }}
+                      className="p-2 rounded-xl bg-gradient-to-b from-purple-950/60 to-slate-950 border border-purple-500/40 hover:border-purple-400 text-left transition active:scale-95 cursor-pointer"
+                    >
+                      <div className="font-extrabold text-purple-300 text-[11px] truncate">📋 सुपरवाइजर</div>
+                      <div className="text-[9px] text-slate-400 font-mono">9876543212</div>
+                      <div className="text-[9px] text-purple-400 font-mono">PIN: 5678</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhoneInput('9876543213');
+                        setPinInput('9999');
+                        handleLogin('9876543213', '9999');
+                      }}
+                      className="p-2 rounded-xl bg-gradient-to-b from-amber-950/60 to-slate-950 border border-amber-500/40 hover:border-amber-400 text-left transition active:scale-95 cursor-pointer"
+                    >
+                      <div className="font-extrabold text-amber-300 text-[11px] truncate">👑 हब इंचार्ज</div>
+                      <div className="text-[9px] text-slate-400 font-mono">9876543213</div>
+                      <div className="text-[9px] text-amber-400 font-mono">PIN: 9999</div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Switch to Rider Portal Link */}
+                <div className="mt-4 text-center">
                   <button
                     type="button"
                     onClick={() => {
-                      setPhoneInput('9876543211');
-                      setPinInput('4321');
-                      handleLogin('9876543211', '4321');
+                      setLoginPortalMode('rider');
+                      setLoginError('');
                     }}
-                    className="p-2.5 bg-slate-50 hover:bg-sky-50 border border-slate-200 hover:border-sky-200 rounded-xl text-left transition"
+                    className="text-xs text-cyan-400 hover:text-cyan-300 font-bold transition inline-flex items-center gap-1.5 cursor-pointer"
                   >
-                    <div className="font-bold text-sky-700">🎖️ टीम लीडर</div>
-                    <div className="text-[11px] text-slate-500 font-mono">9876543211 / 4321</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPhoneInput('9876543212');
-                      setPinInput('5678');
-                      handleLogin('9876543212', '5678');
-                    }}
-                    className="p-2.5 bg-slate-50 hover:bg-purple-50 border border-slate-200 hover:border-purple-200 rounded-xl text-left transition"
-                  >
-                    <div className="font-bold text-purple-700">📋 सुपरवाइजर</div>
-                    <div className="text-[11px] text-slate-500 font-mono">9876543212 / 5678</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPhoneInput('9876543213');
-                      setPinInput('9999');
-                      handleLogin('9876543213', '9999');
-                    }}
-                    className="p-2.5 bg-slate-50 hover:bg-amber-50 border border-slate-200 hover:border-amber-200 rounded-xl text-left transition"
-                  >
-                    <div className="font-bold text-amber-700">👑 हब इंचार्ज</div>
-                    <div className="text-[11px] text-slate-500 font-mono">9876543213 / 9999</div>
+                    <Bike className="w-3.5 h-3.5" />
+                    <span>राइडर हैं? यहाँ से राइडर लॉगिन पर जाएँ ➔</span>
                   </button>
                 </div>
               </div>
-            )}
-          </div>
-
-          {/* Exit to Main Hub App if triggered */}
-          {onBackToMainApp && !isRiderFlavor && (
-            <div className="mt-6 text-center">
-              <button
-                type="button"
-                onClick={onBackToMainApp}
-                className="text-xs text-slate-600 hover:text-slate-900 transition underline underline-offset-4 font-bold flex items-center justify-center gap-1 mx-auto"
-              >
-                <ChevronLeft className="w-3.5 h-3.5 text-slate-500" />
-                <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
-              </button>
             </div>
-          )}
-
-          {/* Hub Resolution Indicator - Eliminates Not Resolved once valid digits are entered */}
-          <div className="mt-4 pt-3 border-t border-slate-200 text-center text-[10px] text-slate-500 font-mono">
-            {currentHubId ? (
-              <span className="text-emerald-700 font-semibold">
-                Hub: {currentHubId.substring(0, 8)} (सत्यापित हब)
-              </span>
-            ) : resolvedPreviewHub ? (
-              <span className="text-emerald-700 font-semibold">
-                Hub: {resolvedPreviewHub.substring(0, 8)} (सत्यापित हब)
-              </span>
-            ) : isResolvingHub ? (
-              <span className="text-indigo-600 animate-pulse font-medium">
-                हब खोज रहे हैं...
-              </span>
-            ) : phoneInput.length === 10 ? (
-              <span className="text-emerald-600 font-medium">
-                हब: स्वचालित पहचान सक्रिय
-              </span>
-            ) : (
-              <span className="text-slate-400">
-                सुरक्षित कूरियर हब लॉगिन
-              </span>
-            )}
           </div>
+        )}
+
+        {/* Hub Resolution Indicator */}
+        <div className="mt-4 pt-3 text-center text-[10px] font-mono z-10">
+          {currentHubId ? (
+            <span className={isStaffPortal ? 'text-cyan-400 font-semibold' : 'text-emerald-700 font-semibold'}>
+              Hub: {currentHubId.substring(0, 8)} (सत्यापित हब)
+            </span>
+          ) : resolvedPreviewHub ? (
+            <span className={isStaffPortal ? 'text-cyan-400 font-semibold' : 'text-emerald-700 font-semibold'}>
+              Hub: {resolvedPreviewHub.substring(0, 8)} (सत्यापित हब)
+            </span>
+          ) : isResolvingHub ? (
+            <span className="text-violet-400 animate-pulse font-medium">
+              हब खोज रहे हैं...
+            </span>
+          ) : (
+            <span className="text-slate-500">
+              सुरक्षित कूरियर हब लॉगिन • 0s लाइव सिंक
+            </span>
+          )}
         </div>
       </div>
     );
@@ -1556,18 +1793,41 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         </div>
       )}
 
-      {/* 1. STICKY TOP APP BAR (Crisp White with Indigo Header Accent) */}
+      {/* 1. STICKY TOP APP BAR (With Multicolor Office Accent for Staff) */}
       <header className="sticky top-0 z-40 bg-white/95 border-b border-slate-200 backdrop-blur-md px-3 sm:px-6 py-3 shadow-sm">
+        {!isRider && (
+          <div className="h-1 -mt-3 -mx-3 sm:-mx-6 mb-3 bg-gradient-to-r from-violet-600 via-fuchsia-500 via-amber-400 to-cyan-500" />
+        )}
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           {/* Brand & Active User Info */}
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-slate-950 border border-sky-500/40 p-0.5 flex items-center justify-center shrink-0 shadow-sm">
-              <img src="/rider-logo.svg" alt="Rider App Logo" className="w-8 h-8 rounded-lg object-contain" />
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${
+              !isRider 
+                ? 'bg-gradient-to-br from-violet-600 to-cyan-600 p-0.5' 
+                : 'bg-slate-950 border border-sky-500/40 p-0.5'
+            }`}>
+              {!isRider ? (
+                <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+                  <Building2 className="w-5 h-5 text-cyan-300" />
+                </div>
+              ) : (
+                <img src="/rider-logo.svg" alt="Rider App Logo" className="w-8 h-8 rounded-lg object-contain" />
+              )}
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight truncate">
-                  COD Entry <span className="text-indigo-600 font-hindi">(हिसाब किताब)</span>
+                  {!isRider ? (
+                    <>
+                      <span>Office Staff</span>{' '}
+                      <span className="text-violet-600 font-hindi">(सत्यापन व Tally काउंटर)</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>COD Entry</span>{' '}
+                      <span className="text-indigo-600 font-hindi">(हिसाब किताब)</span>
+                    </>
+                  )}
                 </h1>
                 {/* Role Badge */}
                 <span
@@ -1575,15 +1835,15 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                     authUser.role === 'rider'
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : authUser.role === 'team_leader'
-                      ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                      ? 'bg-cyan-100 text-cyan-800 border border-cyan-300 font-bold'
                       : authUser.role === 'supervisor'
-                      ? 'bg-purple-50 text-purple-700 border border-purple-200'
-                      : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      ? 'bg-purple-100 text-purple-800 border border-purple-300 font-bold'
+                      : 'bg-amber-100 text-amber-800 border border-amber-300 font-bold'
                   }`}
                 >
                   {authUser.role === 'rider' && '🏍️ राइडर'}
-                  {authUser.role === 'team_leader' && '🎖️ TL'}
-                  {authUser.role === 'supervisor' && '📋 सुपरवाइजर'}
+                  {authUser.role === 'team_leader' && '🎖️ TL (स्टाफ)'}
+                  {authUser.role === 'supervisor' && '📋 सुपरवाइजर (स्टाफ)'}
                   {authUser.role === 'hub_incharge' && '👑 हब इंचार्ज'}
                 </span>
               </div>
@@ -1654,6 +1914,45 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
       {/* Main Body */}
       <main className="max-w-6xl mx-auto w-full px-3 sm:px-6 pt-4 space-y-4">
+        {/* OFFICE STAFF DEDICATED INSPECTION & TALLY BANNER */}
+        {!isRider && (
+          <div className="rounded-2xl p-[2px] bg-gradient-to-r from-violet-500 via-fuchsia-500 via-amber-400 to-cyan-400 shadow-md animate-in fade-in slide-in-from-top-1">
+            <div className="bg-slate-950 rounded-[14px] p-4 text-white">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600 via-fuchsia-600 to-cyan-500 p-0.5 shrink-0 shadow-md">
+                    <div className="w-full h-full bg-slate-900 rounded-[10px] flex items-center justify-center">
+                      <Building2 className="w-5 h-5 text-cyan-300" />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
+                        <span>🏢 ऑफिस स्टाफ सत्यापन व Tally काउंटर</span>
+                      </h2>
+                      <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full">
+                        ✓ केवल जांच व टिक (✓) मोड
+                      </span>
+                      <span className="text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded-full">
+                        🔒 एडिट बंद है
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      आप सभी राइडर्स के आज के COD व कैश जमा की जांच कर सकते हैं और <strong>(✓) टिक</strong> कर मिलान (Tally) कर सकते हैं। प्रविष्टि एडिट सुरक्षा कारणों से बंद है।
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-cyan-300 bg-cyan-950/80 border border-cyan-500/40 px-3 py-1.5 rounded-xl font-mono font-bold flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                    <span>{displayEntries.length} राइडर्स सूची</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Khatabook Statement */}
         {isRider && (
           <div className="bg-white border border-slate-200 rounded-2xl p-1.5 flex items-center gap-2 shadow-xs">
@@ -2103,7 +2402,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                         </div>
                       </div>
 
-                      {/* Right Action: Edit Button (if allowed) or Read-Only pill */}
+                      {/* Right Action: Edit Button (if allowed) or Read-Only / Tally pill */}
                       <div className="flex items-center gap-2 shrink-0">
                         {canEditThis ? (
                           <button
@@ -2117,6 +2416,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                             <Edit3 className="w-3.5 h-3.5" />
                             <span>एडिट करें</span>
                           </button>
+                        ) : !isRider ? (
+                          <span className="text-[11px] text-violet-700 bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-lg flex items-center gap-1 font-semibold">
+                            <Check className="w-3.5 h-3.5 text-violet-600" />
+                            <span>जांच व (✓) Tally</span>
+                          </span>
                         ) : (
                           <span className="text-[11px] text-slate-400 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg flex items-center gap-1 font-medium">
                             <Eye className="w-3 h-3" />
@@ -2543,6 +2847,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                               >
                                 एडिट
                               </button>
+                            ) : !isRider ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-50 text-violet-700 border border-violet-200 text-xs font-semibold">
+                                <Check className="w-3 h-3 text-violet-600" />
+                                <span>जांच (✓)</span>
+                              </span>
                             ) : (
                               <span className="text-slate-400 text-xs">—</span>
                             )}
