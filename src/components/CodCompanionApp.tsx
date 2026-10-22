@@ -75,6 +75,7 @@ import {
   saveRiderToFirestore,
   syncPublicRiderStatement,
 } from '../services/firestoreSync';
+import { liveUpdateService, CURRENT_LOCAL_VERSION } from '../services/liveUpdateService';
 
 interface CodCompanionAppProps {
   onBackToMainApp?: () => void;
@@ -282,6 +283,38 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     setTimeout(() => {
       setToast(null);
     }, 3800);
+  };
+
+  // Hybrid Live Cloud Sync & OTA State
+  const [isLiveUpdateAvailable, setIsLiveUpdateAvailable] = useState<boolean>(() => liveUpdateService.isUpdateAvailable());
+  const [updateDetails, setUpdateDetails] = useState<{ version?: string; releaseNotes?: string }>({});
+  const [isSyncingLiveCloud, setIsSyncingLiveCloud] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsubscribe = liveUpdateService.subscribe((available, details) => {
+      setIsLiveUpdateAvailable(available);
+      if (details) setUpdateDetails(details);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleManualCloudSync = async () => {
+    setIsSyncingLiveCloud(true);
+    try {
+      const hasUpdate = await liveUpdateService.checkForUpdate(true);
+      if (hasUpdate) {
+        showToast('⚡ नया लाइव क्लाउड अपडेट उपलब्ध है! लागू किया जा रहा है...', 'success');
+        setTimeout(() => {
+          liveUpdateService.applyUpdate();
+        }, 800);
+      } else {
+        showToast(`✅ आप पहले से नवीनतम क्लाउड वर्शन v${CURRENT_LOCAL_VERSION} पर हैं! (लाइव सिंक 0s)`, 'success');
+      }
+    } catch {
+      showToast('क्लाउड सर्वर से संपर्क नहीं हो सका। कृपया इंटरनेट जांचें।', 'error');
+    } finally {
+      setIsSyncingLiveCloud(false);
+    }
   };
 
   // 1. Subscribe to Firebase Firestore real-time listener (0s zero-delay synchronization strictly scoped to authenticatedHubId)
@@ -1268,6 +1301,26 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           </div>
         )}
 
+        {/* Live Cloud OTA Update Notification Banner on Login */}
+        {isLiveUpdateAvailable && (
+          <div className="w-full max-w-md mb-3 z-30 p-3 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white rounded-2xl shadow-xl flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-2.5 w-2.5 relative shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
+              </span>
+              <span className="text-xs font-bold leading-tight">🚀 नया लाइव क्लाउड अपडेट उपलब्ध है ({updateDetails.version || `v${CURRENT_LOCAL_VERSION}`})</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => liveUpdateService.applyUpdate()}
+              className="px-3 py-1.5 bg-white text-emerald-800 text-xs font-black rounded-xl shadow-sm hover:bg-emerald-50 active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
+            >
+              तुरंत सिंक करें
+            </button>
+          </div>
+        )}
+
         {/* Portal Switcher Tabs: 🏍️ राइडर लॉगिन vs 🏢 ऑफिस स्टाफ लॉगिन */}
         <div className="w-full max-w-md mb-4 z-20 animate-in fade-in slide-in-from-top-1">
           <div className={`grid grid-cols-2 p-1.5 rounded-2xl border shadow-xl backdrop-blur-md transition-all ${
@@ -1458,8 +1511,25 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 }}
                 className="text-xs text-violet-700 hover:text-violet-900 font-bold transition inline-flex items-center gap-1.5"
               >
-                <Building2 className="w-3.5 h-3.5" />
                 <span>ऑफिस स्टाफ हैं? यहाँ से स्टाफ पोर्टल पर जाएँ ➔</span>
+              </button>
+            </div>
+
+            {/* Live Cloud Sync Status Footer */}
+            <div className="mt-4 pt-3 border-t border-slate-200/80 flex items-center justify-between text-[11px] text-slate-500">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>हाइब्रिड क्लाउड सिंक: <b className="text-emerald-700">v{CURRENT_LOCAL_VERSION}</b></span>
+              </div>
+              <button
+                type="button"
+                onClick={handleManualCloudSync}
+                disabled={isSyncingLiveCloud}
+                className="text-emerald-700 hover:text-emerald-900 font-bold flex items-center gap-1 transition cursor-pointer"
+                title="नया क्लाउड अपडेट जांचें"
+              >
+                <RefreshCw className={`w-3 h-3 ${isSyncingLiveCloud ? 'animate-spin' : ''}`} />
+                <span>{isSyncingLiveCloud ? 'जांच जारी...' : 'अपडेट जांचें'}</span>
               </button>
             </div>
           </div>
@@ -1677,8 +1747,25 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                     }}
                     className="text-xs text-cyan-400 hover:text-cyan-300 font-bold transition inline-flex items-center gap-1.5 cursor-pointer"
                   >
-                    <Bike className="w-3.5 h-3.5" />
                     <span>राइडर हैं? यहाँ से राइडर लॉगिन पर जाएँ ➔</span>
+                  </button>
+                </div>
+
+                {/* Live Cloud Sync Status Footer */}
+                <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[11px] text-slate-400">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                    <span>हाइब्रिड क्लाउड सिंक: <b className="text-cyan-300">v{CURRENT_LOCAL_VERSION}</b></span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleManualCloudSync}
+                    disabled={isSyncingLiveCloud}
+                    className="text-cyan-400 hover:text-cyan-200 font-bold flex items-center gap-1 transition cursor-pointer"
+                    title="नया क्लाउड अपडेट जांचें"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSyncingLiveCloud ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingLiveCloud ? 'जांच जारी...' : 'अपडेट जांचें'}</span>
                   </button>
                 </div>
               </div>
@@ -1793,41 +1880,42 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         </div>
       )}
 
-      {/* 1. STICKY TOP APP BAR (With Multicolor Office Accent for Staff) */}
+      {/* Live Cloud OTA Update Notification Banner */}
+      {isLiveUpdateAvailable && (
+        <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white px-4 py-2.5 shadow-md flex items-center justify-between gap-3 text-xs sm:text-sm animate-in slide-in-from-top duration-300 z-50 sticky top-0">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2.5 w-2.5 relative shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
+            </span>
+            <span className="font-bold">🚀 नया लाइव क्लाउड अपडेट उपलब्ध है ({updateDetails.version || `v${CURRENT_LOCAL_VERSION}`})</span>
+            <span className="hidden md:inline text-emerald-100 text-xs">
+              • बिना APK डाउनलोड किए लाइव सिंक करें
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => liveUpdateService.applyUpdate()}
+            className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-emerald-800 font-black text-xs rounded-lg shadow-sm transition transform active:scale-95 cursor-pointer whitespace-nowrap flex items-center gap-1.5 shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-emerald-700" />
+            <span>तुरंत लागू करें</span>
+          </button>
+        </div>
+      )}
+
+      {/* 1. STICKY TOP APP BAR (Crisp White with Indigo Header Accent) */}
       <header className="sticky top-0 z-40 bg-white/95 border-b border-slate-200 backdrop-blur-md px-3 sm:px-6 py-3 shadow-sm">
-        {!isRider && (
-          <div className="h-1 -mt-3 -mx-3 sm:-mx-6 mb-3 bg-gradient-to-r from-violet-600 via-fuchsia-500 via-amber-400 to-cyan-500" />
-        )}
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           {/* Brand & Active User Info */}
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${
-              !isRider 
-                ? 'bg-gradient-to-br from-violet-600 to-cyan-600 p-0.5' 
-                : 'bg-slate-950 border border-sky-500/40 p-0.5'
-            }`}>
-              {!isRider ? (
-                <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-                  <Building2 className="w-5 h-5 text-cyan-300" />
-                </div>
-              ) : (
-                <img src="/rider-logo.svg" alt="Rider App Logo" className="w-8 h-8 rounded-lg object-contain" />
-              )}
+            <div className="w-9 h-9 rounded-xl bg-slate-950 border border-sky-500/40 p-0.5 flex items-center justify-center shrink-0 shadow-sm">
+              <img src="/rider-logo.svg" alt="Rider App Logo" className="w-8 h-8 rounded-lg object-contain" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight truncate">
-                  {!isRider ? (
-                    <>
-                      <span>Office Staff</span>{' '}
-                      <span className="text-violet-600 font-hindi">(सत्यापन व Tally काउंटर)</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>COD Entry</span>{' '}
-                      <span className="text-indigo-600 font-hindi">(हिसाब किताब)</span>
-                    </>
-                  )}
+                  COD Entry <span className="text-indigo-600 font-hindi">(हिसाब किताब)</span>
                 </h1>
                 {/* Role Badge */}
                 <span
@@ -1835,15 +1923,15 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                     authUser.role === 'rider'
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : authUser.role === 'team_leader'
-                      ? 'bg-cyan-100 text-cyan-800 border border-cyan-300 font-bold'
+                      ? 'bg-sky-50 text-sky-700 border border-sky-200'
                       : authUser.role === 'supervisor'
-                      ? 'bg-purple-100 text-purple-800 border border-purple-300 font-bold'
-                      : 'bg-amber-100 text-amber-800 border border-amber-300 font-bold'
+                      ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                      : 'bg-amber-50 text-amber-700 border border-amber-200'
                   }`}
                 >
                   {authUser.role === 'rider' && '🏍️ राइडर'}
-                  {authUser.role === 'team_leader' && '🎖️ TL (स्टाफ)'}
-                  {authUser.role === 'supervisor' && '📋 सुपरवाइजर (स्टाफ)'}
+                  {authUser.role === 'team_leader' && '🎖️ TL'}
+                  {authUser.role === 'supervisor' && '📋 सुपरवाइजर'}
                   {authUser.role === 'hub_incharge' && '👑 हब इंचार्ज'}
                 </span>
               </div>
@@ -1884,6 +1972,25 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               )}
             </div>
 
+            {/* Live Cloud OTA Update / Sync Trigger */}
+            <button
+              type="button"
+              onClick={handleManualCloudSync}
+              disabled={isSyncingLiveCloud}
+              className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs active:scale-95 ${
+                isLiveUpdateAvailable
+                  ? 'bg-amber-500 hover:bg-amber-600 border-amber-600 text-white animate-bounce'
+                  : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-800'
+              }`}
+              title={isLiveUpdateAvailable ? 'नया क्लाउड अपडेट उपलब्ध है!' : 'क्लाउड लाइव सिंक जांचें'}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLiveUpdateAvailable ? 'text-white' : 'text-emerald-600'} ${isSyncingLiveCloud ? 'animate-spin' : ''}`} />
+              <span className="inline-flex items-center gap-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${isLiveUpdateAvailable ? 'bg-white animate-ping' : 'bg-emerald-500 animate-pulse'}`}></span>
+                <span className="hidden sm:inline">{isLiveUpdateAvailable ? 'अपडेट उपलब्ध!' : 'क्लाउड सिंक'}</span>
+              </span>
+            </button>
+
             {/* Back to Admin Dashboard if triggered */}
             {onBackToMainApp && !isRiderFlavor && !isRider && (
               <button
@@ -1914,44 +2021,6 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
       {/* Main Body */}
       <main className="max-w-6xl mx-auto w-full px-3 sm:px-6 pt-4 space-y-4">
-        {/* OFFICE STAFF DEDICATED INSPECTION & TALLY BANNER */}
-        {!isRider && (
-          <div className="rounded-2xl p-[2px] bg-gradient-to-r from-violet-500 via-fuchsia-500 via-amber-400 to-cyan-400 shadow-md animate-in fade-in slide-in-from-top-1">
-            <div className="bg-slate-950 rounded-[14px] p-4 text-white">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600 via-fuchsia-600 to-cyan-500 p-0.5 shrink-0 shadow-md">
-                    <div className="w-full h-full bg-slate-900 rounded-[10px] flex items-center justify-center">
-                      <Building2 className="w-5 h-5 text-cyan-300" />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h2 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
-                        <span>🏢 ऑफिस स्टाफ सत्यापन व Tally काउंटर</span>
-                      </h2>
-                      <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full">
-                        ✓ केवल जांच व टिक (✓) मोड
-                      </span>
-                      <span className="text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded-full">
-                        🔒 एडिट बंद है
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-300 mt-0.5">
-                      आप सभी राइडर्स के आज के COD व कैश जमा की जांच कर सकते हैं और <strong>(✓) टिक</strong> कर मिलान (Tally) कर सकते हैं। प्रविष्टि एडिट सुरक्षा कारणों से बंद है।
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-cyan-300 bg-cyan-950/80 border border-cyan-500/40 px-3 py-1.5 rounded-xl font-mono font-bold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-                    <span>{displayEntries.length} राइडर्स सूची</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Khatabook Statement */}
         {isRider && (

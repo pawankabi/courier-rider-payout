@@ -401,7 +401,7 @@ function MainCourierApp() {
   const handleManualCheckLiveUpdate = async () => {
     setIsCheckingUpdate(true);
     try {
-      const hasUpdate = await liveUpdateService.checkForUpdate();
+      const hasUpdate = await liveUpdateService.checkForUpdate(true);
       if (hasUpdate) {
         setToastMessage({
           text: '🚀 नया अपडेट डिटेक्ट हुआ! 1-क्लिक में नए फीचर्स लागू हो रहे हैं...',
