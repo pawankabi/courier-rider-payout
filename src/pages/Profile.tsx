@@ -243,6 +243,48 @@ export const Profile: React.FC<ProfileProps> = ({
           </button>
         </div>
 
+        {/* Immediate Sensor Hardware Test Button */}
+        {appLockOn && (
+          <div className="pt-1 flex items-center justify-between">
+            <span className="text-[11px] text-slate-400">
+              हार्डवेयर की जांच अभी करना चाहते हैं?
+            </span>
+            <button
+              type="button"
+              onClick={async () => {
+                setIsVerifying(true);
+                setFeedbackMessage(null);
+                try {
+                  const res = await authenticateWithBiometrics('फिंगरप्रिंट सेंसर टेस्ट');
+                  if (res.success) {
+                    setFeedbackMessage({
+                      type: 'success',
+                      text: '✅ बधाई! आपका फिंगरप्रिंट सेंसर सक्रिय है और 100% सही काम कर रहा है!',
+                    });
+                  } else {
+                    setFeedbackMessage({
+                      type: 'error',
+                      text: res.error || 'सत्यापन रद्द हुआ।',
+                    });
+                  }
+                } catch (e: any) {
+                  setFeedbackMessage({
+                    type: 'error',
+                    text: e?.message || 'बायोमेट्रिक एरर',
+                  });
+                } finally {
+                  setIsVerifying(false);
+                }
+              }}
+              disabled={isVerifying}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-blue-300 border border-blue-500/30 text-xs font-semibold transition active:scale-95 cursor-pointer disabled:opacity-50"
+            >
+              <Fingerprint className="w-3.5 h-3.5 text-blue-400" />
+              <span>सेंसर टेस्ट करें (Test Now)</span>
+            </button>
+          </div>
+        )}
+
         {/* Feedback Alert */}
         {feedbackMessage && (
           <div

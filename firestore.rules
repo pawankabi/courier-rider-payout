@@ -42,6 +42,12 @@ service cloud.firestore {
       allow write: if isSuperAdmin();
     }
 
+    // Public real-time OTA App Updates Manifest (for Android APK and Web live update checks)
+    match /app_updates/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
     // Isolated per-user multi-tenant workspaces: /workspaces/{userId}/riders and /workspaces/{userId}/entries
     match /workspaces/{userId} {
       allow read: if request.auth != null;

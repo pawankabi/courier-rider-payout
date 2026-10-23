@@ -404,6 +404,7 @@ export interface SyncProfileResult {
   hubSignature?: string;
   subscription: UserSubscription;
   codCompanies?: string[];
+  appLockEnabled?: boolean;
 }
 
 /**
@@ -560,6 +561,7 @@ export async function syncUserProfile(user: User): Promise<SyncProfileResult> {
       hubSignature: rateConfig.hubSignature || '',
       subscription,
       codCompanies: userCodCompanies,
+      appLockEnabled: Boolean(userSnap?.data()?.appLockEnabled ?? allSnap?.data()?.appLockEnabled),
     };
   } catch (error) {
     console.error('Error syncing user profile to Firestore:', error);

@@ -113,7 +113,15 @@ try {
     webDir: 'public',
     server: {
       androidScheme: 'https',
-      hostname: 'courier-rider-payout.firebaseapp.com'
+      hostname: 'courier-rider-payout.firebaseapp.com',
+      cleartext: true,
+      allowNavigation: [
+        'ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
+        'ais-dev-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
+        '*.run.app',
+        '*.firebaseapp.com',
+        '*.googleapis.com'
+      ]
     }
   };
   const adminAssetsParent = path.dirname(adminAssetsDir);
@@ -147,7 +155,15 @@ try {
     webDir: 'public',
     server: {
       androidScheme: 'https',
-      hostname: 'cod-entry-rider.firebaseapp.com'
+      hostname: 'cod-entry-rider.firebaseapp.com',
+      cleartext: true,
+      allowNavigation: [
+        'ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
+        'ais-dev-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
+        '*.run.app',
+        '*.firebaseapp.com',
+        '*.googleapis.com'
+      ]
     }
   };
   const riderAssetsParent = path.dirname(riderAssetsDir);

@@ -139,6 +139,40 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
         </button>
       </div>
 
+      {enabled && (
+        <div className="pt-1 flex items-center justify-between border-t border-slate-800/80">
+          <span className="text-[10px] text-slate-400">
+            हार्डवेयर टेस्ट:
+          </span>
+          <button
+            type="button"
+            onClick={async () => {
+              setIsChanging(true);
+              setError(null);
+              setSuccessMessage(null);
+              try {
+                const res = await authenticateWithBiometrics('फिंगरप्रिंट सेंसर टेस्ट');
+                if (res.success) {
+                  setSuccessMessage('✅ फिंगरप्रिंट सेंसर सक्रिय है और 100% सही काम कर रहा है!');
+                  setTimeout(() => setSuccessMessage(null), 4000);
+                } else {
+                  setError(res.error || 'सत्यापन रद्द हुआ।');
+                }
+              } catch (e: any) {
+                setError(e?.message || 'बायोमेट्रिक एरर');
+              } finally {
+                setIsChanging(false);
+              }
+            }}
+            disabled={isChanging}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-blue-300 border border-blue-500/30 text-[11px] font-semibold transition active:scale-95 cursor-pointer disabled:opacity-50"
+          >
+            <Fingerprint className="w-3 h-3 text-blue-400" />
+            <span>सेंसर टेस्ट करें (Test Now)</span>
+          </button>
+        </div>
+      )}
+
       {/* Success notification */}
       {successMessage && (
         <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[11px] flex items-center gap-1.5 animate-in fade-in">

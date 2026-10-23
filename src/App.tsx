@@ -144,7 +144,7 @@ import { CodStandaloneApp } from './components/CodStandaloneApp';
 import { CodCompanionApp } from './components/CodCompanionApp';
 import { ShareAppModal } from './components/ShareAppModal';
 import { isRiderBuild } from './utils/shareLink';
-import { liveUpdateService } from './services/liveUpdateService';
+import { liveUpdateService, syncLatestManifestToFirestore } from './services/liveUpdateService';
 
 /**
  * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
@@ -476,6 +476,7 @@ function MainCourierApp() {
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
   useEffect(() => {
+    syncLatestManifestToFirestore().catch(() => {});
     const unsubscribe = liveUpdateService.subscribe((available) => {
       setIsLiveUpdateAvailable(available);
     });
@@ -1149,6 +1150,17 @@ function MainCourierApp() {
 
           if (profileResult.codCompanies && Array.isArray(profileResult.codCompanies) && profileResult.codCompanies.length > 0) {
             setUserCodCompanies(profileResult.codCompanies);
+          }
+
+          if (profileResult.appLockEnabled === true) {
+            try {
+              localStorage.setItem('cp_app_lock_enabled', 'true');
+              window.dispatchEvent(
+                new CustomEvent('courier-payout:app-lock-changed', {
+                  detail: { enabled: true },
+                })
+              );
+            } catch {}
           }
 
           if (isProfilePro) {
@@ -2475,14 +2487,20 @@ function MainCourierApp() {
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => liveUpdateService.applyUpdate()}
+              onClick={() => {
+                setIsLiveUpdateAvailable(false);
+                liveUpdateService.applyUpdate();
+              }}
               className="px-3 py-1 bg-white hover:bg-emerald-50 text-slate-950 rounded-lg font-black text-xs shadow transition active:scale-95 cursor-pointer flex items-center gap-1"
             >
               <span>⚡ 1-क्लिक अपडेट (Apply)</span>
             </button>
             <button
               type="button"
-              onClick={() => setIsLiveUpdateAvailable(false)}
+              onClick={() => {
+                liveUpdateService.dismissUpdate();
+                setIsLiveUpdateAvailable(false);
+              }}
               className="p-1 text-emerald-200 hover:text-white rounded-md transition cursor-pointer"
               title="बाद में याद दिलाएं"
             >

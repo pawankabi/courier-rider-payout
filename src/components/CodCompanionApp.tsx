@@ -1313,7 +1313,10 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             </div>
             <button
               type="button"
-              onClick={() => liveUpdateService.applyUpdate()}
+              onClick={() => {
+                setIsLiveUpdateAvailable(false);
+                liveUpdateService.applyUpdate();
+              }}
               className="px-3 py-1.5 bg-white text-emerald-800 text-xs font-black rounded-xl shadow-sm hover:bg-emerald-50 active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
             >
               तुरंत सिंक करें
@@ -1895,7 +1898,10 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           </div>
           <button
             type="button"
-            onClick={() => liveUpdateService.applyUpdate()}
+            onClick={() => {
+              setIsLiveUpdateAvailable(false);
+              liveUpdateService.applyUpdate();
+            }}
             className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-emerald-800 font-black text-xs rounded-lg shadow-sm transition transform active:scale-95 cursor-pointer whitespace-nowrap flex items-center gap-1.5 shrink-0"
           >
             <RefreshCw className="w-3.5 h-3.5 text-emerald-700" />

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.6",
-  "buildTime": 1729596000000,
-  "buildDate": "2026-10-22",
-  "releaseNotes": "Hybrid Live Cloud Sync Engine v1.0.6 - Automatic Over-The-Air updates without APK re-downloading, Staff Read-Only inspection, Verified Tally tick, Multicolor Staff Portal"
+  "version": "1.0.7",
+  "buildTime": 1729693600000,
+  "buildDate": "2026-10-23",
+  "releaseNotes": "15-Minute Inactivity/Screen-Off Fingerprint App Lock, Android Stability Fix, Zero-Reinstall OTA Update"
 }
