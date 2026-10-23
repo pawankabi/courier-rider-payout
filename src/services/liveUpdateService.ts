@@ -15,7 +15,7 @@ import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
 export const CLOUD_LIVE_BASE_URL = 'https://ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app';
-export const CURRENT_LOCAL_BUILD_TIME = 1729693600000;
+export const CURRENT_LOCAL_BUILD_TIME = 1729600000000; // Local baseline (older than v1.0.8 cloud build 1729705000000)
 export const CURRENT_LOCAL_VERSION = '1.0.7';
 
 type UpdateListener = (available: boolean, details?: { version?: string; releaseNotes?: string }) => void;
@@ -314,8 +314,8 @@ class LiveUpdateService {
 export async function syncLatestManifestToFirestore(): Promise<void> {
   try {
     const updateData = {
-      version: CURRENT_LOCAL_VERSION,
-      buildTime: CURRENT_LOCAL_BUILD_TIME,
+      version: '1.0.8',
+      buildTime: 1729705000000,
       buildDate: new Date().toISOString().split('T')[0],
       releaseNotes: '15-Minute Inactivity/Screen-Off Fingerprint App Lock, Android Stability Fix, Zero-Reinstall OTA Update',
       updatedAt: new Date().toISOString(),

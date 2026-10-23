@@ -1,6 +1,6 @@
 {
-  "version": "1.0.7",
-  "buildTime": 1729693600000,
+  "version": "1.0.8",
+  "buildTime": 1729705000000,
   "buildDate": "2026-10-23",
-  "releaseNotes": "15-Minute Inactivity/Screen-Off Fingerprint App Lock, Android Stability Fix, Zero-Reinstall OTA Update"
+  "releaseNotes": "15-Minute Fingerprint Inactivity Lock & Auto-Close Fix, Android Compatibility"
 }
