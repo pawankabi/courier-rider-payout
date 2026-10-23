@@ -58,8 +58,8 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
 
     const targetState = !enabled;
     const promptReason = targetState
-      ? 'Verify your biometric or device screen lock to enable App Lock'
-      : 'Verify your biometric or device screen lock to disable App Lock';
+      ? 'फिंगरप्रिंट या स्क्रीन लॉक पिन द्वारा ऐप लॉक सक्रिय करें'
+      : 'फिंगरप्रिंट या स्क्रीन लॉक पिन द्वारा ऐप लॉक बंद करें';
 
     try {
       const authResult = await authenticateWithBiometrics(promptReason);
@@ -69,12 +69,12 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
         onStatusChanged?.(targetState);
         setSuccessMessage(
           targetState
-            ? 'App Lock enabled! Your app is now protected by biometrics/PIN.'
-            : 'App Lock disabled successfully.'
+            ? '15 मिनट सुरक्षा लॉक सक्रिय! 15 मिनट स्क्रीन ऑफ रहने के बाद ही फिंगरप्रिंट लॉक होगा। काम करते समय कभी लॉक नहीं होगा।'
+            : 'ऐप लॉक सफलतापूर्वक बंद कर दिया गया।'
         );
-        setTimeout(() => setSuccessMessage(null), 3500);
+        setTimeout(() => setSuccessMessage(null), 4000);
       } else {
-        setError(authResult.error || 'Device verification was cancelled. Setting not changed.');
+        setError(authResult.error || 'सत्यापन रद्द हुआ। सेटिंग में कोई बदलाव नहीं हुआ।');
       }
     } catch (err: any) {
       setError(err?.message || 'Verification error. Please try again.');
@@ -92,20 +92,20 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
           </div>
           <div>
             <div className="font-bold text-white text-xs flex items-center gap-1.5">
-              <span>App Lock (Fingerprint / Face ID / PIN)</span>
+              <span>App Lock (फिंगरप्रिंट / Face ID / PIN)</span>
               {enabled && (
                 <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold inline-flex items-center gap-0.5">
                   <ShieldCheck className="w-2.5 h-2.5" />
-                  Active
+                  15 मिनट सुरक्षा Active
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-slate-400 leading-snug mt-0.5">
-              Protect your app using your phone's biometric or screen lock
+            <p className="text-[11px] text-slate-300 leading-snug mt-0.5">
+              15 मिनट फोन स्क्रीन ऑफ या निष्क्रिय रहने पर फिंगरप्रिंट लॉक सक्रिय होगा। ऐप में काम करते समय कभी लॉक नहीं होगा।
             </p>
             {biometryInfo && (
-              <span className="text-[10px] text-blue-400/80 font-medium inline-block mt-0.5">
-                Hardware: {biometryInfo.biometryTypeName}
+              <span className="text-[10px] text-blue-400 font-medium inline-block mt-0.5">
+                डिवाइस हार्डवेयर: {biometryInfo.biometryTypeName}
               </span>
             )}
           </div>

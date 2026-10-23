@@ -12,11 +12,13 @@ import {
   UserCheck,
   ArrowLeft,
   Eye,
-  EyeOff
+  EyeOff,
+  Clock
 } from 'lucide-react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
-import { authenticateWithBiometrics, setAppLockEnabled } from '../services/biometricService';
+import { App as CapacitorApp } from '@capacitor/app';
+import { authenticateWithBiometrics, setAppLockEnabled, recordAppUnlock } from '../services/biometricService';
 
 interface AppLockScreenProps {
   onUnlock: () => void;
@@ -38,9 +40,27 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [isVerifyingPassword, setIsVerifyingPassword] = useState(false);
   const [emergencyError, setEmergencyError] = useState<string | null>(null);
-  const [disableLockOnUnlock, setDisableLockOnUnlock] = useState(true);
+  const [disableLockOnUnlock, setDisableLockOnUnlock] = useState(false);
 
   const activeEmail = currentUserEmail || auth.currentUser?.email || '';
+
+  // Intercept Android hardware Back button so the app doesn't unexpectedly close
+  useEffect(() => {
+    let backSub: any = null;
+    try {
+      backSub = CapacitorApp.addListener('backButton', () => {
+        setErrorMessage('ऐप लॉक है। कृपया खोलने के लिए फिंगरप्रिंट या पिन दर्ज करें। (App is locked. Use fingerprint or PIN to unlock.)');
+      });
+    } catch {}
+
+    return () => {
+      if (backSub && typeof backSub.then === 'function') {
+        backSub.then((h: any) => h?.remove?.()).catch(() => {});
+      } else if (backSub?.remove) {
+        backSub.remove();
+      }
+    };
+  }, []);
 
   const handleAuthenticate = async () => {
     if (isAuthenticating) return;
@@ -48,30 +68,28 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
     setErrorMessage(null);
 
     try {
-      const result = await authenticateWithBiometrics('Unlock Courier Rider Payout');
+      const result = await authenticateWithBiometrics('कूरियर राइडर पेआउट अनलॉक करें');
       if (result.success) {
-        try {
-          sessionStorage.setItem('cp_unlocked_this_session', 'true');
-        } catch {}
+        recordAppUnlock();
         onUnlock();
       } else {
         setErrorMessage(
-          result.error || 'Authentication was cancelled or failed. Please try again or use Emergency Unlock below.'
+          result.error || 'बायोमेट्रिक प्रमाणीकरण रद्द हुआ। नीचे दिए गए बटन को दबाकर दोबारा प्रयास करें या आपातकालीन पासवर्ड का उपयोग करें।'
         );
       }
     } catch (err: any) {
-      console.error('Biometric authentication error:', err);
-      setErrorMessage(err?.message || 'Biometric verification error. Tap below or use Emergency Unlock.');
+      console.warn('Biometric authentication error:', err);
+      setErrorMessage(err?.message || 'फिंगरप्रिंट पहचान में त्रुटि। नीचे बटन दबाएं या आपातकालीन पासवर्ड से खोलें।');
     } finally {
       setIsAuthenticating(false);
     }
   };
 
-  // Trigger prompt once on mount with brief delay for smooth transition
+  // Trigger prompt once on mount with 450ms delay for smooth UI transition
   useEffect(() => {
     const timer = setTimeout(() => {
       handleAuthenticate();
-    }, 350);
+    }, 450);
     return () => clearTimeout(timer);
   }, []);
 
@@ -81,12 +99,11 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
       if (disableLockOnUnlock) {
         await setAppLockEnabled(false, auth.currentUser?.uid);
       }
-      try {
-        sessionStorage.setItem('cp_unlocked_this_session', 'true');
-      } catch {}
+      recordAppUnlock();
       onUnlock();
     } catch (err: any) {
-      console.error('Emergency session unlock error:', err);
+      console.warn('Emergency session unlock error:', err);
+      recordAppUnlock();
       onUnlock();
     }
   };
@@ -95,12 +112,12 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
   const handlePasswordUnlock = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!emergencyPassword) {
-      setEmergencyError('Please enter your account password.');
+      setEmergencyError('कृपया अपना खाता पासवर्ड दर्ज करें। (Please enter password)');
       return;
     }
 
     if (!activeEmail) {
-      setEmergencyError('No account email found. Please use session unlock or sign in.');
+      setEmergencyError('कोई सक्रिय ईमेल नहीं मिला। कृपया सेशन अनलॉक या साइन इन चुनें।');
       return;
     }
 
@@ -112,13 +129,11 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
       if (disableLockOnUnlock) {
         await setAppLockEnabled(false, auth.currentUser?.uid);
       }
-      try {
-        sessionStorage.setItem('cp_unlocked_this_session', 'true');
-      } catch {}
+      recordAppUnlock();
       onUnlock();
     } catch (err: any) {
-      console.error('Emergency password verification error:', err);
-      setEmergencyError(err?.message || 'Invalid password. If forgotten, tap Verified Session Unlock.');
+      console.warn('Emergency password verification error:', err);
+      setEmergencyError(err?.message || 'पासवर्ड गलत है। यदि भूल गए हैं, तो सेशन अनलॉक का प्रयास करें।');
     } finally {
       setIsVerifyingPassword(false);
     }
@@ -136,10 +151,10 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
         
         {!showEmergencyUnlock ? (
           <>
-            {/* Top Security Badge */}
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold mb-6">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Device Security Active</span>
+            {/* Top Security & 15-Min Inactivity Badge */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs font-semibold mb-5">
+              <Clock className="w-3.5 h-3.5 text-blue-400" />
+              <span>15 मिनट सुरक्षा लॉक (Device Protected)</span>
             </div>
 
             {/* Biometric / Lock Icon Pulsing Halo */}
@@ -154,15 +169,15 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
             </div>
 
             {/* Title & Subtitle */}
-            <h2 className="text-xl sm:text-2xl font-black text-white mt-5">
-              Courier Rider Payout
+            <h2 className="text-xl sm:text-2xl font-black text-white mt-4">
+              Courier Payout Pro
             </h2>
-            <p className="text-xs text-blue-300/80 font-medium tracking-wide mt-1">
+            <p className="text-xs text-blue-300 font-medium tracking-wide mt-1">
               कूरियर राइडर पेआउट लॉक है
             </p>
 
-            <p className="text-xs text-slate-400 mt-3 leading-relaxed">
-              Please authenticate with your Fingerprint, Face ID, or Device PIN to continue.
+            <p className="text-xs text-slate-400 mt-2.5 leading-relaxed">
+              15 मिनट स्क्रीन ऑफ / निष्क्रियता के बाद ऐप सुरक्षित रूप से लॉक हुआ है। फोन के फिंगरप्रिंट या स्क्रीन लॉक पिन से अनलॉक करें।
             </p>
 
             {/* Error message if cancelled or failed */}
@@ -184,12 +199,12 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
               {isAuthenticating ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                  <span>Verifying Device Security...</span>
+                  <span>फिंगरप्रिंट पहचान जारी है...</span>
                 </>
               ) : (
                 <>
                   <Fingerprint className="w-4 h-4 text-blue-200" />
-                  <span>Unlock with Biometrics / PIN</span>
+                  <span>फिंगरप्रिंट / PIN से अनलॉक करें</span>
                 </>
               )}
             </button>
@@ -197,7 +212,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
             {/* Secondary fallback info */}
             <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mt-3">
               <KeyRound className="w-3 h-3 text-slate-400" />
-              <span>PIN / Pattern fallback is automatically supported</span>
+              <span>पैटर्न या स्क्रीन लॉक पिन भी स्वतः मान्य है</span>
             </div>
 
             {/* EMERGENCY FAILSAFE / OVERRIDE BUTTON */}
@@ -208,7 +223,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
                 className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 font-medium underline underline-offset-4 cursor-pointer transition py-1 px-2 rounded hover:bg-blue-950/40"
               >
                 <KeyRound className="w-3.5 h-3.5" />
-                <span>Forgot / Stuck? Unlock with Account Credentials</span>
+                <span>फिंगरप्रिंट में दिक्कत? पासवर्ड से खोलें</span>
               </button>
 
               {onSignOut && (
@@ -218,7 +233,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
                   className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-red-300 transition py-1 px-3 rounded-lg hover:bg-slate-800"
                 >
                   <LogOut className="w-3.5 h-3.5" />
-                  <span>Sign Out / Switch Account</span>
+                  <span>साइन आउट / दूसरा खाता बदलें</span>
                 </button>
               )}
             </div>
@@ -233,7 +248,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
                 className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-white transition py-1 px-2 rounded-lg hover:bg-slate-800"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Back</span>
+                <span>वापस (Back)</span>
               </button>
               <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">
                 Emergency Recovery
@@ -249,7 +264,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
                   {activeEmail || 'Verified Hub Account'}
                 </div>
                 <div className="text-[11px] text-slate-400">
-                  Authorized Session Override
+                  अधिकृत कूरियर हब सत्र
                 </div>
               </div>
             </div>
@@ -266,10 +281,10 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
               <div className="mb-4 p-3.5 rounded-xl bg-blue-950/40 border border-blue-500/30">
                 <div className="text-xs font-bold text-blue-200 mb-1 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Instant Session Recovery</span>
+                  <span>त्वरित सत्र पुनर्प्राप्ति (Instant Session Recovery)</span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed mb-3">
-                  Your device has a verified login session. Tap below to immediately unlock the dashboard.
+                  आपके डिवाइस में पहले से सत्यापित लॉगिन मौजूद है। तुरंत डैशबोर्ड खोलने के लिए नीचे टैप करें।
                 </p>
                 <button
                   type="button"
@@ -277,7 +292,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
                   className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/30 flex items-center justify-center gap-1.5 cursor-pointer transition active:scale-98"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Verify Session & Unlock App</span>
+                  <span>सत्र सत्यापित कर ऐप खोलें</span>
                 </button>
               </div>
             )}
@@ -287,7 +302,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
               <form onSubmit={handlePasswordUnlock} className="space-y-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                    Enter Account Password
+                    खाता पासवर्ड दर्ज करें (Account Password)
                   </label>
                   <div className="relative">
                     <input
@@ -315,12 +330,12 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
                   {isVerifyingPassword ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Verifying...</span>
+                      <span>जांच जारी है...</span>
                     </>
                   ) : (
                     <>
                       <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Unlock with Password</span>
+                      <span>पासवर्ड से अनलॉक करें</span>
                     </>
                   )}
                 </button>
@@ -336,7 +351,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
                   onChange={(e) => setDisableLockOnUnlock(e.target.checked)}
                   className="rounded border-slate-700 bg-slate-950 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3.5 h-3.5 cursor-pointer"
                 />
-                <span>Turn off App Lock on this device to prevent future lockouts</span>
+                <span>इस डिवाइस पर ऐप लॉक बंद करें (Turn off App Lock)</span>
               </label>
             </div>
           </div>

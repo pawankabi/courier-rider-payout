@@ -45,8 +45,10 @@
     <!-- Contacts Permissions (for picking rider/recipient numbers) -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
-    <!-- Biometric & Network (preserve existing features) -->
+    <!-- Biometric & Fingerprint (Broad hardware & OEM compatibility) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+    <uses-feature android:name="android.hardware.fingerprint" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 

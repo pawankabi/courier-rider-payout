@@ -90,7 +90,7 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "revision": "aa07c895c7e9965a366d532e2da256ca"
   }, {
     "url": "index.html",
-    "revision": "135a0121a10d58d6df5092ccc848e70a"
+    "revision": "1706c2be1b1ae7a7a7e6fa834f1ae74e"
   }, {
     "url": "icon.svg",
     "revision": "71ec083ef2733f3feaf10cff3875f9ce"
@@ -101,16 +101,16 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "admin-logo.svg",
     "revision": "71ec083ef2733f3feaf10cff3875f9ce"
   }, {
-    "url": "assets/web-gF_5hUml.js",
+    "url": "assets/web-gCb63OuE.js",
     "revision": null
   }, {
-    "url": "assets/web-Dpk4EEu7.js",
+    "url": "assets/web-CbUdw1Bl.js",
     "revision": null
   }, {
-    "url": "assets/web-CmQHiU2k.js",
+    "url": "assets/web-CYfHzrP8.js",
     "revision": null
   }, {
-    "url": "assets/web-ChwF8j1A.js",
+    "url": "assets/web-C-wtH4Mb.js",
     "revision": null
   }, {
     "url": "assets/vendor-react-jrF7e2F0.js",
@@ -125,19 +125,19 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "assets/purify.es-DedTAGkB.js",
     "revision": null
   }, {
-    "url": "assets/native-CtwsA8v5.js",
+    "url": "assets/native-BLNCXA_e.js",
     "revision": null
   }, {
     "url": "assets/index.es-CsLtj_j5.js",
     "revision": null
   }, {
-    "url": "assets/index-xnDkHJwd.css",
+    "url": "assets/index-CLd6tKI6.js",
     "revision": null
   }, {
-    "url": "assets/index-CSaaOEj_.js",
+    "url": "assets/index-BwcBUWep.css",
     "revision": null
   }, {
-    "url": "assets/base-CZNC4k8p.js",
+    "url": "assets/base-2y6Vml5R.js",
     "revision": null
   }, {
     "url": "apple-touch-icon.png",

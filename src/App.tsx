@@ -130,7 +130,13 @@ import { PublicComplianceFooter } from './components/PublicComplianceFooter';
 import { App as CapacitorApp } from '@capacitor/app';
 import { activateUserPlanImmediately, reconcilePendingCheckoutOnResume } from './services/razorpayCheckout';
 import { AppLockScreen } from './components/AppLockScreen';
-import { isAppLockEnabled } from './services/biometricService';
+import { 
+  isAppLockEnabled, 
+  recordUserActivity, 
+  recordAppBackground, 
+  recordAppUnlock, 
+  shouldTriggerAppLock 
+} from './services/biometricService';
 import { isNativeAndroid, autoRequestStartupPermissions, openNativeAppSettings } from './services/nativeSms';
 import { VerifiedBadge } from './components/VerifiedBadge';
 import { ProfileSettingsModal } from './components/ProfileSettingsModal';
@@ -264,31 +270,109 @@ function MainCourierApp() {
     return 'entry';
   });
 
-  // Optional Device Security / Biometric App Lock state (session cached to avoid stuck loops)
+  // Device Security / Biometric App Lock state:
+  // Strictly follows the 15-Minute Rule:
+  // - NEVER locks while user is actively working inside the app.
+  // - ONLY locks if the phone screen has been off or app idle/in background for >= 15 minutes.
   const [isAppLocked, setIsAppLocked] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     try {
-      if (sessionStorage.getItem('cp_unlocked_this_session') === 'true') {
-        return false;
-      }
-      return isAppLockEnabled();
+      if (!isAppLockEnabled()) return false;
+      return shouldTriggerAppLock();
     } catch {
       return false;
     }
   });
 
+  // 1. User Activity Listener:
+  // Catches all touches, clicks, typing, scrolling to ensure active work NEVER gets locked
   useEffect(() => {
+    const handleActivity = () => {
+      recordUserActivity();
+    };
+
+    const activityEvents = ['pointerdown', 'touchstart', 'mousedown', 'keydown', 'scroll', 'click'];
+    activityEvents.forEach((ev) => window.addEventListener(ev, handleActivity, { passive: true }));
+
+    // Foreground 15-min idle watchdog:
+    // If phone screen was left on without touching anything for 15 minutes straight:
+    const watchdogTimer = setInterval(() => {
+      if (isAppLockEnabled() && !isAppLocked) {
+        if (shouldTriggerAppLock()) {
+          setIsAppLocked(true);
+        }
+      }
+    }, 15000);
+
+    return () => {
+      activityEvents.forEach((ev) => window.removeEventListener(ev, handleActivity));
+      clearInterval(watchdogTimer);
+    };
+  }, [isAppLocked]);
+
+  // 2. Phone Screen Off / Background / Resume Lifecycle:
+  // When screen turns off or user switches apps -> record timestamp.
+  // When user returns:
+  // - If away for >= 15 minutes -> prompt for Fingerprint/PIN.
+  // - If away for < 15 minutes -> continue smoothly without locking.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        recordAppBackground();
+      } else if (document.visibilityState === 'visible') {
+        if (isAppLockEnabled() && !isAppLocked) {
+          if (shouldTriggerAppLock()) {
+            setIsAppLocked(true);
+          } else {
+            recordUserActivity(true);
+          }
+        }
+      }
+    };
+
+    let capAppStateSub: any = null;
+    try {
+      capAppStateSub = CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive) {
+          recordAppBackground();
+        } else {
+          if (isAppLockEnabled() && !isAppLocked) {
+            if (shouldTriggerAppLock()) {
+              setIsAppLocked(true);
+            } else {
+              recordUserActivity(true);
+            }
+          }
+        }
+      });
+    } catch {}
+
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', recordAppBackground);
+
     const handleLockChanged = (e: Event) => {
       const customEvent = e as CustomEvent<{ enabled: boolean }>;
-      if (customEvent.detail && !customEvent.detail.enabled) {
-        setIsAppLocked(false);
+      if (customEvent.detail) {
+        if (!customEvent.detail.enabled) {
+          setIsAppLocked(false);
+        } else {
+          recordUserActivity(true);
+        }
       }
     };
     window.addEventListener('courier-payout:app-lock-changed', handleLockChanged);
+
     return () => {
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', recordAppBackground);
       window.removeEventListener('courier-payout:app-lock-changed', handleLockChanged);
+      if (capAppStateSub && typeof capAppStateSub.then === 'function') {
+        capAppStateSub.then((h: any) => h?.remove?.()).catch(() => {});
+      } else if (capAppStateSub?.remove) {
+        capAppStateSub.remove();
+      }
     };
-  }, []);
+  }, [isAppLocked]);
 
   const [showPermissionPromptModal, setShowPermissionPromptModal] = useState(false);
 
@@ -2256,9 +2340,7 @@ function MainCourierApp() {
       <AppLockScreen
         currentUserEmail={currentUser?.email || undefined}
         onUnlock={() => {
-          try {
-            sessionStorage.setItem('cp_unlocked_this_session', 'true');
-          } catch {}
+          recordAppUnlock();
           setIsAppLocked(false);
         }}
         onSignOut={() => {
