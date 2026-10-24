@@ -77,9 +77,26 @@ export async function loadCodSettings(userId: string): Promise<CodSettings> {
     if (raw) localData = JSON.parse(raw);
   } catch {}
 
-  // Attempt Firestore load
+  // Attempt Firestore load: first check configured codCompanies from all_users
   if (db && userId && userId !== 'guest') {
     try {
+      const allUserSnap = await getDoc(doc(db, 'all_users', userId));
+      if (allUserSnap.exists()) {
+        const uData = allUserSnap.data();
+        if (Array.isArray(uData.codCompanies) && uData.codCompanies.length > 0) {
+          const companies = uData.codCompanies;
+          const assignedSettings: CodSettings = {
+            isEnabled: true,
+            company1Name: companies[0] || DEFAULT_COMPANY_1,
+            company2Name: companies[1] || DEFAULT_COMPANY_2,
+            companies: companies,
+            updatedAt: new Date().toISOString(),
+          };
+          localStorage.setItem(localKey, JSON.stringify(assignedSettings));
+          return assignedSettings;
+        }
+      }
+
       const docRef = doc(db, 'workspaces', userId, 'cod_settings', 'config');
       const snap = await getDoc(docRef);
       if (snap.exists()) {

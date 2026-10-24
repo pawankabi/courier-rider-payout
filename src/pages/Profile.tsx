@@ -194,95 +194,99 @@ export const Profile: React.FC<ProfileProps> = ({
           )}
         </div>
 
-        {/* The Mandatory App Lock Toggle */}
-        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-750 flex items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="font-bold text-white text-sm flex items-center gap-2">
-              <span>App Lock (फिंगरप्रिंट / Face ID / PIN)</span>
-              {appLockOn && (
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1">
-                  <Check className="w-3 h-3" />
-                  15 मिनट सुरक्षा Active
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              15 मिनट फोन स्क्रीन ऑफ या निष्क्रिय रहने पर फिंगरप्रिंट लॉक सक्रिय होगा। काम करते समय कभी लॉक नहीं होगा।
-            </p>
-            <div className="text-[11px] text-blue-400 flex items-center gap-1.5 pt-0.5">
-              <KeyRound className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-              <span>पैटर्न या स्क्रीन लॉक पिन भी मान्य है</span>
-            </div>
-          </div>
+        {/* App Lock & Sensor Hardware Test - Restricted strictly to Master Admin until finalized */}
+        {user?.email === 'pawankabiseraikella@gmail.com' && (
+          <>
+            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-755 flex items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="font-bold text-white text-sm flex items-center gap-2">
+                  <span>App Lock (फिंगरप्रिंट / Face ID / PIN)</span>
+                  {appLockOn && (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1">
+                      <Check className="w-3 h-3" />
+                      15 मिनट सुरक्षा Active
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  15 मिनट फोन स्क्रीन ऑफ या निष्क्रिय रहने पर फिंगरप्रिंट लॉक सक्रिय होगा। काम करते समय कभी लॉक नहीं होगा।
+                </p>
+                <div className="text-[11px] text-blue-400 flex items-center gap-1.5 pt-0.5">
+                  <KeyRound className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                  <span>पैटर्न या स्क्रीन लॉक पिन भी मान्य है</span>
+                </div>
+              </div>
 
-          {/* Toggle Switch Button */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={appLockOn}
-            id="profile-app-lock-toggle"
-            onClick={handleToggleAppLock}
-            disabled={isVerifying}
-            className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:opacity-50 ${
-              appLockOn ? 'bg-blue-600' : 'bg-slate-700'
-            }`}
-          >
-            <span className="sr-only">Toggle App Lock</span>
-            {isVerifying ? (
-              <span className="absolute inset-0 flex items-center justify-center">
-                <RefreshCw className="w-3.5 h-3.5 text-white animate-spin" />
-              </span>
-            ) : (
-              <span
-                aria-hidden="true"
-                className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                  appLockOn ? 'translate-x-5' : 'translate-x-0'
+              {/* Toggle Switch Button */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={appLockOn}
+                id="profile-app-lock-toggle"
+                onClick={handleToggleAppLock}
+                disabled={isVerifying}
+                className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:opacity-50 ${
+                  appLockOn ? 'bg-blue-600' : 'bg-slate-700'
                 }`}
-              />
-            )}
-          </button>
-        </div>
+              >
+                <span className="sr-only">Toggle App Lock</span>
+                {isVerifying ? (
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <RefreshCw className="w-3.5 h-3.5 text-white animate-spin" />
+                  </span>
+                ) : (
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      appLockOn ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                )}
+              </button>
+            </div>
 
-        {/* Immediate Sensor Hardware Test Button */}
-        {appLockOn && (
-          <div className="pt-1 flex items-center justify-between">
-            <span className="text-[11px] text-slate-400">
-              हार्डवेयर की जांच अभी करना चाहते हैं?
-            </span>
-            <button
-              type="button"
-              onClick={async () => {
-                setIsVerifying(true);
-                setFeedbackMessage(null);
-                try {
-                  const res = await authenticateWithBiometrics('फिंगरप्रिंट सेंसर टेस्ट');
-                  if (res.success) {
-                    setFeedbackMessage({
-                      type: 'success',
-                      text: '✅ बधाई! आपका फिंगरप्रिंट सेंसर सक्रिय है और 100% सही काम कर रहा है!',
-                    });
-                  } else {
-                    setFeedbackMessage({
-                      type: 'error',
-                      text: res.error || 'सत्यापन रद्द हुआ।',
-                    });
-                  }
-                } catch (e: any) {
-                  setFeedbackMessage({
-                    type: 'error',
-                    text: e?.message || 'बायोमेट्रिक एरर',
-                  });
-                } finally {
-                  setIsVerifying(false);
-                }
-              }}
-              disabled={isVerifying}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-blue-300 border border-blue-500/30 text-xs font-semibold transition active:scale-95 cursor-pointer disabled:opacity-50"
-            >
-              <Fingerprint className="w-3.5 h-3.5 text-blue-400" />
-              <span>सेंसर टेस्ट करें (Test Now)</span>
-            </button>
-          </div>
+            {/* Immediate Sensor Hardware Test Button */}
+            {appLockOn && (
+              <div className="pt-1 flex items-center justify-between">
+                <span className="text-[11px] text-slate-400">
+                  हार्डवेयर की जांच अभी करना चाहते हैं?
+                </span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsVerifying(true);
+                    setFeedbackMessage(null);
+                    try {
+                      const res = await authenticateWithBiometrics('फिंगरप्रिंट सेंसर टेस्ट');
+                      if (res.success) {
+                        setFeedbackMessage({
+                          type: 'success',
+                          text: '✅ बधाई! आपका फिंगरप्रिंट सेंसर सक्रिय है और 100% सही काम कर रहा है!',
+                        });
+                      } else {
+                        setFeedbackMessage({
+                          type: 'error',
+                          text: res.error || 'सत्यापन रद्द हुआ।',
+                        });
+                      }
+                    } catch (e: any) {
+                      setFeedbackMessage({
+                        type: 'error',
+                        text: e?.message || 'बायोमेट्रिक एरर',
+                      });
+                    } finally {
+                      setIsVerifying(false);
+                    }
+                  }}
+                  disabled={isVerifying}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-blue-300 border border-blue-500/30 text-xs font-semibold transition active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <Fingerprint className="w-3.5 h-3.5 text-blue-400" />
+                  <span>सेंसर टेस्ट करें (Test Now)</span>
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {/* Feedback Alert */}

@@ -1098,6 +1098,24 @@ export async function updateUserCodCompanies(
     codCompanies: finalCompanies,
     codCompaniesUpdatedAt: serverTimestamp(),
   });
+
+  // Also sync to workspaces/{userId}/cod_settings/config so Company 1 & 2 match the exact serial sequence
+  try {
+    const codSettingsRef = doc(db, 'workspaces', userId, 'cod_settings', 'config');
+    await setDoc(
+      codSettingsRef,
+      {
+        company1Name: finalCompanies[0] || 'Valmo COD',
+        company2Name: finalCompanies[1] || 'Xpressbees COD',
+        companies: finalCompanies,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn('Could not sync cod_settings doc in updateUserCodCompanies:', e);
+  }
+
   return finalCompanies;
 }
 

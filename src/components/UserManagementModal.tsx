@@ -180,6 +180,27 @@ export const UserManagementModal: React.FC<Props> = ({
     }
   };
 
+  const handleMoveCompany = async (index: number, direction: -1 | 1) => {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= codCompanies.length) return;
+    const reordered = [...codCompanies];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+    setSavingCompanies(true);
+    try {
+      const saved = await updateUserCodCompanies(user.uid, reordered);
+      setCodCompanies(saved);
+      user.codCompanies = saved;
+      if (onUserUpdated) onUserUpdated({ ...user, codCompanies: saved });
+      showToast(`कंपनी क्रम बदला गया: ${reordered.join(' > ')}`, 'success');
+    } catch (err) {
+      console.error('Failed to reorder companies:', err);
+      showToast('कंपनी क्रम बदलने में विफल।', 'error');
+    } finally {
+      setSavingCompanies(false);
+    }
+  };
+
   // Rate config state
   const [rateConfig, setRateConfig] = useState<UserRateConfig>(
     user.rateConfig ? { ...DEFAULT_USER_RATE_CONFIG, ...user.rateConfig } : { ...DEFAULT_USER_RATE_CONFIG }
@@ -1396,19 +1417,46 @@ export const UserManagementModal: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {/* Active Company Badges with Delete Chips */}
+                  {/* Active Company Badges with Serial Order Numbers and Reorder Controls */}
                   <div className="flex items-center gap-2 flex-wrap pt-1">
-                    {codCompanies.map((comp) => (
+                    {codCompanies.map((comp, idx) => (
                       <span
                         key={comp}
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-teal-950/70 text-teal-200 border border-teal-700/80 text-xs font-bold shadow-xs"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-950/80 text-teal-200 border border-teal-700/80 text-xs font-bold shadow-xs"
                       >
+                        <span className="px-1.5 py-0.5 rounded bg-teal-800/90 text-white font-mono text-[10px] font-black">
+                          #{idx + 1}
+                        </span>
                         <span>{comp}</span>
+                        {/* Move Up */}
+                        {idx > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleMoveCompany(idx, -1)}
+                            disabled={savingCompanies}
+                            className="text-teal-400 hover:text-white px-0.5 transition cursor-pointer"
+                            title="ऊपर ले जाएं (Move Up)"
+                          >
+                            ▲
+                          </button>
+                        )}
+                        {/* Move Down */}
+                        {idx < codCompanies.length - 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleMoveCompany(idx, 1)}
+                            disabled={savingCompanies}
+                            className="text-teal-400 hover:text-white px-0.5 transition cursor-pointer"
+                            title="नीचे ले जाएं (Move Down)"
+                          >
+                            ▼
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleRemoveCompany(comp)}
                           disabled={savingCompanies || codCompanies.length <= 1}
-                          className="hover:text-rose-400 hover:bg-rose-950/50 rounded-full p-0.5 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          className="hover:text-rose-400 hover:bg-rose-950/50 rounded-full p-0.5 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ml-1"
                           title={`हटाएं ${comp}`}
                         >
                           <X className="w-3.5 h-3.5" />

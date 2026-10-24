@@ -532,7 +532,7 @@ function MainCourierApp() {
       riderName: sanitized.name,
       riderPhone: sanitized.phone,
       vehicleType: sanitized.vehicleType,
-      hubName: userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+      hubName: userRateConfig.hubSignature || '(कोरियर हब)',
       hubSignature: userRateConfig.hubSignature || '',
       totalAdvance: typeof sanitized.totalAdvance === 'number' ? sanitized.totalAdvance : 0,
       advances: sanitized.advances || [],
@@ -720,7 +720,7 @@ function MainCourierApp() {
   const canAccessCodCompanion = isCodAccessEnabled;
   const canShowCodShareLink = isSuperAdminUser || Boolean(userPermissions.codShareLinkVisibility);
 
-  // Derived active hub name (Admin configured or fallback)
+  // Derived active hub name (Strictly defaults to '(कोरियर हब)' until custom hub name is entered by Master Admin)
   const activeHubName = useMemo(() => {
     const raw =
       (currentUser as any)?.hubName ||
@@ -731,8 +731,14 @@ function MainCourierApp() {
       currentUser?.displayName ||
       '';
     const trimmed = (raw || '').trim();
-    return trimmed.length > 0 ? trimmed : 'सरायकेला कूरियर हब';
-  }, [currentUser, userRateConfig?.hubSignature, userProfile, inspectedUser?.hubSignature]);
+    if (!isSuperAdminUser) {
+      if (!trimmed || trimmed === 'सरायकेला कूरियर हब' || trimmed === 'सरायकेला कूरियर डिलीवरी हब' || trimmed === 'Rider Hub') {
+        return '(कोरियर हब)';
+      }
+      return trimmed;
+    }
+    return trimmed.length > 0 ? trimmed : '(कोरियर हब)';
+  }, [currentUser, userRateConfig?.hubSignature, userProfile, inspectedUser?.hubSignature, isSuperAdminUser]);
 
   // Auto-redirect if current tab becomes restricted or if non-superadmin tries to access admin
   useEffect(() => {
@@ -2470,8 +2476,8 @@ function MainCourierApp() {
         </div>
       )}
 
-      {/* Super-Powered Live Update Floating Banner */}
-      {isLiveUpdateAvailable && (
+      {/* Super-Powered Live Update Floating Banner - Restricted strictly to Master Admin */}
+      {isSuperAdminUser && isLiveUpdateAvailable && (
         <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white px-4 py-2.5 text-xs font-semibold flex items-center justify-between shadow-xl sticky top-0 z-50 border-b border-emerald-400/40 animate-pulse">
           <div className="flex items-center gap-2.5">
             <span className="text-base">🚀</span>
@@ -2565,21 +2571,23 @@ function MainCourierApp() {
 
           {/* Mobile Right: Direct Round Sync Button + User Account Menu (Always 100% visible and clickable) */}
           <div className="flex sm:hidden items-center gap-2 shrink-0">
-            {/* Direct Round Live Sync Icon */}
-            <button
-              id="header-mobile-round-sync-btn"
-              type="button"
-              onClick={handleManualCheckLiveUpdate}
-              disabled={isCheckingUpdate}
-              className={`p-2 rounded-xl border transition active:scale-95 cursor-pointer flex items-center justify-center shadow-sm ${
-                isLiveUpdateAvailable
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-400 animate-pulse shadow-emerald-500/40 ring-2 ring-emerald-400/50'
-                  : 'bg-slate-800 text-cyan-300 border-cyan-800/60 hover:bg-slate-750'
-              }`}
-              title="क्लिक करें: ऐप को क्लाउड से तुरंत सिंक करें (1-Click Sync)"
-            >
-              <RefreshCw className={`w-4 h-4 ${isCheckingUpdate ? 'animate-spin' : isLiveUpdateAvailable ? 'text-white' : 'text-cyan-400'}`} />
-            </button>
+            {/* Direct Round Live Sync Icon - Restricted strictly to Master Admin */}
+            {isSuperAdminUser && (
+              <button
+                id="header-mobile-round-sync-btn"
+                type="button"
+                onClick={handleManualCheckLiveUpdate}
+                disabled={isCheckingUpdate}
+                className={`p-2 rounded-xl border transition active:scale-95 cursor-pointer flex items-center justify-center shadow-sm ${
+                  isLiveUpdateAvailable
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-400 animate-pulse shadow-emerald-500/40 ring-2 ring-emerald-400/50'
+                    : 'bg-slate-800 text-cyan-300 border-cyan-800/60 hover:bg-slate-750'
+                }`}
+                title="क्लिक करें: ऐप को क्लाउड से तुरंत सिंक करें (1-Click Sync)"
+              >
+                <RefreshCw className={`w-4 h-4 ${isCheckingUpdate ? 'animate-spin' : isLiveUpdateAvailable ? 'text-white' : 'text-cyan-400'}`} />
+              </button>
+            )}
 
             {/* Mobile User Account & Cloud Sync Menu */}
             <UserAccountMenu
@@ -2625,7 +2633,7 @@ function MainCourierApp() {
             )}
 
             {/* सिर्फ Master Admin को ही Backup, Restore, PWA और Sync दिखेगा */}
-            {isAdmin && (
+            {isSuperAdminUser && (
               <div className="flex items-center gap-2 shrink-0">
                 {/* PWA Button */}
                 <div className="btn-pwa">
@@ -2700,36 +2708,6 @@ function MainCourierApp() {
               </div>
             )}
 
-            {/* Free Tier: Enable Cloud Backup & Upgrade Button */}
-            {!isProUser && (
-              <button
-                id="header-enable-cloud-sync-btn"
-                type="button"
-                onClick={() => openSubscriptionModal('cloud_backup')}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-black shadow-md shadow-blue-600/25 border border-blue-400/40 transition active:scale-95 cursor-pointer shrink-0"
-                title="Enable Realtime Firebase Cloud Backup & Multi-Device Sync (Pro)"
-              >
-                <Cloud className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">☁️ Enable Cloud Sync</span>
-                <span className="sm:hidden">Cloud Sync</span>
-              </button>
-            )}
-
-            {/* Regular User Persistent Header Shortcut Button: "💳 Subscription / Pay & Slip" */}
-            {currentUser && !isSuperAdminUser && (
-              <button
-                id="header-user-subscription-btn"
-                type="button"
-                onClick={() => openSubscriptionModal('manual')}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-bold shadow-md shadow-amber-600/20 border border-amber-500/40 transition active:scale-95 cursor-pointer shrink-0"
-                title="💳 Subscription / Pay & Slip: View fee, scan QR code, or submit payment slip"
-              >
-                <CreditCard className="w-3.5 h-3.5 text-amber-200" />
-                <span className="hidden sm:inline">💳 Subscription / Pay & Slip</span>
-                <span className="sm:hidden">💳 Pay & Slip</span>
-              </button>
-            )}
-
             {/* Universally Accessible Legal & Compliance Policies Header Button */}
             <button
               id="header-legal-policies-btn"
@@ -2763,13 +2741,13 @@ function MainCourierApp() {
           </div>
         </div>
 
-        {/* Dedicated Horizontally Scrollable Options Toolbar for Mobile:
-            Page stays completely fixed without sideways wobble, while ONLY this row of options scrolls horizontally! */}
-        <div 
-          id="header-mobile-scrollable-options-bar"
-          className="sm:hidden border-t border-slate-800/80 bg-slate-900/80 px-3 py-1.5 overflow-x-auto flex items-center gap-2 scrollbar-none"
-          style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}
-        >
+        {/* Dedicated Horizontally Scrollable Options Toolbar for Mobile (Restricted strictly to Master Admin) */}
+        {isSuperAdminUser && (
+          <div 
+            id="header-mobile-scrollable-options-bar"
+            className="sm:hidden border-t border-slate-800/80 bg-slate-900/80 px-3 py-1.5 overflow-x-auto flex items-center gap-2 scrollbar-none"
+            style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}
+          >
           {/* 1. Live Cloud Sync Action Chip */}
           <button
             id="mobile-scroll-live-update-btn"
@@ -2900,6 +2878,7 @@ function MainCourierApp() {
             </button>
           )}
         </div>
+      )}
 
         {/* Live Server Connection Banner (instant PWA cold-start feedback) */}
         {connectionBanner && (
@@ -3076,8 +3055,8 @@ function MainCourierApp() {
               </button>
             )}
 
-            {/* Direct साथी ऐप (Rider Entry) Tab Button - Strictly guarded by Hub COD Companion Access permission */}
-            {canAccessCodCompanion && (
+            {/* Direct साथी ऐप (Rider Entry) Tab Button - Restricted strictly to Master Admin */}
+            {isSuperAdminUser && (
               <button
                 id="desktop-tab-companion"
                 type="button"

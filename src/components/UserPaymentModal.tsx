@@ -45,6 +45,9 @@ import { RazorpaySuccessModal } from './RazorpaySuccessModal';
 import { compressAndEncodeImage, validateImageFile } from '../utils/imageUpload';
 import { formatINR } from '../utils/formatters';
 
+// Set to true to re-enable manual UPI ID/QR and slip submission in memory
+const SHOW_MANUAL_UPI_OPTION = false;
+
 export interface UserPaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -401,23 +404,25 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
               }`}
             >
               <Zap className="w-3.5 h-3.5" />
-              <span>1. PayU Instant Activation (Recommended)</span>
+              <span>Instant Activation (Razorpay)</span>
             </button>
 
-            <button
-              type="button"
-              id="sub-tab-qr"
-              onClick={() => setActiveTab('qr')}
-              className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                activeTab === 'qr'
-                  ? 'bg-slate-800 text-white border border-slate-700'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <QrCode className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Manual UPI QR</span>
-              <span className="sm:hidden">QR</span>
-            </button>
+            {SHOW_MANUAL_UPI_OPTION && (
+              <button
+                type="button"
+                id="sub-tab-qr"
+                onClick={() => setActiveTab('qr')}
+                className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  activeTab === 'qr'
+                    ? 'bg-slate-800 text-white border border-slate-700'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Manual UPI QR</span>
+                <span className="sm:hidden">QR</span>
+              </button>
+            )}
 
             {paymentHistory.length > 0 && (
               <button
@@ -607,8 +612,8 @@ export const UserPaymentModal: React.FC<UserPaymentModalProps> = ({
               </div>
             )}
 
-            {/* TAB 2: Manual UPI QR & Slip Upload */}
-            {activeTab === 'qr' && (
+            {/* TAB 2: Manual UPI QR & Slip Upload (Preserved in memory, re-enabled instantly if SHOW_MANUAL_UPI_OPTION is true) */}
+            {SHOW_MANUAL_UPI_OPTION && activeTab === 'qr' && (
               <div className="space-y-5 animate-in fade-in">
                 <div className="p-4 rounded-2xl bg-slate-850 border border-slate-800 flex flex-col sm:flex-row items-center gap-5">
                   {/* QR Image */}

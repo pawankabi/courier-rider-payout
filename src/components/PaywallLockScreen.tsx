@@ -53,6 +53,9 @@ interface PaywallLockScreenProps {
   onSubscriptionUpdated?: (updated: UserSubscription) => void;
 }
 
+// Set to true to re-enable manual UPI ID/QR and slip submission in memory
+const SHOW_MANUAL_UPI_OPTION = false;
+
 export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
   currentUser,
   userProfile,
@@ -631,14 +634,16 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
               </div>
             </div>
 
-            {/* OR SEPARATOR */}
-            <div className="relative flex py-1 items-center">
-              <div className="flex-grow border-t border-slate-800"></div>
-              <span className="flex-shrink mx-4 text-xs font-bold text-slate-500 uppercase tracking-widest">
-                या मैन्युअल UPI ट्रांसफर व रसीद अपलोड करें (Alternative)
-              </span>
-              <div className="flex-grow border-t border-slate-800"></div>
-            </div>
+            {/* OR SEPARATOR & MANUAL UPI (Preserved in memory, re-enabled instantly if SHOW_MANUAL_UPI_OPTION is true) */}
+            {SHOW_MANUAL_UPI_OPTION && (
+              <>
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-slate-800"></div>
+                  <span className="flex-shrink mx-4 text-xs font-bold text-slate-500 uppercase tracking-widest">
+                    या मैन्युअल UPI ट्रांसफर व रसीद अपलोड करें (Alternative)
+                  </span>
+                  <div className="flex-grow border-t border-slate-800"></div>
+                </div>
 
             {/* Payment Grid: QR Code & Payment Instructions on Left, Upload Form on Right */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
@@ -857,6 +862,8 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
               </form>
             </div>
           </div>
+          </>
+          )}
         </div>
         )}
       </main>

@@ -222,8 +222,10 @@ export const UserAccountMenu: React.FC<Props> = ({
             )}
           </div>
 
-          {/* App Lock (Fingerprint / Face ID / PIN) Setting Toggle */}
-          <AppLockSettingRow userId={user.uid} />
+          {/* App Lock (Fingerprint / Face ID / PIN) Setting Toggle - Restricted strictly to Master Admin until finalized */}
+          {user.email === 'pawankabiseraikella@gmail.com' && (
+            <AppLockSettingRow userId={user.uid} />
+          )}
 
           {/* User Security info */}
           <div className="px-1 text-[10px] text-slate-400 flex items-center gap-1.5">
