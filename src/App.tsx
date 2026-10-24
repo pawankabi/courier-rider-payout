@@ -1374,10 +1374,6 @@ function MainCourierApp() {
     try {
       CapacitorApp.addListener('appStateChange', (state) => {
         if (state.isActive) {
-          // Re-engage app lock if enabled
-          if (isAppLockEnabled()) {
-            setIsAppLocked(true);
-          }
           handleResume();
         }
       }).then((handle) => {
@@ -2441,7 +2437,7 @@ function MainCourierApp() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans w-full max-w-[100vw] overflow-x-hidden">
+    <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans w-full overflow-x-hidden">
       {/* Admin Inspection Banner */}
       {inspectedUser && (
         <div 
@@ -2525,22 +2521,33 @@ function MainCourierApp() {
         className="sticky top-0 z-40 bg-[#0f172a]/95 border-b border-slate-800 shadow-md backdrop-blur-md"
         style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0.75rem))' }}
       >
-        <div className="max-w-6xl mx-auto px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3">
+        {/* Hidden File Input for JSON Backup Restore (Accessible by both mobile & desktop restore buttons) */}
+        <input
+          type="file"
+          id="header-restore-file-input"
+          ref={restoreFileInputRef}
+          onChange={handleRestoreBackupFile}
+          accept=".json,application/json"
+          className="hidden"
+        />
+
+        {/* Primary Header Row */}
+        <div className="max-w-6xl mx-auto px-3.5 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2.5">
           {/* Brand Logo & Name */}
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-slate-950 border border-cyan-500/30 p-0.5 shadow-md flex items-center justify-center shrink-0">
-              <img src="/admin-logo.svg" alt="Courier App Logo" className="w-8 h-8 rounded-lg object-contain" />
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-950 border border-cyan-500/30 p-0.5 shadow-md flex items-center justify-center shrink-0">
+              <img src="/admin-logo.svg" alt="Courier App Logo" className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg object-contain" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <h1 className="font-extrabold text-sm sm:text-base text-white tracking-tight leading-none">
+                <h1 className="font-extrabold text-sm sm:text-base text-white tracking-tight leading-none truncate">
                   Courier Payout Pro
                 </h1>
                 {/* Mobile Hub Name Badge with Verified Rosette */}
-                <div className="sm:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 border border-slate-700/80 text-[11px] font-semibold text-slate-200">
-                  <span className="truncate max-w-[130px]">{activeHubName}</span>
+                <div className="sm:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 border border-slate-700/80 text-[10px] font-semibold text-slate-200">
+                  <span className="truncate max-w-[110px]">{activeHubName}</span>
                   {isSubscribedHub && (
-                    <VerifiedBadge className="inline-block flex-shrink-0" size={13} />
+                    <VerifiedBadge className="inline-block flex-shrink-0" size={12} />
                   )}
                 </div>
               </div>
@@ -2556,10 +2563,47 @@ function MainCourierApp() {
             </div>
           </div>
 
-          {/* Header Action Items */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          {/* Mobile Right: Direct Round Sync Button + User Account Menu (Always 100% visible and clickable) */}
+          <div className="flex sm:hidden items-center gap-2 shrink-0">
+            {/* Direct Round Live Sync Icon */}
+            <button
+              id="header-mobile-round-sync-btn"
+              type="button"
+              onClick={handleManualCheckLiveUpdate}
+              disabled={isCheckingUpdate}
+              className={`p-2 rounded-xl border transition active:scale-95 cursor-pointer flex items-center justify-center shadow-sm ${
+                isLiveUpdateAvailable
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-400 animate-pulse shadow-emerald-500/40 ring-2 ring-emerald-400/50'
+                  : 'bg-slate-800 text-cyan-300 border-cyan-800/60 hover:bg-slate-750'
+              }`}
+              title="क्लिक करें: ऐप को क्लाउड से तुरंत सिंक करें (1-Click Sync)"
+            >
+              <RefreshCw className={`w-4 h-4 ${isCheckingUpdate ? 'animate-spin' : isLiveUpdateAvailable ? 'text-white' : 'text-cyan-400'}`} />
+            </button>
+
+            {/* Mobile User Account & Cloud Sync Menu */}
+            <UserAccountMenu
+              user={currentUser}
+              syncStatus={syncStatus}
+              isProUser={isProUser}
+              isVerifiedHub={isVerifiedHub}
+              onOpenAuth={(mode) => {
+                setAuthModalMode(mode || 'signin');
+                setIsAuthModalOpen(true);
+              }}
+              onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
+              onOpenSyncOldApp={isAdmin ? () => setIsSyncOldAppModalOpen(true) : undefined}
+              onOpenSubscription={!isSuperAdminUser ? () => openSubscriptionModal('manual') : undefined}
+              onEnableCloudBackup={() => openSubscriptionModal('cloud_backup')}
+              onOpenLegalPolicies={() => handleOpenLegalPolicies('about')}
+              onOpenProfileSettings={() => setIsProfileModalOpen(true)}
+            />
+          </div>
+
+          {/* Desktop/Tablet Header Action Items (Single row, smoothly scrollable on mid screens) */}
+          <div className="hidden sm:flex items-center gap-2 sm:gap-3 overflow-x-auto py-1 max-w-full">
             {/* Today Quick Metric Badge */}
-            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/80 text-xs">
+            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/80 text-xs shrink-0">
               <span className="text-slate-400">Today:</span>
               <span className="font-bold text-white">{todayParcels} pkts</span>
               <span className="text-slate-600">•</span>
@@ -2571,7 +2615,7 @@ function MainCourierApp() {
               <button
                 id="header-share-app-link-btn"
                 onClick={() => setIsShareAppModalOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md shadow-blue-600/20 transition active:scale-95 cursor-pointer"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md shadow-blue-600/20 transition active:scale-95 cursor-pointer shrink-0"
                 title="Share dynamic app links with riders and team"
               >
                 <Share2 className="w-3.5 h-3.5" />
@@ -2582,7 +2626,7 @@ function MainCourierApp() {
 
             {/* सिर्फ Master Admin को ही Backup, Restore, PWA और Sync दिखेगा */}
             {isAdmin && (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {/* PWA Button */}
                 <div className="btn-pwa">
                   <PWAInstallBanner variant="button" />
@@ -2601,14 +2645,6 @@ function MainCourierApp() {
                 </button>
 
                 {/* Restore Button */}
-                <input
-                  type="file"
-                  id="header-restore-file-input"
-                  ref={restoreFileInputRef}
-                  onChange={handleRestoreBackupFile}
-                  accept=".json,application/json"
-                  className="hidden"
-                />
                 <button
                   id="header-restore-backup-btn"
                   onClick={() => restoreFileInputRef.current?.click()}
@@ -2725,6 +2761,144 @@ function MainCourierApp() {
               onOpenProfileSettings={() => setIsProfileModalOpen(true)}
             />
           </div>
+        </div>
+
+        {/* Dedicated Horizontally Scrollable Options Toolbar for Mobile:
+            Page stays completely fixed without sideways wobble, while ONLY this row of options scrolls horizontally! */}
+        <div 
+          id="header-mobile-scrollable-options-bar"
+          className="sm:hidden border-t border-slate-800/80 bg-slate-900/80 px-3 py-1.5 overflow-x-auto flex items-center gap-2 scrollbar-none"
+          style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y' }}
+        >
+          {/* 1. Live Cloud Sync Action Chip */}
+          <button
+            id="mobile-scroll-live-update-btn"
+            type="button"
+            onClick={handleManualCheckLiveUpdate}
+            disabled={isCheckingUpdate}
+            className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs shadow-sm transition active:scale-95 cursor-pointer disabled:opacity-60 ${
+              isLiveUpdateAvailable
+                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border border-emerald-400/50 shadow-emerald-500/30 animate-pulse'
+                : 'bg-slate-800 hover:bg-slate-750 text-cyan-300 border border-slate-700'
+            }`}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isCheckingUpdate ? 'animate-spin' : isLiveUpdateAvailable ? 'text-white' : 'text-cyan-400'}`} />
+            <span>
+              {isCheckingUpdate ? 'जांच जारी...' : isLiveUpdateAvailable ? '⚡ 1-क्लिक अपडेट' : '🔄 सिंक अपडेट्स'}
+            </span>
+            {isLiveUpdateAvailable && (
+              <span className="w-2 h-2 rounded-full bg-amber-300 animate-ping"></span>
+            )}
+          </button>
+
+          {/* 2. Admin Backup Button */}
+          {isAdmin && (
+            <button
+              id="mobile-scroll-backup-btn"
+              type="button"
+              onClick={handleDownloadBackup}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-blue-400" />
+              <span>📥 बैकअप</span>
+            </button>
+          )}
+
+          {/* 3. Admin Restore Button */}
+          {isAdmin && (
+            <button
+              id="mobile-scroll-restore-btn"
+              type="button"
+              onClick={() => restoreFileInputRef.current?.click()}
+              disabled={isRestoringBackup}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 disabled:opacity-50 cursor-pointer"
+            >
+              {isRestoringBackup ? (
+                <RefreshCw className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
+              ) : (
+                <Upload className="w-3.5 h-3.5 text-emerald-400" />
+              )}
+              <span>{isRestoringBackup ? 'रीस्टोर...' : '📤 रीस्टोर'}</span>
+            </button>
+          )}
+
+          {/* 4. Sync Old App */}
+          {isAdmin && (
+            <button
+              id="mobile-scroll-sync-old-btn"
+              type="button"
+              onClick={() => setIsSyncOldAppModalOpen(true)}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-bold shadow-sm border border-amber-500/40 transition active:scale-95 cursor-pointer"
+            >
+              <CloudDownload className="w-3.5 h-3.5" />
+              <span>पुराना ऐप सिंक</span>
+            </button>
+          )}
+
+          {/* 5. Master Admin Share App Link */}
+          {isSuperAdminUser && (
+            <button
+              id="mobile-scroll-share-link-btn"
+              type="button"
+              onClick={() => setIsShareAppModalOpen(true)}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-sm transition active:scale-95 cursor-pointer"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>शेयर लिंक</span>
+            </button>
+          )}
+
+          {/* 6. Today Metric Badge */}
+          <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/90 border border-slate-700 text-xs">
+            <span className="text-slate-400">आज:</span>
+            <span className="font-bold text-white">{todayParcels} pkts</span>
+            <span className="text-slate-600">•</span>
+            <span className="font-bold text-emerald-400">{formatINR(todayEarnings)}</span>
+          </div>
+
+          {/* 7. Regular User Subscription / Pay & Slip */}
+          {currentUser && !isSuperAdminUser && (
+            <button
+              id="mobile-scroll-user-subscription-btn"
+              type="button"
+              onClick={() => openSubscriptionModal('manual')}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-bold shadow-sm border border-amber-500/40 transition active:scale-95 cursor-pointer"
+            >
+              <CreditCard className="w-3.5 h-3.5 text-amber-200" />
+              <span>💳 Pay & Slip</span>
+            </button>
+          )}
+
+          {/* 8. Policies & About */}
+          <button
+            id="mobile-scroll-legal-policies-btn"
+            type="button"
+            onClick={() => handleOpenLegalPolicies('about')}
+            className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+          >
+            <Scale className="w-3.5 h-3.5 text-amber-400" />
+            <span>नीतियां (Policies)</span>
+          </button>
+
+          {/* 9. PWA Button */}
+          {isAdmin && (
+            <div className="shrink-0 btn-pwa">
+              <PWAInstallBanner variant="button" />
+            </div>
+          )}
+
+          {/* 10. Free Tier Cloud Sync */}
+          {!isProUser && (
+            <button
+              id="mobile-scroll-enable-cloud-btn"
+              type="button"
+              onClick={() => openSubscriptionModal('cloud_backup')}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-black shadow-md border border-blue-400/40 transition active:scale-95 cursor-pointer"
+            >
+              <Cloud className="w-3.5 h-3.5" />
+              <span>☁️ Cloud Sync</span>
+            </button>
+          )}
         </div>
 
         {/* Live Server Connection Banner (instant PWA cold-start feedback) */}

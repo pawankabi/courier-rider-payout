@@ -54,12 +54,12 @@ const syncOrGenerateApk = (flavor, fileName) => {
       flavor: flavor,
       package: flavor === 'rider' ? 'com.courierpayout.rider' : 'com.courierpayout.app',
       appName: flavor === 'rider' ? 'COD Entry (Rider)' : 'Courier Payout Pro',
-      version: '1.0.5',
+      version: '1.0.8',
       builtAt: new Date().toISOString()
     }, null, 2);
 
     // Standard minimal valid ZIP buffer with flavor-specific comment
-    const commentBuf = Buffer.from(`${flavor}-release-v1.0.5`);
+    const commentBuf = Buffer.from(`${flavor}-release-v1.0.8`);
     const zipHeader = Buffer.from([
       0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -116,11 +116,9 @@ try {
       hostname: 'courier-rider-payout.firebaseapp.com',
       cleartext: true,
       allowNavigation: [
-        'ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-        'ais-dev-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-        '*.run.app',
         '*.firebaseapp.com',
-        '*.googleapis.com'
+        '*.googleapis.com',
+        '*.razorpay.com'
       ]
     }
   };
@@ -158,11 +156,9 @@ try {
       hostname: 'cod-entry-rider.firebaseapp.com',
       cleartext: true,
       allowNavigation: [
-        'ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-        'ais-dev-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-        '*.run.app',
         '*.firebaseapp.com',
-        '*.googleapis.com'
+        '*.googleapis.com',
+        '*.razorpay.com'
       ]
     }
   };

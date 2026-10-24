@@ -41,11 +41,9 @@ const adminCapConfig = {
     hostname: 'courier-rider-payout.firebaseapp.com',
     cleartext: true,
     allowNavigation: [
-      'ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-      'ais-dev-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-      '*.run.app',
       '*.firebaseapp.com',
-      '*.googleapis.com'
+      '*.googleapis.com',
+      '*.razorpay.com'
     ]
   }
 };
@@ -78,11 +76,9 @@ const riderCapConfig = {
     hostname: 'cod-entry-rider.firebaseapp.com',
     cleartext: true,
     allowNavigation: [
-      'ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-      'ais-dev-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
-      '*.run.app',
       '*.firebaseapp.com',
-      '*.googleapis.com'
+      '*.googleapis.com',
+      '*.razorpay.com'
     ]
   }
 };
