@@ -271,11 +271,13 @@ function MainCourierApp() {
   });
 
   // Device Security / Biometric App Lock state:
-  // Strictly follows the 15-Minute Rule:
+  // Strictly follows the 15-Minute Rule and Native Android APK requirement:
+  // - NEVER locks on web browsers (fingerprint is only supported on Android APK).
   // - NEVER locks while user is actively working inside the app.
-  // - ONLY locks if the phone screen has been off or app idle/in background for >= 15 minutes.
+  // - ONLY locks if inside native Android APK AND phone screen off / idle for >= 15 minutes.
   const [isAppLocked, setIsAppLocked] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
+    if (!isNativeAndroid()) return false;
     try {
       if (!isAppLockEnabled()) return false;
       return shouldTriggerAppLock();
@@ -287,6 +289,8 @@ function MainCourierApp() {
   // 1. User Activity Listener:
   // Catches all touches, clicks, typing, scrolling to ensure active work NEVER gets locked
   useEffect(() => {
+    if (!isNativeAndroid()) return;
+
     const handleActivity = () => {
       recordUserActivity();
     };
@@ -294,10 +298,10 @@ function MainCourierApp() {
     const activityEvents = ['pointerdown', 'touchstart', 'mousedown', 'keydown', 'scroll', 'click'];
     activityEvents.forEach((ev) => window.addEventListener(ev, handleActivity, { passive: true }));
 
-    // Foreground 15-min idle watchdog:
+    // Foreground 15-min idle watchdog (Native Android only):
     // If phone screen was left on without touching anything for 15 minutes straight:
     const watchdogTimer = setInterval(() => {
-      if (isAppLockEnabled() && !isAppLocked) {
+      if (isNativeAndroid() && isAppLockEnabled() && !isAppLocked) {
         if (shouldTriggerAppLock()) {
           setIsAppLocked(true);
         }
@@ -310,17 +314,19 @@ function MainCourierApp() {
     };
   }, [isAppLocked]);
 
-  // 2. Phone Screen Off / Background / Resume Lifecycle:
+  // 2. Phone Screen Off / Background / Resume Lifecycle (Native Android only):
   // When screen turns off or user switches apps -> record timestamp.
   // When user returns:
   // - If away for >= 15 minutes -> prompt for Fingerprint/PIN.
   // - If away for < 15 minutes -> continue smoothly without locking.
   useEffect(() => {
+    if (!isNativeAndroid()) return;
+
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') {
         recordAppBackground();
       } else if (document.visibilityState === 'visible') {
-        if (isAppLockEnabled() && !isAppLocked) {
+        if (isNativeAndroid() && isAppLockEnabled() && !isAppLocked) {
           if (shouldTriggerAppLock()) {
             setIsAppLocked(true);
           } else {
@@ -336,7 +342,7 @@ function MainCourierApp() {
         if (!isActive) {
           recordAppBackground();
         } else {
-          if (isAppLockEnabled() && !isAppLocked) {
+          if (isNativeAndroid() && isAppLockEnabled() && !isAppLocked) {
             if (shouldTriggerAppLock()) {
               setIsAppLocked(true);
             } else {
@@ -2348,8 +2354,8 @@ function MainCourierApp() {
   }
 
   // DEVICE SECURITY / BIOMETRIC APP LOCK GATE:
-  // When enabled, requires Fingerprint / Face ID / Screen Lock authentication to view app
-  if (isAppLocked) {
+  // Strictly native Android APK only. Never rendered on web browsers.
+  if (isAppLocked && isNativeAndroid()) {
     return (
       <AppLockScreen
         currentUserEmail={currentUser?.email || undefined}

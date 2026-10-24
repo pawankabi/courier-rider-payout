@@ -65,7 +65,7 @@ jobs:
       - name: Extract Version Info
         id: get_version
         run: |
-          VERSION_NAME=$(grep "versionName" android/app/build.gradle | head -1 | awk -F '"' '{print $2}')
+          VERSION_NAME=$(node -p "require('./package.json').version")
           VERSION_CODE=$(grep "versionCode" android/app/build.gradle | head -1 | awk '{print $2}')
           echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT

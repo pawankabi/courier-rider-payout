@@ -22,6 +22,11 @@ import {
   downloadRiderApk,
   downloadAdminApk
 } from '../utils/shareLink';
+import { 
+  fetchLatestReleaseVersion, 
+  getCachedReleaseVersion, 
+  APP_VERSION 
+} from '../utils/version';
 
 interface ShareAppModalProps {
   isOpen: boolean;
@@ -35,6 +40,13 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   onToast
 }) => {
   const [copiedType, setCopiedType] = useState<'rider' | 'admin' | 'rider_apk' | 'admin_apk' | null>(null);
+  const [releaseVersion, setReleaseVersion] = useState<string>(() => getCachedReleaseVersion());
+
+  React.useEffect(() => {
+    fetchLatestReleaseVersion().then((ver) => {
+      if (ver) setReleaseVersion(ver);
+    }).catch(() => {});
+  }, []);
 
   if (!isOpen) return null;
 
@@ -231,8 +243,8 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
 
             <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 font-mono text-xs text-emerald-300 flex items-center justify-between gap-2">
               <span className="truncate">COD-Entry-Rider-Release.apk</span>
-              <span className="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 shrink-0">
-                v1.0.5 Rider
+              <span className="text-[10px] text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 shrink-0 font-medium">
+                v{releaseVersion} Rider
               </span>
             </div>
 
@@ -314,8 +326,8 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
 
             <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 font-mono text-xs text-indigo-300 flex items-center justify-between gap-2">
               <span className="truncate">Admin-Payout-Release.apk</span>
-              <span className="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 shrink-0">
-                v1.0.5 Admin
+              <span className="text-[10px] text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 shrink-0 font-medium">
+                v{releaseVersion} Admin
               </span>
             </div>
 

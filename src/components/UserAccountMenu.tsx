@@ -23,6 +23,7 @@ import {
 import { auth } from '../firebase';
 import { AppLockSettingRow } from './AppLockSettingRow';
 import { VerifiedBadge } from './VerifiedBadge';
+import { isNativeAndroid } from '../services/nativeSms';
 
 interface Props {
   user: FirebaseUser | null;
@@ -222,8 +223,8 @@ export const UserAccountMenu: React.FC<Props> = ({
             )}
           </div>
 
-          {/* App Lock (Fingerprint / Face ID / PIN) Setting Toggle - Restricted strictly to Master Admin until finalized */}
-          {user.email === 'pawankabiseraikella@gmail.com' && (
+          {/* App Lock (Fingerprint / Face ID / PIN) Setting Toggle - Strictly Native Android APK only */}
+          {isNativeAndroid() && user.email === 'pawankabiseraikella@gmail.com' && (
             <AppLockSettingRow userId={user.uid} />
           )}
 

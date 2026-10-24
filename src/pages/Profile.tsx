@@ -24,6 +24,7 @@ import {
   checkBiometryStatus,
   BiometryStatus 
 } from '../services/biometricService';
+import { isNativeAndroid } from '../services/nativeSms';
 import { VerifiedBadge } from '../components/VerifiedBadge';
 
 interface ProfileProps {
@@ -194,8 +195,8 @@ export const Profile: React.FC<ProfileProps> = ({
           )}
         </div>
 
-        {/* App Lock & Sensor Hardware Test - Restricted strictly to Master Admin until finalized */}
-        {user?.email === 'pawankabiseraikella@gmail.com' && (
+        {/* App Lock & Sensor Hardware Test - Strictly Native Android APK only */}
+        {isNativeAndroid() && user?.email === 'pawankabiseraikella@gmail.com' && (
           <>
             <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-755 flex items-center justify-between gap-4">
               <div className="space-y-1">

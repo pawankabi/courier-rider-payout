@@ -1,6 +1,7 @@
 import { BiometricAuth, BiometryType, CheckBiometryResult } from '@aparajita/capacitor-biometric-auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { isNativeAndroid } from './nativeSms';
 
 export const APP_LOCK_STORAGE_KEY = 'cp_app_lock_enabled';
 export const APP_LOCK_LAST_ACTIVE_KEY = 'cp_app_lock_last_active';
@@ -28,9 +29,12 @@ let lastStorageWriteTime = 0;
 
 /**
  * Checks if the user has enabled App Lock on this device.
+ * STRICT: App Lock is ONLY available inside the native Android APK.
+ * Never requests or triggers inside web browsers!
  */
 export function isAppLockEnabled(): boolean {
   if (typeof window === 'undefined') return false;
+  if (!isNativeAndroid()) return false;
   try {
     return localStorage.getItem(APP_LOCK_STORAGE_KEY) === 'true';
   } catch {
@@ -135,6 +139,7 @@ export function recordAppUnlock(): void {
  * If the user has been active within the last 15 minutes, returns FALSE.
  */
 export function shouldTriggerAppLock(): boolean {
+  if (!isNativeAndroid()) return false;
   if (!isAppLockEnabled()) return false;
   if (typeof window === 'undefined') return false;
 
@@ -196,6 +201,16 @@ export function getBiometryTypeName(type: BiometryType): string {
  * Checks hardware and enrollment status of biometrics on this device.
  */
 export async function checkBiometryStatus(): Promise<BiometryStatus> {
+  if (!isNativeAndroid()) {
+    return {
+      isAvailable: false,
+      deviceIsSecure: false,
+      biometryType: BiometryType.none,
+      biometryTypeName: 'Web Browser (Not Supported)',
+      reason: 'Biometrics is only supported in the native Android app.',
+    };
+  }
+
   try {
     const result: CheckBiometryResult = await BiometricAuth.checkBiometry();
     return {
@@ -208,7 +223,7 @@ export async function checkBiometryStatus(): Promise<BiometryStatus> {
   } catch (err: any) {
     console.warn('Error checking biometry status:', err);
     return {
-      isAvailable: true, // Allow attempt with device credential fallback
+      isAvailable: true, // Allow attempt with device credential fallback on Android
       deviceIsSecure: true,
       biometryType: BiometryType.none,
       biometryTypeName: 'Device PIN / Pattern / Biometrics',
@@ -225,13 +240,13 @@ export async function checkBiometryStatus(): Promise<BiometryStatus> {
 export async function authenticateWithBiometrics(
   reason = 'Courier Rider Payout अनलॉक करें'
 ): Promise<{ success: boolean; error?: string }> {
-  try {
-    // If running in pure browser web without plugin support
-    if (typeof window === 'undefined') {
-      return { success: true };
-    }
+  // STRICT: Never request biometric authentication on Web browsers!
+  if (!isNativeAndroid() || typeof window === 'undefined') {
+    return { success: true };
+  }
 
-    // Standard Android/iOS Biometric + Screen Lock Credential authentication
+  try {
+    // Standard Android Biometric + Screen Lock Credential authentication
     await BiometricAuth.authenticate({
       reason,
       allowDeviceCredential: true, // Required for Device PIN/Pattern fallback

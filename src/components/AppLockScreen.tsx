@@ -19,6 +19,7 @@ import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
 import { App as CapacitorApp } from '@capacitor/app';
 import { authenticateWithBiometrics, setAppLockEnabled, recordAppUnlock } from '../services/biometricService';
+import { isNativeAndroid } from '../services/nativeSms';
 
 interface AppLockScreenProps {
   onUnlock: () => void;
@@ -87,6 +88,13 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
 
   // Trigger prompt once on mount with 450ms delay for smooth UI transition
   useEffect(() => {
+    // If somehow mounted on a web browser, unlock immediately without prompting
+    if (!isNativeAndroid()) {
+      recordAppUnlock();
+      onUnlock();
+      return;
+    }
+
     const timer = setTimeout(() => {
       handleAuthenticate();
     }, 450);
@@ -138,6 +146,11 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
       setIsVerifyingPassword(false);
     }
   };
+
+  // Strictly do not render on web browsers
+  if (!isNativeAndroid()) {
+    return null;
+  }
 
   return (
     <div 

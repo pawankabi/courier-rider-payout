@@ -542,6 +542,7 @@ export interface CodSettings {
   isEnabled: boolean; // Feature flag for standard users
   company1Name: string; // Default: 'Valmo COD'
   company2Name: string; // Default: 'Xpressbees COD'
+  companies?: string[]; // List of company names
   defaultLockTime?: string; // e.g. "23:00"
   updatedAt: string;
 }

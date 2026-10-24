@@ -14,6 +14,7 @@ import {
   checkBiometryStatus,
   BiometryStatus 
 } from '../services/biometricService';
+import { isNativeAndroid } from '../services/nativeSms';
 
 interface AppLockSettingRowProps {
   userId?: string;
@@ -26,6 +27,11 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
   onStatusChanged,
   className = '',
 }) => {
+  // Never show on Web browsers
+  if (!isNativeAndroid()) {
+    return null;
+  }
+
   const [enabled, setEnabled] = useState<boolean>(() => isAppLockEnabled());
   const [isChanging, setIsChanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
