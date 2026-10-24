@@ -2575,8 +2575,20 @@ function MainCourierApp() {
             </div>
           </div>
 
-          {/* Mobile Right: Direct Round Sync Button + User Account Menu (Always 100% visible and clickable) */}
-          <div className="flex sm:hidden items-center gap-2 shrink-0">
+          {/* Mobile Right: Policies Button (All Users) + Direct Round Sync (Master Admin) + User Account Menu */}
+          <div className="flex sm:hidden items-center gap-1.5 shrink-0">
+            {/* Universally Accessible Legal & Compliance Policies Header Button (All Users) */}
+            <button
+              id="header-mobile-legal-policies-btn"
+              type="button"
+              onClick={() => handleOpenLegalPolicies('about')}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+              title="ऐप की नीतियां व नियम (Policies & Terms)"
+            >
+              <Scale className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>नीतियां</span>
+            </button>
+
             {/* Direct Round Live Sync Icon - Restricted strictly to Master Admin */}
             {isSuperAdminUser && (
               <button
@@ -2714,17 +2726,16 @@ function MainCourierApp() {
               </div>
             )}
 
-            {/* Universally Accessible Legal & Compliance Policies Header Button */}
+            {/* Universally Accessible Legal & Compliance Policies Header Button (All Users) */}
             <button
               id="header-legal-policies-btn"
               type="button"
               onClick={() => handleOpenLegalPolicies('about')}
               className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
-              title="About Us, Pricing, Privacy Policy & Refund Terms (PayU & Play Store Compliance)"
+              title="नीतियां, नियम, शुल्क व रिफंड शर्तें (Policies & Terms)"
             >
               <Scale className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden sm:inline">About & Policies</span>
-              <span className="sm:hidden">Policies</span>
+              <span>नीतियां (Policies)</span>
             </button>
 
             {/* User Account & Cloud Sync Menu */}

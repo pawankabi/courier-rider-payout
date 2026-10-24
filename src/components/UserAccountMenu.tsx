@@ -286,7 +286,7 @@ export const UserAccountMenu: React.FC<Props> = ({
               className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold transition cursor-pointer"
             >
               <Scale className="w-3.5 h-3.5 text-amber-400" />
-              <span>About Us & Policies</span>
+              <span>नीतियां (Policies)</span>
             </button>
           )}
 
