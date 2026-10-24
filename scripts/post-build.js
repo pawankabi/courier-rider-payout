@@ -30,6 +30,9 @@ if (!fs.existsSync(distDownloadsDir)) {
 const adminApkName = 'Admin-Payout-Release.apk';
 const riderApkName = 'COD-Entry-Rider-Release.apk';
 
+const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const currentAppVersion = packageJson.version || '1.0.9';
+
 // Function to sync real APKs if built or generate genuine standalone placeholder
 const syncOrGenerateApk = (flavor, fileName) => {
   const publicTarget = path.join(publicDownloadsDir, fileName);
@@ -54,12 +57,12 @@ const syncOrGenerateApk = (flavor, fileName) => {
       flavor: flavor,
       package: flavor === 'rider' ? 'com.courierpayout.rider' : 'com.courierpayout.app',
       appName: flavor === 'rider' ? 'COD Entry (Rider)' : 'Courier Payout Pro',
-      version: '1.0.8',
+      version: currentAppVersion,
       builtAt: new Date().toISOString()
     }, null, 2);
 
     // Standard minimal valid ZIP buffer with flavor-specific comment
-    const commentBuf = Buffer.from(`${flavor}-release-v1.0.8`);
+    const commentBuf = Buffer.from(`${flavor}-release-v${currentAppVersion}`);
     const zipHeader = Buffer.from([
       0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

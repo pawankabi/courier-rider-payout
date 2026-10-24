@@ -295,10 +295,10 @@ class LiveUpdateService {
 export async function syncLatestManifestToFirestore(): Promise<void> {
   try {
     const updateData = {
-      version: '1.0.8',
-      buildTime: 1729705000000,
+      version: APP_VERSION,
+      buildTime: CURRENT_LOCAL_BUILD_TIME,
       buildDate: new Date().toISOString().split('T')[0],
-      releaseNotes: '15-Minute Inactivity/Screen-Off Fingerprint App Lock, Android Stability Fix, Zero-Reinstall OTA Update',
+      releaseNotes: '1-Touch Instant Biometric Fingerprint Unlock, Android App Lock, Real-Time Payout & Automatic Version Sync',
       updatedAt: new Date().toISOString(),
     };
     await setDoc(doc(db, 'app_updates', 'latest'), updateData, { merge: true });
