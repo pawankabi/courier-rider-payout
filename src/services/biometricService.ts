@@ -1,4 +1,9 @@
-import { BiometricAuth, BiometryType, CheckBiometryResult } from '@aparajita/capacitor-biometric-auth';
+import { 
+  BiometricAuth, 
+  BiometryType, 
+  CheckBiometryResult,
+  AndroidBiometryStrength 
+} from '@aparajita/capacitor-biometric-auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { isNativeAndroid } from './nativeSms';
@@ -246,10 +251,23 @@ export async function authenticateWithBiometrics(
   }
 
   try {
-    // Standard Android Biometric + Screen Lock Credential authentication
+    // Primary Android Biometric + Screen Lock Credential authentication
+    // CRITICAL SETTINGS FOR 1-TOUCH INSTANT FINGERPRINT UNLOCK:
+    // 1. androidConfirmationRequired: false -> Android default is true (which waits for an on-screen
+    //    confirm button tap, causing users to tap the sensor repeatedly, registering multiple failed touches).
+    //    Setting false dismisses the dialog immediately upon touching the sensor!
+    // 2. androidBiometryStrength: AndroidBiometryStrength.strong -> On Android 11+ (API 30+),
+    //    DEVICE_CREDENTIAL can only be paired with BIOMETRIC_STRONG (Class 3 hardware). Pairing with weak
+    //    causes the OS to reject the fingerprint or force-route to password/PIN.
+    // 3. androidTitle and androidSubtitle -> Required for official Android BiometricPrompt specs.
     await BiometricAuth.authenticate({
       reason,
-      allowDeviceCredential: true, // Required for Device PIN/Pattern fallback
+      androidTitle: 'Courier Rider Payout',
+      androidSubtitle: 'फिंगरप्रिंट लगाएं या स्क्रीन लॉक पिन दर्ज करें',
+      androidConfirmationRequired: false,
+      androidBiometryStrength: AndroidBiometryStrength.strong,
+      allowDeviceCredential: true,
+      cancelTitle: 'रद्द करें (Cancel)',
       iosFallbackTitle: 'Use Passcode',
     });
 
@@ -258,7 +276,7 @@ export async function authenticateWithBiometrics(
     return { success: true };
   } catch (err: any) {
     console.warn('Biometric authentication primary attempt notice:', err);
-    const errMsg = String(err?.message || err || '').toLowerCase();
+    const errMsg = String(err?.message || err?.code || err || '').toLowerCase();
 
     // Check if error is user-initiated cancellation or back button
     if (
@@ -273,28 +291,51 @@ export async function authenticateWithBiometrics(
       };
     }
 
-    // Secondary attempt with explicit fallback
-    try {
-      await BiometricAuth.authenticate({
-        reason,
-        allowDeviceCredential: true,
-        iosFallbackTitle: 'Enter PIN',
-      });
-      recordAppUnlock();
-      return { success: true };
-    } catch (retryErr: any) {
-      console.warn('Biometric authentication retry notice:', retryErr);
-      const retryMsg = String(retryErr?.message || retryErr || '').toLowerCase();
-      if (retryMsg.includes('cancel') || retryMsg.includes('user') || retryMsg.includes('negative')) {
+    // Failsafe fallback: On legacy Android devices (Android 9/10 API 28-29) where BIOMETRIC_STRONG | DEVICE_CREDENTIAL
+    // was restricted, retry with weak biometry strength
+    if (
+      errMsg.includes('lockout') || 
+      errMsg.includes('unsupported') || 
+      errMsg.includes('incompatible') || 
+      errMsg.includes('invalid')
+    ) {
+      try {
+        await BiometricAuth.authenticate({
+          reason,
+          androidTitle: 'Courier Rider Payout',
+          androidSubtitle: 'डिवाइस स्क्रीन लॉक पिन या पासवर्ड दर्ज करें',
+          androidConfirmationRequired: false,
+          androidBiometryStrength: AndroidBiometryStrength.weak,
+          allowDeviceCredential: true,
+          cancelTitle: 'रद्द करें',
+          iosFallbackTitle: 'Enter PIN',
+        });
+        recordAppUnlock();
+        return { success: true };
+      } catch (fallbackErr: any) {
+        console.warn('Biometric fallback authentication error:', fallbackErr);
+        const fallbackMsg = String(fallbackErr?.message || fallbackErr?.code || fallbackErr || '').toLowerCase();
+        if (
+          fallbackMsg.includes('cancel') ||
+          fallbackMsg.includes('user') ||
+          fallbackMsg.includes('negative') ||
+          fallbackMsg.includes('canceled')
+        ) {
+          return {
+            success: false,
+            error: 'प्रमाणीकरण रद्द हुआ। कृपया फिंगरप्रिंट लगाएं या पासवर्ड दर्ज करें।',
+          };
+        }
         return {
           success: false,
-          error: 'प्रमाणीकरण रद्द हुआ। कृपया दोबारा प्रयास करें।',
+          error: fallbackErr?.message || 'बायोमेट्रिक प्रमाणीकरण विफल रहा। नीचे आपातकालीन पासवर्ड का उपयोग करें।',
         };
       }
-      return {
-        success: false,
-        error: retryErr?.message || 'बायोमेट्रिक प्रमाणीकरण विफल रहा। नीचे आपातकालीन पासवर्ड का उपयोग करें।',
-      };
     }
+
+    return {
+      success: false,
+      error: err?.message || 'बायोमेट्रिक प्रमाणीकरण विफल रहा। नीचे आपातकालीन पासवर्ड का उपयोग करें।',
+    };
   }
 }

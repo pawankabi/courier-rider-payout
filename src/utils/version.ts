@@ -2,7 +2,7 @@
  * Centralized Application Version Management & GitHub Release Auto-Discovery
  */
 
-export const APP_VERSION = '1.0.8';
+export const APP_VERSION = '1.0.9';
 export const DEFAULT_GITHUB_REPO = 'pawankabi/courier-rider-payout';
 
 /**
