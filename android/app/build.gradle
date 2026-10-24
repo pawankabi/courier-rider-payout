@@ -21,8 +21,8 @@ android {
         admin {
             dimension "version"
             applicationId "com.courierpayout.app"
-            versionCode 5
-            versionName "1.0.5"
+            versionCode 8
+            versionName "1.0.8"
             manifestPlaceholders = [
                 appName: "Courier Payout Pro",
                 appAuth: "com.courierpayout.app.fileprovider",
@@ -32,8 +32,8 @@ android {
         rider {
             dimension "version"
             applicationId "com.courierpayout.rider"
-            versionCode 5
-            versionName "1.0.5"
+            versionCode 8
+            versionName "1.0.8"
             manifestPlaceholders = [
                 appName: "COD Entry (Rider)",
                 appAuth: "com.courierpayout.rider.fileprovider",

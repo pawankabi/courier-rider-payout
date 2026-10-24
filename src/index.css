@@ -3,17 +3,59 @@
 @layer base {
   html {
     -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
     height: 100%;
     width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden !important;
+    background-color: #0b0f19;
+    color: #f8fafc;
   }
 
   body {
     overscroll-behavior-y: none;
+    overscroll-behavior-x: none;
     min-height: 100%;
     width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden !important;
     margin: 0;
-    padding-top: max(env(safe-area-inset-top), 34px) !important;
-    padding-bottom: max(env(safe-area-inset-bottom), 16px) !important;
+    padding: 0;
+    touch-action: pan-y;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #0b0f19;
+    color: #f8fafc;
+    /* Safe-area padding handles Android status bar and bottom navigation gesture bar cleanly */
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  #root {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden !important;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Prevent accidental text selection on mobile app buttons, tabs, and headers */
+  button, nav, header, [role="button"], [role="tab"] {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Allow inputs and editable areas to select text normally */
+  input, textarea, [contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Native Mobile Tap Active Response */
+  button:active, [role="button"]:active {
+    transform: scale(0.98);
+    transition: transform 0.1s ease-in-out;
   }
 }
 

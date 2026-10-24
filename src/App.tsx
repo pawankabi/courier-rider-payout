@@ -2441,7 +2441,7 @@ function MainCourierApp() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans w-full max-w-[100vw] overflow-x-hidden">
       {/* Admin Inspection Banner */}
       {inspectedUser && (
         <div 
@@ -2520,10 +2520,10 @@ function MainCourierApp() {
         onOpenPayModal={() => setIsUserPaymentModalOpen(true)}
       />
 
-      {/* Top Application Header with Balanced Top Spacing for Notch/Camera/Safe Area */}
+      {/* Top Application Header with Native Mobile Status Bar & Safe Area Padding */}
       <header
-        className="sticky top-0 z-40 bg-gradient-to-r from-indigo-950/80 via-purple-950/60 to-slate-900/80 border-b border-indigo-700/40 shadow-lg shadow-indigo-950/30 backdrop-blur-md pt-7 sm:pt-4"
-        style={{ paddingTop: 'max(1.75rem, env(safe-area-inset-top, 1.75rem))' }}
+        className="sticky top-0 z-40 bg-[#0f172a]/95 border-b border-slate-800 shadow-md backdrop-blur-md"
+        style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0.75rem))' }}
       >
         <div className="max-w-6xl mx-auto px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3">
           {/* Brand Logo & Name */}
@@ -3149,7 +3149,7 @@ function MainCourierApp() {
       {/* Mobile-First App Bottom Navigation Bar - Permanent Vibrant Colors */}
       <nav
         id="mobile-bottom-nav"
-        className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-950/90 backdrop-blur-2xl border-t border-indigo-900/40 px-1.5 py-1.5 shadow-2xl"
+        className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#0b0f19]/95 backdrop-blur-2xl border-t border-slate-800 px-1.5 pt-1.5 pb-[max(env(safe-area-inset-bottom),10px)] shadow-2xl"
       >
         <div className="flex items-center justify-between gap-1 max-w-lg mx-auto">
           {/* 1. Daily Entry: Always Sky Blue / Cyan */}

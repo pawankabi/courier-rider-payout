@@ -1804,7 +1804,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   // VIEW 2: AUTHENTICATED COMPANION MOBILE WEB APP (Clean White Theme)
   // =========================================================================
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans pb-16 selection:bg-emerald-500 selection:text-white">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans pb-16 selection:bg-emerald-500 selection:text-white w-full max-w-[100vw] overflow-x-hidden">
       {/* Prominent Admin Dashboard Return Top Bar */}
       {onBackToMainApp && !isRiderFlavor && !isRider && (
         <div 

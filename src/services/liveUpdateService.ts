@@ -14,7 +14,6 @@
 import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
-export const CLOUD_LIVE_BASE_URL = 'https://ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app';
 export const CURRENT_LOCAL_BUILD_TIME = 1729600000000; // Local baseline (older than v1.0.8 cloud build 1729705000000)
 export const CURRENT_LOCAL_VERSION = '1.0.7';
 
@@ -215,7 +214,6 @@ class LiveUpdateService {
       // Probe B: HTTP Version.json fallback
       if (!cloudManifest) {
         const targetUrls = [
-          `${CLOUD_LIVE_BASE_URL}/version.json?_t=${now}`,
           `/version.json?_t=${now}`
         ];
 
@@ -278,28 +276,10 @@ class LiveUpdateService {
       this.swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
     }
 
-    // Check if we are running in an Android Capacitor WebView pointing to local assets
-    const isLocalCapacitorOrigin = 
-      typeof window !== 'undefined' && 
-      (window.location.origin.includes('firebaseapp.com') || 
-       window.location.origin.includes('localhost') || 
-       window.location.protocol === 'file:' ||
-       !!(window as any).Capacitor?.isNativePlatform?.());
-
-    if (isLocalCapacitorOrigin) {
-      const isCompanion = 
-        window.location.href.includes('cod-entry') || 
-        (typeof localStorage !== 'undefined' && localStorage.getItem('cp_last_portal') === 'companion') ||
-        (import.meta.env.VITE_APP_TARGET === 'cod_companion') ||
-        (typeof window !== 'undefined' && window.location.hostname.includes('cod-entry-rider'));
-
-      const liveTarget = isCompanion 
-        ? `${CLOUD_LIVE_BASE_URL}/?app=cod-entry&live=1` 
-        : `${CLOUD_LIVE_BASE_URL}/?live=1`;
-
-      window.location.replace(liveTarget);
-      return;
-    }
+    // In native Android Capacitor WebView and Web/PWA, reload cleanly in-app
+    setTimeout(() => {
+      window.location.reload();
+    }, 250);
 
     // Refresh smoothly with fresh cache
     setTimeout(() => {
