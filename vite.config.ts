@@ -202,26 +202,57 @@ export default defineConfig(({ command, mode }) => {
         registerType: 'autoUpdate',
         injectRegister: null,
         includeAssets: [
+          'admin-logo.svg',
+          'rider-logo.svg',
           'icon.svg',
           'apple-touch-icon.png',
+          'rider-apple-touch-icon.png',
           'pwa-192x192.png',
           'pwa-512x512.png',
           'pwa-maskable-512x512.png',
+          'rider-192x192.png',
+          'rider-512x512.png',
+          'rider-maskable-512x512.png',
         ],
         manifest: {
-          id: '/',
+          id: appTarget === 'cod_companion' ? '/cod-entry' : '/',
           name: appTarget === 'cod_companion' ? 'COD Entry (हिसाब किताब)' : 'Courier Rider Payout & Delivery Manager',
           short_name: appTarget === 'cod_companion' ? 'CODEntry' : 'RiderPayout',
           description: appTarget === 'cod_companion'
             ? 'COD Entry (हिसाब किताब) - Delivery Boys & Hub Staff COD Collection Manager'
             : 'Courier Rider delivery tracking, ₹13 base + ₹2 incentive payout, settlement & WhatsApp slips.',
-          theme_color: '#0f172a',
-          background_color: '#0f172a',
+          theme_color: appTarget === 'cod_companion' ? '#030712' : '#0f172a',
+          background_color: appTarget === 'cod_companion' ? '#030712' : '#0f172a',
           display: 'standalone',
           orientation: 'portrait',
-          start_url: '/',
+          start_url: appTarget === 'cod_companion' ? '/#cod-entry' : '/',
           scope: '/',
-          icons: [
+          icons: appTarget === 'cod_companion' ? [
+            {
+              src: '/rider-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: '/rider-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: '/rider-maskable-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+            {
+              src: '/rider-logo.svg',
+              sizes: 'any',
+              type: 'image/svg+xml',
+              purpose: 'any maskable',
+            },
+          ] : [
             {
               src: '/pwa-192x192.png',
               sizes: '192x192',
@@ -239,6 +270,12 @@ export default defineConfig(({ command, mode }) => {
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
+            },
+            {
+              src: '/admin-logo.svg',
+              sizes: 'any',
+              type: 'image/svg+xml',
+              purpose: 'any maskable',
             },
           ],
         },

@@ -1,15 +1,16 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.0.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/post-build.js",
+    "bump:version": "node scripts/bump-and-sync-assets.js",
+    "build": "node scripts/bump-and-sync-assets.js && vite build && node scripts/post-build.js",
     "build:admin": "vite build && node scripts/post-build.js",
     "build:companion": "VITE_APP_TARGET=cod_companion vite build --outDir dist-companion",
     "build:all": "npm run build:admin && npm run build:companion",
-    "sync:flavors": "node scripts/sync-android-flavors.js",
+    "sync:flavors": "node scripts/bump-and-sync-assets.js && node scripts/sync-android-flavors.js",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-companion build server.js",
     "lint": "tsc --noEmit"
@@ -44,6 +45,7 @@
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",

@@ -1,6 +1,8 @@
 {
-  "version": "1.0.8",
-  "buildTime": 1729705000000,
-  "buildDate": "2026-10-23",
-  "releaseNotes": "15-Minute Fingerprint Inactivity Lock & Auto-Close Fix, Android Compatibility"
+  "version": "1.0.10",
+  "versionCode": 10,
+  "buildTime": 1793097952553,
+  "buildDate": "2026-10-27",
+  "releaseNotes": "Auto-Sync Version 1.0.10 - Modern Adaptive Icons, Real-time Payout & Fast OTA Update",
+  "updatedAt": "2026-10-27T10:45:52.553Z"
 }
