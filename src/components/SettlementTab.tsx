@@ -273,8 +273,6 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     return openingBalResult?.status === 'rider_debt' ? Math.abs(openingBalResult?.openingBalance || 0) : 0;
   }, [openingBalResult]);
 
-  const totalDeductionRequired = liveActiveAdvanceTotal + carriedDeficit;
-
   // Operational Earnings for the period
   const totalParcels = filteredEntries.reduce((sum, e) => sum + e.parcels, 0);
   const totalBaseAmount = filteredEntries.reduce((sum, e) => sum + e.baseAmount, 0);
@@ -292,22 +290,48 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID')
   );
 
-  // Active incentives added to period gross
-  const totalIncentive = useMemo(() => {
+  // Raw Active Unsettled Advance (including carried deficit)
+  const hasEmbeddedDeficit = activeAdvances.some(
+    (a) => a.id?.startsWith('adv_deficit_') || a.reason?.includes('पिछला सेटलमेंट घाटा')
+  );
+  const unrepresentedDeficit = hasEmbeddedDeficit ? 0 : carriedDeficit;
+  const rawTotalAdvance = liveActiveAdvanceTotal + unrepresentedDeficit;
+
+  // Raw Active Unsettled Incentive / Repayment entries
+  const rawTotalIncentive = useMemo(() => {
     if (isFullySettledPeriod && matchingSettlement) {
       return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
     }
     return activeIncentivesList.reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
   }, [isFullySettledPeriod, matchingSettlement, deliveryGross, activeIncentivesList]);
 
+  // POINT 2 FIX: NET OUTSTANDING ADVANCE & SURPLUS INCENTIVE
+  // If rider took 3000 advance and repaid 2000 in incentive:
+  // netAdvanceRequired = 3000 - 2000 = 1000! Net incentive added to gross = 0!
+  // If rider took 3000 advance and repaid 3000:
+  // netAdvanceRequired = 0! Net incentive added to gross = 0!
+  const totalDeductionRequired = useMemo(() => {
+    if (isFullySettledPeriod && matchingSettlement) {
+      return matchingSettlement.advanceAmount || 0;
+    }
+    return Math.max(0, rawTotalAdvance - rawTotalIncentive);
+  }, [isFullySettledPeriod, matchingSettlement, rawTotalAdvance, rawTotalIncentive]);
+
+  const totalIncentive = useMemo(() => {
+    if (isFullySettledPeriod && matchingSettlement) {
+      return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
+    }
+    return Math.max(0, rawTotalIncentive - rawTotalAdvance);
+  }, [isFullySettledPeriod, matchingSettlement, deliveryGross, rawTotalIncentive, rawTotalAdvance]);
+
   const riderBonusIncentives = totalIncentive;
   const periodGross = deliveryGross + totalIncentive;
   const grossTotal = periodGross;
 
-  // Default input box calculation: Math.min(totalDeductionRequired, Math.max(0, periodGross))
+  // Default input box calculation: automatically pre-fills with full active net advance (never capped)
   const defaultAdvanceDeduction = useMemo(() => {
-    return Math.min(totalDeductionRequired, Math.max(0, periodGross));
-  }, [totalDeductionRequired, periodGross]);
+    return totalDeductionRequired;
+  }, [totalDeductionRequired]);
 
   // Auto-populate advance deduction on rider/period change
   useEffect(() => {
@@ -321,8 +345,8 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
       if (totalDeductionRequired > 0) {
         setAdvanceReason(
           periodGross < totalDeductionRequired
-            ? 'सक्रिय एडवांस आंशिक कटौती (Partial FIFO Deduction)'
-            : 'सक्रिय एडवांस समायोजन (Advance Deducted)'
+            ? 'सक्रिय बकाया एडवांस आंशिक कटौती (Partial FIFO Deduction)'
+            : 'सक्रिय बकाया एडवांस समायोजन (Advance Deducted)'
         );
       } else {
         setAdvanceReason('');
@@ -330,14 +354,15 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     }
   }, [selectedRiderId, startDate, endDate, matchingSettlement, isFullySettledPeriod, defaultAdvanceDeduction, totalDeductionRequired, periodGross]);
 
-  // d) TRUE NET PAYABLE:
+  // POINT 1 FIX: TRUE NET PAYABLE / DUE
   // Gross Earnings = DeliveryEarnings + TotalIncentive;
-  // Final Net Payable = Gross Earnings - TotalAdvanceDeduction;
+  // Final Net = Gross Earnings - TotalAdvanceDeduction;
+  // DO NOT clamp to 0! When Advance > Gross, Net is negative (e.g. -1000).
   const numericAdvance = Math.max(0, Number(advanceAmount) || 0);
   const netSettlement = isFullySettledPeriod && matchingSettlement
     ? matchingSettlement.netTotal
     : (grossTotal - numericAdvance);
-  const netPayableAmount = Math.max(0, netSettlement);
+  const netPayableAmount = netSettlement; // Keep signed value (can be negative!)
 
   const unpaidGross = filteredEntries
     .filter((e) => e.status === 'Unpaid')
@@ -621,11 +646,16 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                 onChange={(e) => setSelectedRiderId(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-100 focus:outline-none focus:border-blue-500 appearance-none"
               >
-                {riders.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} • +91 {r.phone} {Number(r.totalAdvance || 0) > 0 ? `(एडवांस: ${formatINR(r.totalAdvance || 0)})` : ''}
-                  </option>
-                ))}
+                {riders.map((r) => {
+                  const rAdv = calculateActiveAdvanceTotal(r.advances, settlements, r.id);
+                  const rInc = calculateActiveIncentiveTotal(r.incentives, settlements, r.id);
+                  const rNetAdv = Math.max(0, rAdv - rInc);
+                  return (
+                    <option key={r.id} value={r.id}>
+                      {r.name} • +91 {r.phone} {rNetAdv > 0 ? `(बकाया एडवांस: ${formatINR(rNetAdv)})` : ''}
+                    </option>
+                  );
+                })}
               </select>
               <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
                 ▼
@@ -640,12 +670,12 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                     +91 {selectedRider.phone}
                   </span>
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border shrink-0 ${
-                    Number(selectedRider.totalAdvance || 0) > 0
-                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
-                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                    totalDeductionRequired > 0
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                      : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                   }`}>
-                    <IndianRupee className="w-3 h-3 text-indigo-400" />
-                    <span>एडवांस: {formatINR(selectedRider.totalAdvance || 0)}</span>
+                    <IndianRupee className="w-3 h-3 text-amber-400" />
+                    <span>{totalDeductionRequired > 0 ? `बकाया एडवांस: ${formatINR(totalDeductionRequired)}` : 'एडवांस: ₹0 (क्लियर)'}</span>
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -831,14 +861,16 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                   Deduct Advance Payment (Optional)
                 </h3>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                  कुल एक्टिव एडवांस: {formatINR(totalDeductionRequired)}
+                  कुल एक्टिव बकाया एडवांस: {formatINR(totalDeductionRequired)}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                {carriedDeficit > 0 && liveActiveAdvanceTotal > 0
-                  ? `सक्रिय एडवांस ₹${formatINR(liveActiveAdvanceTotal)} + पिछला बकाया ₹${formatINR(carriedDeficit)} समायोजित किए जाएंगे`
+                {rawTotalIncentive > 0 && rawTotalAdvance > 0
+                  ? `एडवांस ₹${formatINR(rawTotalAdvance).replace('₹', '')} में से ₹${formatINR(rawTotalIncentive).replace('₹', '')} वापस मिला = शुद्ध बकाया ₹${formatINR(totalDeductionRequired).replace('₹', '')}`
+                  : carriedDeficit > 0 && liveActiveAdvanceTotal > 0
+                  ? `सक्रिय बकाया एडवांस ₹${formatINR(liveActiveAdvanceTotal).replace('₹', '')} + पिछला घाटा ₹${formatINR(carriedDeficit).replace('₹', '')} समायोजित किए जाएंगे`
                   : carriedDeficit > 0
-                  ? `पिछले सेटलमेंट का बकाया ₹${formatINR(carriedDeficit)} समायोजित किया जाएगा`
+                  ? `पिछले सेटलमेंट का बकाया ₹${formatINR(carriedDeficit).replace('₹', '')} समायोजित किया जाएगा`
                   : 'इस अवधि के एडवांस स्वचालित रूप से समायोजित किए जाएंगे'}
               </p>
             </div>
@@ -1018,7 +1050,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                   राइडर से लेना बाकी (Recovery Due):
                 </span>
                 <span className="text-base sm:text-lg font-black text-rose-200">
-                  {formatINR(Math.abs(netSettlement))}
+                  -{formatINR(Math.abs(netSettlement))}
                 </span>
               </div>
             )}
@@ -1042,7 +1074,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
             <div className="text-rose-300 font-bold flex items-center gap-2 shrink-0">
               <span className="text-xs uppercase">राइडर से लेना बाकी:</span>
               <span className="text-rose-100 text-sm font-black bg-rose-900/80 px-2.5 py-1 rounded-lg border border-rose-500/60 shadow">
-                {formatINR(Math.abs(netSettlement))}
+                -{formatINR(Math.abs(netSettlement))}
               </span>
             </div>
           </div>
@@ -1194,12 +1226,12 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
             <div className={`text-[10px] uppercase font-bold ${
               netSettlement >= 0 ? 'text-emerald-400' : 'text-rose-400'
             }`}>
-              {netSettlement >= 0 ? 'Final Net Payable Total' : 'राइडर से लेना बाकी (Recovery Due)'}
+              {netSettlement >= 0 ? 'Final Net Payable Total' : 'Final Net Payable Total (राइडर से लेना बाकी: - Bal)'}
             </div>
             <div className={`text-lg sm:text-xl font-black mt-1 ${
               netSettlement >= 0 ? 'text-emerald-300' : 'text-rose-200'
             }`}>
-              {netSettlement >= 0 ? formatINR(netSettlement) : formatINR(Math.abs(netSettlement))}
+              {netSettlement >= 0 ? formatINR(netSettlement) : `-${formatINR(Math.abs(netSettlement))}`}
             </div>
             <div className="text-[11px] text-slate-300 mt-0.5 font-medium">
               {netSettlement < 0 ? (
@@ -1364,9 +1396,11 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                     </div>
                   </div>
                   <div>
-                    <div className="text-[10px] text-emerald-400 font-semibold">Net Paid Total</div>
-                    <div className="font-black text-emerald-300 text-sm">
-                      {formatINR(settlement.netTotal)}
+                    <div className={`text-[10px] font-semibold ${settlement.netTotal >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {settlement.netTotal >= 0 ? 'Net Paid Total' : 'Rider Debt (लेना बाकी)'}
+                    </div>
+                    <div className={`font-black text-sm ${settlement.netTotal >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                      {settlement.netTotal >= 0 ? formatINR(settlement.netTotal) : `-${formatINR(Math.abs(settlement.netTotal))}`}
                     </div>
                   </div>
                 </div>

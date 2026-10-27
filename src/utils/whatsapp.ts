@@ -74,8 +74,9 @@ export function generateWhatsAppMessage(data: WhatsAppSlipData): string {
     `• Advance Deducted: *${advance > 0 ? `-${formatINR(advance)}` : '₹0'}*${advanceDateText}${advanceReasonText}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     (isRecovery
-      ? `⚠️ *RECOVERY DUE (राइडर से लेना बाकी):* *${formatINR(netDue)}*\n` +
-        `📌 *STATUS:* ⏳ *ADVANCE RECOVERY PENDING*\n`
+      ? `⚠️ *RECOVERY DUE (राइडर से लेना बाकी):* *-₹${formatINR(netDue).replace('₹', '')}*\n` +
+        `📌 *STATUS:* ⏳ *ADVANCE RECOVERY PENDING*\n` +
+        `⚠️ *आवश्यक सूचना:* कृपया यह बकाया राशि आज ही कार्यालय में जमा कर दें ताकि कार्यालय के बाकी राइडर्स को भी समय पर भुगतान किया जा सके।\n`
       : `💰 *FINAL NET ${data.status === 'PAID' ? 'PAID' : 'PAYABLE'} AMOUNT:* *${formatINR(netDue)}*\n` +
         `📌 *PAYMENT STATUS:* ${statusEmoji} *${data.status}*\n`) +
     settledText +

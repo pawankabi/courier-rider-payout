@@ -390,9 +390,15 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
 
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(16, 122, 68);
-      doc.text('Final Net Total:', boxX + 12, summaryY + 62);
-      doc.text(`Rs. ${finalNetTotal.toLocaleString('en-IN')}`, boxX + boxW - 12, summaryY + 62, { align: 'right' });
+      if (isRiderDeficit) {
+        doc.setTextColor(185, 28, 28);
+        doc.text('Final Net Due (From Rider):', boxX + 12, summaryY + 62);
+        doc.text(`- Rs. ${Math.abs(rawNet).toLocaleString('en-IN')}`, boxX + boxW - 12, summaryY + 62, { align: 'right' });
+      } else {
+        doc.setTextColor(16, 122, 68);
+        doc.text('Final Net Total:', boxX + 12, summaryY + 62);
+        doc.text(`Rs. ${finalNetTotal.toLocaleString('en-IN')}`, boxX + boxW - 12, summaryY + 62, { align: 'right' });
+      }
     } else {
       doc.setDrawColor(203, 213, 225);
       doc.line(boxX + 10, summaryY + 26, boxX + boxW - 10, summaryY + 26);

@@ -1,5 +1,5 @@
 import { DeliveryEntry, Rider, RiderAdvanceEntry, RiderIncentiveEntry, SettlementRecord } from '../types';
-import { formatINR } from './formatters';
+import { formatINR, formatDateDisplay, getTodayDateString } from './formatters';
 import { purgePhantomAdvances } from './pureLedgerEngine';
 
 export interface OpeningBalanceResult {
@@ -136,6 +136,7 @@ export function isUnsettledAdvance(
       (s) =>
         (!riderId || String(s.riderId).trim() === String(riderId).trim()) &&
         (!s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED') &&
+        advId !== `adv_deficit_${s.id}` &&
         Array.isArray(s.settledAdvanceIds) &&
         s.settledAdvanceIds.some((id) => String(id).trim() === advId)
     );
@@ -193,6 +194,25 @@ export function calculateActiveAdvanceTotal(
   const totalRecoveries = recoveries.reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
 
   return Math.max(0, totalAdvances - totalRecoveries);
+}
+
+/**
+ * Calculates Net Outstanding Advance for a rider:
+ * Net Advance = Math.max(0, ActiveAdvance - ActiveIncentive)
+ * If rider took 3000 advance and returned 2000 in repayment/incentive: Net Advance = 1000!
+ * If rider took 3000 advance and returned 3000: Net Advance = 0 (Clear)!
+ */
+export function calculateNetActiveAdvance(
+  advances?: RiderAdvanceEntry[],
+  incentives?: RiderIncentiveEntry[],
+  settlements?: SettlementRecord[],
+  riderId?: string
+): { netAdvance: number; netIncentive: number; rawAdvance: number; rawIncentive: number } {
+  const rawAdvance = calculateActiveAdvanceTotal(advances, settlements, riderId);
+  const rawIncentive = calculateActiveIncentiveTotal(incentives, settlements, riderId);
+  const netAdvance = Math.max(0, rawAdvance - rawIncentive);
+  const netIncentive = Math.max(0, rawIncentive - rawAdvance);
+  return { netAdvance, netIncentive, rawAdvance, rawIncentive };
 }
 
 /**
@@ -435,7 +455,12 @@ export function reindexAndSanitizeRiderBalances(
     riderPaidSettlements.forEach((s) => {
       settledPayoutIdSet.add(String(s.id).trim());
       if (Array.isArray(s.settledAdvanceIds) && s.settledAdvanceIds.length > 0) {
-        s.settledAdvanceIds.forEach((id) => settledAdvIdSet.add(String(id).trim()));
+        s.settledAdvanceIds.forEach((id) => {
+          const strId = String(id).trim();
+          if (strId !== `adv_deficit_${s.id}`) {
+            settledAdvIdSet.add(strId);
+          }
+        });
       } else if (Number(s.advanceAmount) > 0) {
         legacySettlementAdvanceDeductionTotal += Number(s.advanceAmount);
         if (!latestLegacySettlementDate || s.endDate > latestLegacySettlementDate) {
@@ -522,6 +547,55 @@ export function reindexAndSanitizeRiderBalances(
     // Recoveries
     recoveries.forEach((rec) => sanitizedAdvances.push(rec));
 
+    // 2.5: Carry forward unrecovered settlement deficits (Where Gross < Advance / netTotal < 0)
+    // Ensures that any balance left uncollected from a past settlement is preserved as an active advance!
+    riderPaidSettlements.forEach((s) => {
+      const net = Number(s.netTotal) || 0;
+      if (net < 0) {
+        const deficitAmt = Math.abs(net);
+        const deficitId = `adv_deficit_${s.id}`;
+
+        // Check if settled by a strictly later settlement
+        const isSettledInLaterSettlement = riderPaidSettlements.some(
+          (laterS) =>
+            laterS.id !== s.id &&
+            laterS.endDate > s.endDate &&
+            Array.isArray(laterS.settledAdvanceIds) &&
+            laterS.settledAdvanceIds.includes(deficitId)
+        );
+
+        const existingIdx = sanitizedAdvances.findIndex(
+          (a) => a.id === deficitId || a.id === `${s.id}_rem`
+        );
+
+        if (existingIdx >= 0) {
+          if (!isSettledInLaterSettlement) {
+            sanitizedAdvances[existingIdx] = {
+              ...sanitizedAdvances[existingIdx],
+              amount: deficitAmt,
+              isSettled: false,
+              isDeducted: false,
+              status: 'UNPAID',
+            };
+          }
+        } else if (!isSettledInLaterSettlement) {
+          riderChanged = true;
+          sanitizedAdvances.push({
+            id: deficitId,
+            riderId: rider.id,
+            amount: deficitAmt,
+            date: s.endDate || (s.paidAt ? s.paidAt.split('T')[0] : ''),
+            createdAt: s.paidAt || new Date().toISOString(),
+            reason: `बकाया एडवांस (पिछला सेटलमेंट घाटा: ${formatDateDisplay(s.startDate)} - ${formatDateDisplay(s.endDate)})`,
+            isSettled: false,
+            isDeducted: false,
+            status: 'UNPAID',
+            runningBalance: deficitAmt,
+          });
+        }
+      }
+    });
+
     // 3. Sanitize Incentives
     const sortedIncentives = [...(rider.incentives || [])].sort((a, b) => {
       const timeA = new Date(a.date || a.createdAt || 0).getTime();
@@ -556,13 +630,22 @@ export function reindexAndSanitizeRiderBalances(
       }
     });
 
-    // Calculate real active advance total using authentic calculateActiveAdvanceTotal
-    const newActiveAdv = calculateActiveAdvanceTotal(sanitizedAdvances, settlements, rider.id);
+    // Calculate real active advance and active incentive
+    const rawActiveAdv = calculateActiveAdvanceTotal(sanitizedAdvances, settlements, rider.id);
+    const rawActiveInc = calculateActiveIncentiveTotal(sanitizedIncentives, settlements, rider.id);
+
+    // NET OUTSTANDING ADVANCE (Point 2 Fix):
+    // If rider took 3000 advance and returned 2000 in incentive/repayments:
+    // Net Advance = 3000 - 2000 = 1000! Net Incentive = 0!
+    // If rider took 3000 advance and returned 3000:
+    // Net Advance = 0 (हिसाब चुकता)! Net Incentive = 0!
+    const newActiveAdv = Math.max(0, rawActiveAdv - rawActiveInc);
+    const newActiveInc = Math.max(0, rawActiveInc - rawActiveAdv);
+
     if (rider.totalAdvance !== newActiveAdv) {
       riderChanged = true;
     }
 
-    const newActiveInc = calculateActiveIncentiveTotal(sanitizedIncentives, settlements, rider.id);
     if (rider.totalIncentive !== newActiveInc) {
       riderChanged = true;
     }

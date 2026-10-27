@@ -787,7 +787,11 @@ export const RidersTab: React.FC<Props> = ({
     0
   );
   const totalAdvanceAmount = riders.reduce(
-    (sum, r) => sum + calculateActiveAdvanceTotal(r.advances, settlements, r.id),
+    (sum, r) => {
+      const adv = calculateActiveAdvanceTotal(r.advances, settlements, r.id);
+      const inc = calculateActiveIncentiveTotal(r.incentives, settlements, r.id);
+      return sum + Math.max(0, adv - inc);
+    },
     0
   );
 
@@ -931,17 +935,21 @@ export const RidersTab: React.FC<Props> = ({
               <div className="flex items-center justify-between gap-1 flex-wrap">
                 <span className="text-xs sm:text-sm font-bold text-purple-300 flex items-center gap-1.5">
                   <IndianRupee className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                  <span>कुल एडवांस (Total Advance)</span>
+                  <span>कुल बकाया एडवांस (Net Advance)</span>
                 </span>
                 <span className="text-[10px] sm:text-[11px] font-semibold text-purple-200 bg-purple-500/25 px-2 py-0.5 rounded-md border border-purple-500/40">
-                  {riders.filter((r) => calculateActiveAdvanceTotal(r.advances, settlements, r.id) > 0).length} active
+                  {riders.filter((r) => {
+                    const adv = calculateActiveAdvanceTotal(r.advances, settlements, r.id);
+                    const inc = calculateActiveIncentiveTotal(r.incentives, settlements, r.id);
+                    return Math.max(0, adv - inc) > 0;
+                  }).length} active
                 </span>
               </div>
               <div className="text-lg sm:text-2xl font-black text-purple-200 mt-1">
                 {formatINR(totalAdvanceAmount)}
               </div>
               <div className="text-[10px] text-purple-300/80 mt-0.5 font-medium">
-                कुल दिया गया एडवांस
+                कुल शुद्ध बकाया एडवांस
               </div>
             </div>
           </div>
@@ -1415,8 +1423,14 @@ export const RidersTab: React.FC<Props> = ({
               return true;
             });
             // STANDARD KHATABOOK / BANKING DOUBLE-ENTRY ACCRUALS (Timeless / State-Scoped)
-            const activeAdvanceBalance = calculateActiveAdvanceTotal(rider.advances);
-            const activeIncentiveBalance = calculateActiveIncentiveTotal(rider.incentives);
+            // NET OUTSTANDING ADVANCE (Point 2 Fix):
+            // When rider took 3000 advance and repaid 2000 in incentive/repayments:
+            // Net Advance = 3000 - 2000 = 1000! Net Incentive = 0!
+            // When rider took 3000 advance and repaid 3000: Net Advance = 0 (Clear)!
+            const rawActiveAdvance = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
+            const rawActiveIncentive = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+            const activeAdvanceBalance = Math.max(0, rawActiveAdvance - rawActiveIncentive);
+            const activeIncentiveBalance = Math.max(0, rawActiveIncentive - rawActiveAdvance);
             const liveUnpaidPayout = (stats.unpaidAmount + activeIncentiveBalance) - activeAdvanceBalance;
 
             return (
@@ -1526,30 +1540,32 @@ export const RidersTab: React.FC<Props> = ({
                         {liveUnpaidPayout > 0
                           ? formatINR(liveUnpaidPayout)
                           : liveUnpaidPayout < 0
-                          ? `-₹${formatINR(Math.abs(liveUnpaidPayout))}`
+                          ? `-${formatINR(Math.abs(liveUnpaidPayout))}`
                           : '₹0'}
                       </div>
                     </div>
 
-                    {/* Advance Balance Badge - Strictly active unsettled advances only */}
+                    {/* Advance Balance Badge - Net Active Outstanding Advance */}
                     <div className="text-right">
-                      <div className={`text-xs ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>Advance Balance</div>
+                      <div className={`text-xs ${activeAdvanceBalance > 0 ? 'text-rose-400 font-semibold' : 'text-slate-500'}`}>
+                        {activeAdvanceBalance > 0 ? 'बकाया एडवांस' : 'एडवांस'}
+                      </div>
                       <div className={`text-sm font-bold font-mono ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
                         {activeAdvanceBalance > 0 ? formatINR(activeAdvanceBalance) : '₹0'}
                       </div>
                     </div>
 
-                    {/* Incentive Total Badge - Strictly active unsettled incentives only (Auto-zeros on post-payout, hides ghost +₹211) */}
+                    {/* Incentive Total Badge - Surplus Incentive Only */}
                     {activeIncentiveBalance > 0 ? (
                       <div className="text-right">
-                        <div className="text-xs text-emerald-400">Incentive Total</div>
+                        <div className="text-xs text-emerald-400 font-semibold">इंसेंटिव / बोनस</div>
                         <div className="text-sm font-bold font-mono text-emerald-400">
                           +{formatINR(activeIncentiveBalance)}
                         </div>
                       </div>
                     ) : (
                       <div className="text-right">
-                        <div className="text-xs text-slate-500">Incentive Total</div>
+                        <div className="text-xs text-slate-500">इंसेंटिव / बोनस</div>
                         <div className="text-sm font-bold font-mono text-slate-500">
                           ₹0
                         </div>

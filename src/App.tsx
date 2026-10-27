@@ -119,7 +119,7 @@ import { UserAccountMenu } from './components/UserAccountMenu';
 import { AuthModal } from './components/AuthModal';
 import { SyncOldAppModal } from './components/SyncOldAppModal';
 import { SyncExtractedData } from './services/oldAppSync';
-import { getTodayDateString, formatINR } from './utils/formatters';
+import { getTodayDateString, formatDateDisplay, formatINR } from './utils/formatters';
 import { FestivalBannerCard } from './components/FestivalBannerCard';
 import { FestivalGreetingsModal } from './components/FestivalGreetingsModal';
 import { SubscriptionAlertBanner } from './components/SubscriptionAlertBanner';
@@ -1770,9 +1770,28 @@ function MainCourierApp() {
           }
         });
 
-        const activeAdvTotal = calculateActiveAdvanceTotal(updatedAdvances);
-        updatedRider.totalAdvance = activeAdvTotal;
-        updatedRider.advances = updatedAdvances;
+        // Ensure uncoverable advance deficit (advanceAmount > grossTotal) remains as an active, unsettled advance!
+        const totalNetDeficit = advanceAmount - settlementDetails.grossTotal;
+        if (totalNetDeficit > 0) {
+          const deficitId = `adv_deficit_${settlementId}`;
+          const alreadyHasActiveDeficit = updatedAdvances.some(
+            (a) => (!a.isSettled && (a as any).status !== 'PAID' && a.id?.includes('rem')) || a.id === deficitId
+          );
+          if (!alreadyHasActiveDeficit) {
+            updatedAdvances.push({
+              id: deficitId,
+              riderId: targetRider.id,
+              amount: totalNetDeficit,
+              date: settlementDetails.endDate || getTodayDateString(),
+              createdAt: nowIso,
+              reason: `बकाया एडवांस (पिछला सेटलमेंट घाटा: ${formatDateDisplay(settlementDetails.startDate)} - ${formatDateDisplay(settlementDetails.endDate)})`,
+              isSettled: false,
+              isDeducted: false,
+              status: 'UNPAID',
+              runningBalance: totalNetDeficit,
+            });
+          }
+        }
 
         // 2. Incentive settlement: Permanently flag ALL active incentives (Timeless / State-Scoped):
         // { isSettled: true, isPaid: true, settledInPayoutId: settlementId }
@@ -1792,15 +1811,18 @@ function MainCourierApp() {
           return inc;
         });
 
-        const activeIncTotal = calculateActiveIncentiveTotal(updatedIncentives);
-        updatedRider.totalIncentive = activeIncTotal;
+        const rawAdvTotal = calculateActiveAdvanceTotal(updatedAdvances);
+        const rawIncTotal = calculateActiveIncentiveTotal(updatedIncentives);
+        updatedRider.totalAdvance = Math.max(0, rawAdvTotal - rawIncTotal);
+        updatedRider.totalIncentive = Math.max(0, rawIncTotal - rawAdvTotal);
+        updatedRider.advances = updatedAdvances;
         updatedRider.incentives = updatedIncentives;
 
         newSettlement.settledIncentiveIds = updatedIncentives
-          .filter((i) => i.settledPayoutId === settlementId)
+          .filter((i) => i.settledPayoutId === settlementId && i.isSettled)
           .map((i) => i.id);
         newSettlement.settledAdvanceIds = updatedAdvances
-          .filter((a) => a.settledPayoutId === settlementId)
+          .filter((a) => a.settledPayoutId === settlementId && a.isSettled)
           .map((a) => a.id);
 
         saveSettlementsToStorage(updatedSettlements, targetUid);

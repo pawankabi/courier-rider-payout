@@ -462,7 +462,11 @@ export function calculatePureRiderLedger(
     .filter((s) => (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
     .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
 
-  if (totalSettlementDeficits > 0) {
+  const alreadyHasDeficitAdvance = rawList.some(
+    (r) => r.type === 'advance' && (r.originalId?.startsWith('adv_deficit_') || r.title?.includes('पिछला सेटलमेंट घाटा'))
+  );
+
+  if (totalSettlementDeficits > 0 && !alreadyHasDeficitAdvance) {
     const lastSal = salaries[salaries.length - 1];
     rawList.push({
       id: 'settlement-deficit-cf',
