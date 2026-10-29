@@ -1,8 +1,8 @@
 {
-  "version": "1.0.11",
-  "versionCode": 11,
-  "buildTime": 1793232000000,
+  "version": "1.0.12",
+  "versionCode": 12,
+  "buildTime": 1793236000000,
   "buildDate": "2026-10-29",
-  "releaseNotes": "Version 1.0.11 - Direct Admin APK Download, 0-Second Screen-Off Lock, and Dynamic Rates",
-  "updatedAt": "2026-10-29T00:13:00.000Z"
+  "releaseNotes": "Version 1.0.12 - Permanent Auto-Increment Version Engine, Direct APK Downloads & 0-Second Screen-Off App Lock",
+  "updatedAt": "2026-10-29T00:23:00.000Z"
 }

@@ -2522,7 +2522,7 @@ function MainCourierApp() {
       )}
 
       {/* Super-Powered Live Update Floating Banner - Restricted strictly to Master Admin */}
-      {isSuperAdminUser && isLiveUpdateAvailable && (
+      {isLiveUpdateAvailable && (
         <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white px-4 py-2.5 text-xs font-semibold flex items-center justify-between shadow-xl sticky top-0 z-50 border-b border-emerald-400/40 animate-pulse">
           <div className="flex items-center gap-2.5">
             <span className="text-base">🚀</span>

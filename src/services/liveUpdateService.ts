@@ -15,7 +15,7 @@ import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { APP_VERSION } from '../utils/version';
 
-export const CURRENT_LOCAL_BUILD_TIME = 1793232000000;
+export const CURRENT_LOCAL_BUILD_TIME = 1793236000000;
 export const CURRENT_LOCAL_VERSION = APP_VERSION;
 
 type UpdateListener = (available: boolean, details?: { version?: string; releaseNotes?: string }) => void;
@@ -25,6 +25,22 @@ export interface CloudVersionManifest {
   buildTime: number;
   buildDate: string;
   releaseNotes?: string;
+}
+
+function parseSemver(v: string): number[] {
+  return (v || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+}
+
+function isVersionHigher(v1: string, v2: string): boolean {
+  const p1 = parseSemver(v1);
+  const p2 = parseSemver(v2);
+  for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+    const num1 = p1[i] || 0;
+    const num2 = p2[i] || 0;
+    if (num1 > num2) return true;
+    if (num1 < num2) return false;
+  }
+  return false;
 }
 
 class LiveUpdateService {
@@ -118,8 +134,9 @@ class LiveUpdateService {
       return;
     }
 
-    // 2. Check if cloud has a newer build than the currently compiled local code
-    if (manifest.buildTime > CURRENT_LOCAL_BUILD_TIME) {
+    // 2. Check if cloud has a newer semver or newer build than the currently compiled local code
+    const isNewer = isVersionHigher(manifest.version, CURRENT_LOCAL_VERSION) || manifest.buildTime > CURRENT_LOCAL_BUILD_TIME;
+    if (isNewer) {
       // 3. User Rule: If dismissed with 'X', hide ONLY for today (same calendar date).
       // On the NEXT DAY, if still not updated, the banner appears again!
       if (!force && dismissedDate === todayDate) {
