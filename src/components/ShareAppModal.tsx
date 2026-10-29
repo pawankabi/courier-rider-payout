@@ -353,78 +353,62 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
                 </span>
               </div>
 
-              {/* Vercel 1-Click Link */}
-              <div className="p-2 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <span>🌐 1. Vercel डायरेक्ट डाउनलोड लिंक:</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopy('admin_vercel_apk')}
-                    className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-mono cursor-pointer"
-                  >
-                    {copiedType === 'admin_vercel_apk' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedType === 'admin_vercel_apk' ? 'कॉपी हुआ!' : 'कॉपी'}</span>
-                  </button>
-                </div>
-                <div className="font-mono text-[11px] text-emerald-300 break-all select-all">
-                  {ADMIN_VERCEL_DOWNLOAD_URL}
-                </div>
-              </div>
-
-              {/* GitHub 1-Click Link */}
+              {/* Direct APK Download Link */}
               <div className="p-2 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="text-indigo-400 font-semibold flex items-center gap-1">
-                    <span>🐙 2. GitHub डायरेक्ट डाउनलोड लिंक:</span>
+                    <span>⚡ डायरेक्ट APK डाउनलोड लिंक (Direct Download):</span>
                   </span>
                   <button
                     type="button"
                     onClick={() => handleCopy('admin_apk')}
                     className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-mono cursor-pointer"
                   >
-                    {copiedType === 'admin_apk' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedType === 'admin_apk' ? 'कॉपी हुआ!' : 'कॉपी'}</span>
+                    {copiedType === 'admin_apk' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedType === 'admin_apk' ? 'कॉपी हुआ!' : 'कॉपी लिंक'}</span>
                   </button>
                 </div>
-                <div className="font-mono text-[11px] text-slate-300 break-all select-all">
+                <div className="font-mono text-[11px] text-indigo-300 break-all select-all">
                   {adminGithubUrl}
                 </div>
               </div>
 
               <p className="text-[10px] text-emerald-400 font-medium">
-                ⚡ 1-क्लिक डायरेक्ट APK डाउनलोड (बिना कोई पेज खुले सीधे डाउनलोड होगा, भविष्य में नया वर्जन आने पर भी यही लिंक काम करेगा)
+                ⚡ 1-क्लिक डायरेक्ट APK डाउनलोड (बिना किसी वेब पेज पर भटके सीधे Admin-Payout-Release.apk डाउनलोड होगा)
               </p>
             </div>
 
             <div className="flex items-center gap-2 pt-1">
               <a
-                href={ADMIN_VERCEL_DOWNLOAD_URL}
+                href={adminGithubUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 download="Admin-Payout-Release.apk"
+                onClick={(e) => {
+                  e.preventDefault();
+                  downloadAdminApk();
+                }}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow cursor-pointer text-center"
               >
                 <Download className="w-4 h-4" />
-                <span>1-क्लिक डाउनलोड APK (Admin App)</span>
+                <span>डाउनलोड एडमिन ऐप (Admin-Payout-Release.apk)</span>
               </a>
 
               <button
                 type="button"
-                onClick={() => handleCopy('admin_vercel_apk')}
+                onClick={() => handleCopy('admin_apk')}
                 className="py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer shrink-0"
-                title="Vercel डायरेक्ट APK डाउनलोड लिंक कॉपी करें"
+                title="डायरेक्ट APK डाउनलोड लिंक कॉपी करें"
               >
-                {copiedType === 'admin_vercel_apk' ? (
+                {copiedType === 'admin_apk' ? (
                   <>
                     <Check className="w-4 h-4 text-emerald-400" />
                     <span className="hidden sm:inline text-emerald-400">कॉपी हुआ!</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-4 h-4 text-emerald-400" />
-                    <span className="hidden sm:inline">कॉपी Vercel लिंक</span>
+                    <Copy className="w-4 h-4 text-indigo-400" />
+                    <span className="hidden sm:inline">कॉपी लिंक</span>
                   </>
                 )}
               </button>

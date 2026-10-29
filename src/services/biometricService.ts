@@ -137,45 +137,27 @@ export function recordAppUnlock(): void {
 /**
  * Determines whether the App Lock Screen should be displayed.
  * STRICT RULE:
- * Returns true ONLY if:
  * 1. App Lock is enabled, AND
- * 2. The phone screen was off / app was in background for >= 15 minutes, OR
- *    The user was completely inactive for >= 15 minutes.
- * If the user has been active within the last 15 minutes, returns FALSE.
+ * 2. The phone screen was turned off or the app was placed in background.
+ * 3. While the user is actively working inside the app in foreground, it NEVER locks!
  */
 export function shouldTriggerAppLock(): boolean {
   if (!isNativeAndroid()) return false;
   if (!isAppLockEnabled()) return false;
   if (typeof window === 'undefined') return false;
 
-  const now = Date.now();
-
-  // 1. Check background duration (screen off or app switched away)
+  // STRICT: Check background timestamp (screen off or app switched away)
   try {
     const bgTimeStr = localStorage.getItem(APP_LOCK_BG_TIME_KEY);
-    if (bgTimeStr) {
-      const bgTime = Number(bgTimeStr);
-      if (!isNaN(bgTime) && bgTime > 0) {
-        const bgDuration = now - bgTime;
-        if (bgDuration >= APP_LOCK_TIMEOUT_MS) {
-          return true; // Screen was off / backgrounded for 15+ minutes
-        } else {
-          // Came back before 15 minutes! Do not lock.
-          return false;
-        }
-      }
+    if (!bgTimeStr) {
+      // App was never backgrounded or was already unlocked in this session; DO NOT LOCK in foreground!
+      return false;
     }
-  } catch {}
 
-  // 2. Check inactivity duration
-  try {
-    const lastActiveStr = localStorage.getItem(APP_LOCK_LAST_ACTIVE_KEY);
-    const lastActive = lastActiveStr ? Number(lastActiveStr) : memoryLastActive;
-    if (!isNaN(lastActive) && lastActive > 0) {
-      const inactiveDuration = now - lastActive;
-      if (inactiveDuration >= APP_LOCK_TIMEOUT_MS) {
-        return true; // Inactive for 15+ minutes
-      }
+    const bgTime = Number(bgTimeStr);
+    if (!isNaN(bgTime) && bgTime > 0) {
+      // The screen was off or the app was placed in the background -> lock immediately on resume!
+      return true;
     }
   } catch {}
 

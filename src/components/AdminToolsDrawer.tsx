@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Database
 } from 'lucide-react';
+import { APP_VERSION } from '../utils/version';
 
 interface Props {
   isOpen: boolean;
@@ -268,7 +269,7 @@ export const AdminToolsDrawer: React.FC<Props> = ({
             <Database className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             <span className="truncate">{activeHubName}</span>
           </div>
-          <span className="font-mono text-[10px] text-slate-400 shrink-0">v2.4.0 Pro</span>
+          <span className="font-mono text-[10px] text-slate-400 shrink-0">v{APP_VERSION} Pro</span>
         </div>
       </aside>
     </div>

@@ -302,21 +302,10 @@ function MainCourierApp() {
     const activityEvents = ['pointerdown', 'touchstart', 'mousedown', 'keydown', 'scroll', 'click'];
     activityEvents.forEach((ev) => window.addEventListener(ev, handleActivity, { passive: true }));
 
-    // Foreground 15-min idle watchdog (Native Android only):
-    // If phone screen was left on without touching anything for 15 minutes straight:
-    const watchdogTimer = setInterval(() => {
-      if (isNativeAndroid() && isAppLockEnabled() && !isAppLocked) {
-        if (shouldTriggerAppLock()) {
-          setIsAppLocked(true);
-        }
-      }
-    }, 15000);
-
     return () => {
       activityEvents.forEach((ev) => window.removeEventListener(ev, handleActivity));
-      clearInterval(watchdogTimer);
     };
-  }, [isAppLocked]);
+  }, []);
 
   // 2. Phone Screen Off / Background / Resume Lifecycle (Native Android only):
   // When screen turns off or user switches apps -> record timestamp.

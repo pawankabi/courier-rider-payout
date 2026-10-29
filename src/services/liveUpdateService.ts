@@ -15,7 +15,7 @@ import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { APP_VERSION } from '../utils/version';
 
-export const CURRENT_LOCAL_BUILD_TIME = 1793097952553; // Local baseline (older than v1.0.8 cloud build 1729705000000)
+export const CURRENT_LOCAL_BUILD_TIME = 1793232000000;
 export const CURRENT_LOCAL_VERSION = APP_VERSION;
 
 type UpdateListener = (available: boolean, details?: { version?: string; releaseNotes?: string }) => void;

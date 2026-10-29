@@ -1,8 +1,8 @@
 {
-  "version": "1.0.10",
-  "versionCode": 10,
-  "buildTime": 1793097952553,
-  "buildDate": "2026-10-27",
-  "releaseNotes": "Auto-Sync Version 1.0.10 - Modern Adaptive Icons, Real-time Payout & Fast OTA Update",
-  "updatedAt": "2026-10-27T10:45:52.553Z"
+  "version": "1.0.11",
+  "versionCode": 11,
+  "buildTime": 1793232000000,
+  "buildDate": "2026-10-29",
+  "releaseNotes": "Version 1.0.11 - Direct Admin APK Download, 0-Second Screen-Off Lock, and Dynamic Rates",
+  "updatedAt": "2026-10-29T00:13:00.000Z"
 }
