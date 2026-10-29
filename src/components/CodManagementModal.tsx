@@ -30,8 +30,10 @@ import {
   ChevronRight,
   LogOut,
   Smartphone,
-  Banknote
+  Banknote,
 } from 'lucide-react';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   Rider, 
   CodDailyEntry, 
@@ -137,10 +139,11 @@ export const CodManagementModal: React.FC<Props> = ({
   const [denomModalRider, setDenomModalRider] = useState<{ rider: CodDailyEntry; denom: CashDenomination | null } | null>(null);
   const [auditDenomRider, setAuditDenomRider] = useState<CodDailyEntry | null>(null);
 
-  // Company Name Config Popover
+  // Company Name & Hub UPI ID Config Popover
   const [isCompanyConfigOpen, setIsCompanyConfigOpen] = useState(false);
   const [tempCompany1, setTempCompany1] = useState('');
   const [tempCompany2, setTempCompany2] = useState('');
+  const [tempHubUpiId, setTempHubUpiId] = useState('');
 
   // Grid search & filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -202,6 +205,7 @@ export const CodManagementModal: React.FC<Props> = ({
           setSettings(loadedSettings);
           setTempCompany1(loadedSettings.company1Name);
           setTempCompany2(loadedSettings.company2Name);
+          setTempHubUpiId(loadedSettings.hubUpiId || '');
           setStaffUsers(loadedStaff);
           setAuditLogs(loadedLogs);
         }
@@ -800,18 +804,35 @@ export const CodManagementModal: React.FC<Props> = ({
     }
   };
 
-  // Save Company Configurations
+  // Save Company Configurations & Hub UPI ID
   const handleSaveCompanyConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanUpi = tempHubUpiId.trim();
     const updated: CodSettings = {
       ...settings,
       company1Name: tempCompany1.trim() || 'Valmo COD',
       company2Name: tempCompany2.trim() || 'Xpressbees COD',
+      hubUpiId: cleanUpi,
     };
     setSettings(updated);
     await saveCodSettings(userId, updated);
+
+    // Sync to Firestore hubs doc & today's sheet so all riders receive it immediately
+    if (db && userId && userId !== 'guest') {
+      try {
+        const todayDate = getTodayDateString();
+        await Promise.all([
+          setDoc(doc(db, 'hubs', userId, 'daily_cod_sheets', todayDate), { hubUpiId: cleanUpi }, { merge: true }),
+          setDoc(doc(db, 'hubs', userId), { hubUpiId: cleanUpi }, { merge: true }),
+          setDoc(doc(db, 'all_users', userId), { 'rateConfig.hubUpiId': cleanUpi, hubUpiId: cleanUpi }, { merge: true }),
+        ]);
+      } catch (err) {
+        console.warn('Sync hubUpiId error:', err);
+      }
+    }
+
     setIsCompanyConfigOpen(false);
-    showToast('Company column names updated!', 'success');
+    showToast('हब सेटिंग्स व कलेक्शन UPI ID सफलतापूर्वक सेव हो गई!', 'success');
   };
 
   // Toggle Feature Flag (Super Admin / Owner)
@@ -1010,12 +1031,20 @@ export const CodManagementModal: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setIsCompanyConfigOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-850 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-semibold transition"
-              title="Configure Company 1 and Company 2 column names"
+              onClick={() => {
+                setTempCompany1(settings.company1Name);
+                setTempCompany2(settings.company2Name);
+                setTempHubUpiId(settings.hubUpiId || '');
+                setIsCompanyConfigOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
+              title="हब सेटिंग्स, कंपनी नाम व कलेक्शन UPI ID कॉन्फ़िगर करें"
             >
               <Settings2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>Configure Companies</span>
+              <span>हब सेटिंग्स & UPI ID</span>
+              {settings.hubUpiId && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block ml-0.5" title="UPI ID सक्रिय है" />
+              )}
             </button>
 
             <button
@@ -1841,18 +1870,18 @@ export const CodManagementModal: React.FC<Props> = ({
         </div>
       )}
 
-      {/* CONFIGURE COMPANIES MODAL */}
+      {/* CONFIGURE COMPANIES & HUB UPI ID MODAL */}
       {isCompanyConfigOpen && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-500/40 w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-slate-900 border border-emerald-500/40 w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
+                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
                   <Settings2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white">Configure Company Names</h3>
-                  <p className="text-[11px] text-slate-400">Rename columns for your hub contracts</p>
+                  <h3 className="text-sm font-bold text-white">हब सेटिंग्स & UPI ID</h3>
+                  <p className="text-[11px] text-slate-400">कूरियर कंपनी नाम व राइडर कलेक्शन UPI ID</p>
                 </div>
               </div>
               <button
@@ -1864,42 +1893,59 @@ export const CodManagementModal: React.FC<Props> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSaveCompanyConfig} className="space-y-3">
+            <form onSubmit={handleSaveCompanyConfig} className="space-y-3.5">
               <div>
-                <label className="text-xs text-slate-300 block mb-1">Company 1 Column Name</label>
+                <label className="text-xs text-slate-300 block mb-1 font-semibold">Company 1 Column Name</label>
                 <input
                   type="text"
                   value={tempCompany1}
                   onChange={(e) => setTempCompany1(e.target.value)}
                   placeholder="e.g. Valmo COD"
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 font-bold"
                 />
               </div>
 
               <div>
-                <label className="text-xs text-slate-300 block mb-1">Company 2 Column Name</label>
+                <label className="text-xs text-slate-300 block mb-1 font-semibold">Company 2 Column Name</label>
                 <input
                   type="text"
                   value={tempCompany2}
                   onChange={(e) => setTempCompany2(e.target.value)}
                   placeholder="e.g. Xpressbees COD"
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 font-bold"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="pt-2 border-t border-slate-800">
+                <label className="text-xs text-emerald-400 block mb-1 font-bold flex items-center gap-1.5">
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>हब कलेक्शन UPI ID (GPay / PhonePe / Paytm)</span>
+                </label>
+                <input
+                  type="text"
+                  value={tempHubUpiId}
+                  onChange={(e) => setTempHubUpiId(e.target.value)}
+                  placeholder="उदा. 9876543210@ybl या hubname@okaxis"
+                  className="w-full px-3 py-2 bg-slate-950 border border-emerald-500/50 rounded-xl text-xs text-emerald-300 placeholder-slate-500 focus:outline-none focus:border-emerald-400 font-mono tracking-wide"
+                />
+                <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                  💡 राइडर ऐप में ऑनलाइन पैसा डालते ही सीधे GPay/PhonePe में यह UPI ID और रकम ऑटोमैटिक भर जाएगी।
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsCompanyConfigOpen(false)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold cursor-pointer"
                 >
-                  Cancel
+                  रद्द करें
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 text-xs font-bold shadow"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md cursor-pointer transition active:scale-95"
                 >
-                  Save Names
+                  सेटिंग्स सेव करें
                 </button>
               </div>
             </form>

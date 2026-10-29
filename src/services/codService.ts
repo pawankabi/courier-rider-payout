@@ -44,6 +44,7 @@ export const DEFAULT_COD_SETTINGS: CodSettings = {
   isEnabled: false, // Protected by default until Super Admin / Hub Owner enables it
   company1Name: DEFAULT_COMPANY_1,
   company2Name: DEFAULT_COMPANY_2,
+  hubUpiId: '',
   updatedAt: new Date().toISOString(),
 };
 
@@ -1722,6 +1723,7 @@ export function subscribeToDailyCodSheet(
             company2Name,
             hubName: raw.hubName,
             hubId: effectiveHubId,
+            hubUpiId: raw.hubUpiId || '',
             updatedAt: raw.updatedAt,
           };
           try {

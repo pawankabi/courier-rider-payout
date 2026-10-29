@@ -204,6 +204,7 @@ export interface UserRateConfig {
   incentivesEnabled: boolean; // toggle incentive system on/off for user
   minParcelThreshold?: number; // parcel minimum for incentive (e.g. 0 or 80)
   hubSignature?: string; // Custom Hub / Business Signature (e.g. "सरायकेला कूरियर डिलीवरी टीम")
+  hubUpiId?: string; // Custom Hub UPI ID for direct rider GPay / PhonePe / Paytm online collection (e.g. "hub@okaxis" or "9876543210@ybl")
 }
 
 export const DEFAULT_USER_RATE_CONFIG: UserRateConfig = {
@@ -212,6 +213,7 @@ export const DEFAULT_USER_RATE_CONFIG: UserRateConfig = {
   incentivesEnabled: true,
   minParcelThreshold: 0,
   hubSignature: '',
+  hubUpiId: '',
 };
 
 export type UserPlanType = 'free' | 'paid';
@@ -544,6 +546,7 @@ export interface CodSettings {
   company2Name: string; // Default: 'Xpressbees COD'
   companies?: string[]; // List of company names
   defaultLockTime?: string; // e.g. "23:00"
+  hubUpiId?: string; // Hub UPI ID for direct rider GPay / PhonePe / Paytm collection
   updatedAt: string;
 }
 
@@ -572,6 +575,7 @@ export interface DailyCodSheetData {
   hubName?: string;
   hubId?: string; // Hub / Owner account UID for multi-tenant isolation
   ownerUid?: string; // Owner UID
+  hubUpiId?: string; // Synced Hub UPI ID for rider 1-click GPay / PhonePe transfer
   consolidatedDenominations?: CashDenomination; // Aggregated daily cash note denomination summary
   cashWithdrawals?: CashWithdrawalRecord[]; // Cash Outward & Vault Withdrawal logs
   updatedAt?: string;

@@ -40,6 +40,8 @@ import {
   Gift,
   Banknote
 } from 'lucide-react';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   Rider, 
   CodDailyEntry, 
@@ -242,6 +244,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
   const [tempCompany1, setTempCompany1] = useState('');
   const [tempCompany2, setTempCompany2] = useState('');
   const [tempLockTime, setTempLockTime] = useState('23:00');
+  const [tempHubUpiId, setTempHubUpiId] = useState('');
 
   // Grid search & filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -272,6 +275,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
           setTempCompany1(loadedSettings.company1Name);
           setTempCompany2(loadedSettings.company2Name);
           setTempLockTime(loadedSettings.defaultLockTime || '23:00');
+          setTempHubUpiId(loadedSettings.hubUpiId || '');
           setStaffUsers(loadedStaff);
           setAuditLogs(loadedLogs);
         }
@@ -1357,18 +1361,34 @@ export const CodStandaloneApp: React.FC<Props> = ({
     }
   };
 
-  // Save Company Configurations
+  // Save Company Configurations & Hub UPI ID
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanUpi = tempHubUpiId.trim();
     const updated: CodSettings = {
       ...settings,
       company1Name: tempCompany1.trim() || 'Valmo COD',
       company2Name: tempCompany2.trim() || 'Xpressbees COD',
       defaultLockTime: tempLockTime.trim() || '23:00',
+      hubUpiId: cleanUpi,
     };
     setSettings(updated);
     await saveCodSettings(userId, updated);
-    showToast('COD Settings & Company names updated successfully!', 'success');
+
+    if (db && userId && userId !== 'guest') {
+      try {
+        const todayDate = getTodayDateString();
+        await Promise.all([
+          setDoc(doc(db, 'hubs', userId, 'daily_cod_sheets', todayDate), { hubUpiId: cleanUpi }, { merge: true }),
+          setDoc(doc(db, 'hubs', userId), { hubUpiId: cleanUpi }, { merge: true }),
+          setDoc(doc(db, 'all_users', userId), { 'rateConfig.hubUpiId': cleanUpi, hubUpiId: cleanUpi }, { merge: true }),
+        ]);
+      } catch (err) {
+        console.warn('Sync hubUpiId error:', err);
+      }
+    }
+
+    showToast('हब सेटिंग्स, कंपनी नाम व कलेक्शन UPI ID सफलतापूर्वक सेव हो गई!', 'success');
   };
 
   // Toggle Feature Flag (Super Admin / Owner)
@@ -3143,6 +3163,23 @@ export const CodStandaloneApp: React.FC<Props> = ({
                   className="w-48 px-3 py-2 bg-slate-950 border border-slate-750 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">Rider daily entry submission cutoff time</span>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800">
+                <label className="text-xs text-emerald-400 font-bold block mb-1 flex items-center gap-1.5">
+                  <Smartphone className="w-4 h-4 text-emerald-400" />
+                  <span>हब कलेक्शन UPI ID (GPay / PhonePe / Paytm)</span>
+                </label>
+                <input
+                  type="text"
+                  value={tempHubUpiId}
+                  onChange={(e) => setTempHubUpiId(e.target.value)}
+                  placeholder="उदा. 9876543210@ybl या hubname@okaxis"
+                  className="w-full px-3 py-2 bg-slate-950 border border-emerald-500/50 rounded-xl text-xs text-emerald-300 placeholder-slate-500 focus:outline-none focus:border-emerald-400 font-mono tracking-wide"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  💡 राइडर ऐप में ऑनलाइन पैसा डालते ही सीधे GPay/PhonePe में यह UPI ID और रकम ऑटोमैटिक भर जाएगी।
+                </span>
               </div>
 
               {/* Super Admin Feature Flag in Settings */}

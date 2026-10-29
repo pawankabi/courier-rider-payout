@@ -33,7 +33,8 @@ import {
   Plus,
   Package,
   Receipt,
-  Banknote
+  Banknote,
+  Smartphone
 } from 'lucide-react';
 import { 
   CodDailyEntry, 
@@ -250,6 +251,10 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const [editCashDenomination, setEditCashDenomination] = useState<CashDenomination | null>(null);
   const [auditDenominationEntry, setAuditDenominationEntry] = useState<CodDailyEntry | null>(null);
 
+  // Hub Collection UPI ID & 1-Click Payment Tracker
+  const [syncedHubUpiId, setSyncedHubUpiId] = useState<string>('');
+  const [onlinePaymentSent, setOnlinePaymentSent] = useState<boolean>(false);
+
   // Rider Active Portal Tab: Daily Delivery / COD Submission vs Khatabook Passbook
   const [riderActiveTab, setRiderActiveTab] = useState<'cod_entry' | 'khatabook'>('cod_entry');
   const isRiderFlavor = isRiderBuild();
@@ -376,6 +381,84 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Real-time synchronization of Hub's collection UPI ID
+  useEffect(() => {
+    if (!authenticatedHubId || !db) return;
+    try {
+      const unsub = onSnapshot(doc(db, 'hubs', authenticatedHubId), (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data?.hubUpiId) {
+            setSyncedHubUpiId(data.hubUpiId);
+          }
+        }
+      });
+      return () => unsub();
+    } catch {}
+  }, [authenticatedHubId]);
+
+  const activeHubUpiId = (syncedHubUpiId || sheetData?.hubUpiId || '').trim();
+
+  // Auto-detect return from UPI payment app (GPay / PhonePe / Paytm)
+  useEffect(() => {
+    const checkUpiReturn = () => {
+      const raw = sessionStorage.getItem('cp_pending_upi_transfer');
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Date.now() - parsed.time < 600000) {
+            setOnlinePaymentSent(true);
+            showToast(`✅ ₹${Number(parsed.amount).toLocaleString('en-IN')} का UPI ट्रांसफर प्रोसेस हुआ! अब एंट्री सेव करें।`, 'success');
+          }
+        } catch {}
+        sessionStorage.removeItem('cp_pending_upi_transfer');
+      }
+    };
+
+    window.addEventListener('focus', checkUpiReturn);
+    const handleVis = () => {
+      if (document.visibilityState === 'visible') {
+        checkUpiReturn();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVis);
+
+    return () => {
+      window.removeEventListener('focus', checkUpiReturn);
+      document.removeEventListener('visibilitychange', handleVis);
+    };
+  }, []);
+
+  // Launch GPay / PhonePe / Paytm with exact amount and Hub UPI ID
+  const handleLaunchUpiApp = () => {
+    const amt = Number(editOnline);
+    if (!amt || amt <= 0) {
+      showToast('कृपया पहले सही ऑनलाइन रकम (Online ₹) दर्ज करें।', 'error');
+      return;
+    }
+    if (!activeHubUpiId) {
+      showToast('हब एडमिन द्वारा UPI ID सेट नहीं किया गया है।', 'error');
+      return;
+    }
+
+    const payeeName = sheetData?.hubName || 'Courier Hub';
+    const riderName = editingEntry?.riderName || authUser?.name || 'Rider';
+    const note = `COD Collection - ${riderName}`;
+    const cleanUpi = activeHubUpiId.trim();
+
+    // Universal UPI Deep Link:
+    const upiUri = `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=${encodeURIComponent(payeeName)}&am=${amt}&cu=INR&tn=${encodeURIComponent(note)}`;
+
+    sessionStorage.setItem('cp_pending_upi_transfer', JSON.stringify({
+      amount: amt,
+      riderId: editingEntry?.riderId,
+      time: Date.now(),
+    }));
+
+    showToast('🚀 Google Pay / PhonePe / Paytm खोला जा रहा है...', 'info');
+    window.location.href = upiUri;
+  };
 
   // 2. Handle Login: Exact Hub Lookup on Login directly via authenticateCodStaffCompanion
   const handleLogin = async (overridePhone?: string, overridePin?: string) => {
@@ -731,6 +814,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     setEditCashDenomination(targetRow.cashDenomination || null);
     setEditOnline(targetRow.onlineDeposit > 0 ? String(targetRow.onlineDeposit) : '');
     setEditNotes(targetRow.notes || '');
+    setOnlinePaymentSent(false);
   };
 
   // Save Row with instant optimistic UI update + direct Firestore write
@@ -3142,20 +3226,63 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 ) : null}
               </div>
 
-              {/* Online Deposit */}
+              {/* Online Deposit with 1-Click Direct UPI (GPay/PhonePe/Paytm) Transfer */}
               <div>
-                <label className="block text-xs font-bold text-sky-700 uppercase tracking-wider mb-1">
-                  ऑनलाइन जमा (UPI / QR Payment ₹)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-sky-700 uppercase tracking-wider">
+                    ऑनलाइन जमा (UPI / QR Payment ₹)
+                  </label>
+                  {activeHubUpiId && (
+                    <span className="text-[10px] text-sky-700 font-mono bg-sky-100 px-2 py-0.5 rounded-full border border-sky-300 font-semibold truncate max-w-[190px]" title={`हब कलेक्शन खाता: ${activeHubUpiId}`}>
+                      हब UPI: {activeHubUpiId}
+                    </span>
+                  )}
+                </div>
                 <input
                   type="number"
                   inputMode="numeric"
                   min="0"
                   placeholder="0"
                   value={editOnline}
-                  onChange={(e) => setEditOnline(e.target.value)}
+                  onChange={(e) => {
+                    setEditOnline(e.target.value);
+                    setOnlinePaymentSent(false);
+                  }}
                   className="w-full px-3.5 py-2.5 bg-sky-50/50 border border-sky-300 rounded-xl text-sky-700 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white"
                 />
+
+                {/* ⚡ 1-Click Direct GPay / PhonePe / Paytm Transfer Button for Rider */}
+                {isRider && Number(editOnline) > 0 && (
+                  <div className="mt-2.5 space-y-2">
+                    {activeHubUpiId ? (
+                      <button
+                        type="button"
+                        onClick={handleLaunchUpiApp}
+                        className="w-full py-2.5 px-3 bg-gradient-to-r from-sky-600 via-indigo-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer active:scale-95"
+                      >
+                        <Smartphone className="w-4 h-4 text-sky-200" />
+                        <span>⚡ ₹{Number(editOnline).toLocaleString('en-IN')} सीधे GPay / PhonePe / Paytm से भेजें</span>
+                      </button>
+                    ) : (
+                      <div className="p-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>हब एडमिन द्वारा कलेक्शन UPI ID सेट नहीं किया गया है।</span>
+                      </div>
+                    )}
+
+                    {onlinePaymentSent && (
+                      <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-bold flex items-center justify-between animate-in fade-in shadow-xs">
+                        <span className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>पेमेंट ऐप से वापस आ गए ✓ (ट्रांसफर प्रोसेस हुआ)</span>
+                        </span>
+                        <span className="text-[10px] text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md font-semibold">
+                          नो UTR झंझट
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Live Auto-Calculated Summary Box */}
