@@ -13,12 +13,12 @@ export const APP_LOCK_LAST_ACTIVE_KEY = 'cp_app_lock_last_active';
 export const APP_LOCK_BG_TIME_KEY = 'cp_app_lock_bg_time';
 
 /**
- * 15-Minute Timeout strictly enforced:
- * The app will ONLY lock if the phone screen has been off or the app has been in the
- * background / completely inactive for at least 15 minutes (900,000 ms).
- * It will NEVER lock while the user is actively working inside the app.
+ * 0-Second Instant Lock on Screen Off / App Background:
+ * As long as the user is actively working inside the app, it NEVER locks.
+ * But as soon as the screen turns off or the app is put in the background,
+ * it locks immediately (0-second timeout) and prompts to unlock upon returning.
  */
-export const APP_LOCK_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes = 900,000 ms
+export const APP_LOCK_TIMEOUT_MS = 0; // 0 seconds = instant lock on screen off / minimize
 
 export interface BiometryStatus {
   isAvailable: boolean;

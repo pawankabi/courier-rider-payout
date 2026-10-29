@@ -75,7 +75,7 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
         onStatusChanged?.(targetState);
         setSuccessMessage(
           targetState
-            ? '15 मिनट सुरक्षा लॉक सक्रिय! 15 मिनट स्क्रीन ऑफ रहने के बाद ही फिंगरप्रिंट लॉक होगा। काम करते समय कभी लॉक नहीं होगा।'
+            ? '0-सेकंड तत्काल सुरक्षा लॉक सक्रिय! स्क्रीन बंद होते ही तुरंत लॉक होगा, ऐप में काम करते समय कोई रुकावट नहीं होगी।'
             : 'ऐप लॉक सफलतापूर्वक बंद कर दिया गया।'
         );
         setTimeout(() => setSuccessMessage(null), 4000);
@@ -102,12 +102,12 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
               {enabled && (
                 <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold inline-flex items-center gap-0.5">
                   <ShieldCheck className="w-2.5 h-2.5" />
-                  15 मिनट सुरक्षा Active
+                  0-Sec Lock Active
                 </span>
               )}
             </div>
             <p className="text-[11px] text-slate-300 leading-snug mt-0.5">
-              15 मिनट फोन स्क्रीन ऑफ या निष्क्रिय रहने पर फिंगरप्रिंट लॉक सक्रिय होगा। ऐप में काम करते समय कभी लॉक नहीं होगा।
+              स्क्रीन बंद होते ही तुरंत फिंगरप्रिंट लॉक सक्रिय होगा। ऐप में काम करते समय कभी लॉक नहीं होगा।
             </p>
             {biometryInfo && (
               <span className="text-[10px] text-blue-400 font-medium inline-block mt-0.5">

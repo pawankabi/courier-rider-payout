@@ -458,34 +458,36 @@ export function calculatePureRiderLedger(
   });
 
   // D. Uncovered Settlement Deficits Carried Over (if not already represented in active advances)
-  const totalSettlementDeficits = salaries
+  const deficitSettlements = salaries
     .filter((s) => (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
-    .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
+    .sort((a, b) => new Date(b.endDate || b.startDate).getTime() - new Date(a.endDate || a.startDate).getTime());
+
+  const totalSettlementDeficits = deficitSettlements.reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
 
   const alreadyHasDeficitAdvance = rawList.some(
     (r) => r.type === 'advance' && (r.originalId?.startsWith('adv_deficit_') || r.title?.includes('पिछला सेटलमेंट घाटा'))
   );
 
   if (totalSettlementDeficits > 0 && !alreadyHasDeficitAdvance) {
-    const lastSal = salaries[salaries.length - 1];
+    const latestDeficitSal = deficitSettlements[0] || salaries[0];
+    const deficitDate = latestDeficitSal?.endDate || new Date().toISOString().split('T')[0];
+    const deficitTimestamp = (new Date(deficitDate).getTime() || Date.now()) + 5; // Chronologically immediately after settlement
+
     rawList.push({
       id: 'settlement-deficit-cf',
       originalId: 'settlement-deficit-cf',
-      rawDate: lastSal?.endDate || new Date().toISOString().split('T')[0],
-      sortTimestamp: Date.now(),
-      formattedDate: formatDateDisplay(lastSal?.endDate || new Date().toISOString().split('T')[0]),
+      rawDate: deficitDate,
+      sortTimestamp: deficitTimestamp,
+      formattedDate: formatDateDisplay(deficitDate),
       type: 'advance',
       entryKind: 'MINUS_ADVANCE',
       typeLabel: '(-) पूर्व बकाया',
       title: 'पिछले सेटलमेंट का बकाया शेष (Settlement Deficit Carry-Forward)',
-      subTitle: 'एडवांस कटौती सकल कमाई से अधिक थी • अवशेष देयता',
+      subTitle: `एडवांस कटौती सकल कमाई से अधिक थी • अवशेष देयता (${latestDeficitSal ? `${formatDateDisplay(latestDeficitSal.startDate)} से ${formatDateDisplay(latestDeficitSal.endDate)}` : ''})`,
       plusAmount: 0,
       minusAmount: totalSettlementDeficits,
     });
   }
-
-
-
 
   // Deduplicate entries by ID to ensure single ground truth
   const seenEntryIds = new Set<string>();
@@ -516,9 +518,9 @@ export function calculatePureRiderLedger(
     const absBal = Math.abs(running);
     let label = '⚪ हिसाब चुकता: ₹0';
     if (running < -0.01) {
-      label = isRider ? `🔴 देना है: ₹${formatINR(absBal)}` : `🔴 पाना बाकी: ₹${formatINR(absBal)}`;
+      label = isRider ? `🔴 देना है: ${formatINR(absBal)}` : `🔴 पाना बाकी: ${formatINR(absBal)}`;
     } else if (running > 0.01) {
-      label = isRider ? `🟢 लेना है: ₹${formatINR(absBal)}` : `🟢 देना बाकी: ₹${formatINR(absBal)}`;
+      label = isRider ? `🟢 लेना है: ${formatINR(absBal)}` : `🟢 देना बाकी: ${formatINR(absBal)}`;
     }
 
     return {
@@ -557,13 +559,13 @@ export function calculatePureRiderLedger(
   if (finalDifference < -0.01) {
     // CASE 1: Rider Owes Hub (Advances > Earnings, e.g. Lakhindar Mahato: Advances ₹11,445 - Salary Payout ₹8,810 = ₹2,635)
     balanceStatus = 'rider_due';
-    adminBalanceLabel = `🔴 राइडर से ₹${formatINR(netBalance)} पाना बाकी है`;
-    riderBalanceLabel = `🔴 आपसे हब ₹${formatINR(netBalance)} पाएगा`;
+    adminBalanceLabel = `🔴 राइडर से ${formatINR(netBalance)} पाना बाकी है`;
+    riderBalanceLabel = `🔴 आपसे हब ${formatINR(netBalance)} पाएगा`;
   } else if (finalDifference > 0.01) {
     // CASE 2: Hub Owes Rider (Earnings > Advances)
     balanceStatus = 'payable';
-    adminBalanceLabel = `🟢 राइडर को ₹${formatINR(netBalance)} देना बाकी है`;
-    riderBalanceLabel = `🟢 आपको हब से ₹${formatINR(netBalance)} लेना है`;
+    adminBalanceLabel = `🟢 राइडर को ${formatINR(netBalance)} देना बाकी है`;
+    riderBalanceLabel = `🟢 आपको हब से ${formatINR(netBalance)} लेना है`;
   } else {
     // CASE 3: Zero Balance / Cleared Account
     balanceStatus = 'settled';

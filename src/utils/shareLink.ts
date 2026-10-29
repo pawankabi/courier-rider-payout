@@ -58,6 +58,7 @@ export const RIDER_LOCAL_FALLBACK_URL = `/downloads/${RIDER_APK_FILENAME}`;
 
 export const ADMIN_GITHUB_RELEASE_URL = `https://github.com/${DEFAULT_GITHUB_REPO}/releases/latest/download/${ADMIN_APK_FILENAME}`;
 export const ADMIN_LOCAL_FALLBACK_URL = `/downloads/${ADMIN_APK_FILENAME}`;
+export const ADMIN_VERCEL_DOWNLOAD_URL = `${PRODUCTION_DOMAIN}/download-admin`;
 
 export const getRiderGithubReleaseUrl = (repo: string = DEFAULT_GITHUB_REPO): string => {
   const targetRepo = (import.meta.env.VITE_GITHUB_REPO || repo || DEFAULT_GITHUB_REPO).trim();

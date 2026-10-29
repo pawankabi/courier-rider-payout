@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { PublicRiderStatement, RiderAdvanceEntry } from '../types';
 import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
-import { fetchPublicRiderStatement } from '../services/firestoreSync';
+import { fetchPublicRiderStatement, subscribeToPublicRiderStatement } from '../services/firestoreSync';
 import { generateStatementUrl } from '../services/smsService';
 import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
 import { calculatePureRiderLedger, UnifiedTransactionItem } from '../utils/pureLedgerEngine';
@@ -235,32 +235,48 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     };
   }, [onBackToApp]);
 
-  // Fetch statement data from Firestore only if initialStatement is NOT provided
+  // Real-time Firestore sync & listener: guarantees instant live parity between Admin & Rider phones
   useEffect(() => {
     let isMounted = true;
-    if (resolvedRiderId && !initialStatement) {
-      setLoading(true);
-      fetchPublicRiderStatement(resolvedRiderId)
-        .then((data) => {
-          if (isMounted) {
-            if (data) {
-              setStatement(data);
-            }
-            setLoading(false);
-          }
-        })
-        .catch((err) => {
-          console.error('Failed to load statement from Firestore:', err);
-          if (isMounted) setLoading(false);
-        });
-    } else if (initialStatement) {
-      setStatement(initialStatement);
+    if (!resolvedRiderId) {
       setLoading(false);
-    } else {
-      setLoading(false);
+      return;
     }
+
+    if (!statement && !initialStatement) {
+      setLoading(true);
+    }
+
+    // Subscribe to real-time updates from Firestore
+    const unsubscribe = subscribeToPublicRiderStatement(
+      resolvedRiderId,
+      (data) => {
+        if (!isMounted) return;
+        if (data) {
+          setStatement((prev) => {
+            // Keep local salaries if incoming document has fewer records
+            if (
+              prev?.salaries && 
+              Array.isArray(prev.salaries) && 
+              prev.salaries.length > 0 && 
+              (!data.salaries || data.salaries.length < prev.salaries.length)
+            ) {
+              return { ...data, salaries: prev.salaries };
+            }
+            return data;
+          });
+        }
+        setLoading(false);
+      },
+      (err) => {
+        console.warn('Real-time listener warning (using fallback cache):', err);
+        if (isMounted) setLoading(false);
+      }
+    );
+
     return () => {
       isMounted = false;
+      unsubscribe();
     };
   }, [resolvedRiderId, initialStatement]);
 
@@ -294,11 +310,12 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     }
     if (typeof window !== 'undefined') {
       try {
-        return loadSettlementsFromStorage();
+        const stored = loadSettlementsFromStorage();
+        if (stored && stored.length > 0) return stored;
       } catch {}
     }
-    return [];
-  }, [propSettlements]);
+    return statement?.salaries || [];
+  }, [propSettlements, statement?.salaries]);
 
   // Gather effective master advances across sources
   const effectiveAdvances = useMemo(() => {

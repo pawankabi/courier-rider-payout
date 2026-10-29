@@ -424,36 +424,57 @@ export const RidersTab: React.FC<Props> = ({
   // Khatabook-style Phonebook Contact Picker
   const handlePickContact = async () => {
     try {
-      if ('contacts' in navigator && 'ContactsManager' in window) {
+      setPhoneError('');
+      const nav = navigator as any;
+
+      // 1. Check if W3C Contacts Picker API is available
+      if (nav?.contacts && typeof nav.contacts.select === 'function') {
         const props = ['name', 'tel'];
-        const contacts = await (navigator as any).contacts.select(props, { multiple: false });
+        const contacts = await nav.contacts.select(props, { multiple: false });
         if (contacts && contacts.length > 0) {
           const selected = contacts[0];
-          const contactName = selected.name?.[0] || '';
-          const rawPhone = selected.tel?.[0] || '';
-          const clean = rawPhone.replace(/[^0-9]/g, '').slice(-10);
+          const contactName = Array.isArray(selected.name) ? selected.name[0] : (selected.name || '');
+          const rawPhone = Array.isArray(selected.tel) ? selected.tel[0] : (selected.tel || '');
+          const clean = String(rawPhone).replace(/\D/g, '').slice(-10);
 
           if (contactName) {
-            setName(contactName);
+            setName(String(contactName).trim());
           }
-          if (clean) {
+          if (clean && clean.length === 10) {
             setPhone(clean);
-            if (phoneError) setPhoneError('');
           }
+          return;
         }
-      } else {
-        setPhoneError('फ़ोनबुक पिकर आपके इस डिवाइस में सीधे उपलब्ध नहीं है या अनुमति बंद है।');
       }
-    } catch (err) {
+
+      // 2. Reliable Direct Fallback for devices/browsers where Contact Picker API is unavailable:
+      // Prompt user to paste or enter rider name and phone directly
+      const pasted = window.prompt(
+        'फ़ोनबुक पिकर इस ब्राउज़र में सीधे समर्थित नहीं है। कृपया राइडर का नाम और 10-अंकों का नंबर दर्ज या पेस्ट करें:'
+      );
+      if (pasted && pasted.trim()) {
+        const text = pasted.trim();
+        const digits = text.replace(/\D/g, '');
+        const phoneMatch = digits.length >= 10 ? digits.slice(-10) : '';
+        const namePart = text.replace(/[0-9+\-()\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (namePart) setName(namePart);
+        if (phoneMatch) {
+          setPhone(phoneMatch);
+        }
+      }
+    } catch (err: any) {
       console.log('Contact pick cancelled or error:', err);
+      if (err?.name !== 'AbortError') {
+        setPhoneError('फ़ोनबुक संपर्क चुनने में असमर्थ। कृपया नाम और 10-अंकों का नंबर सीधे टाइप करें।');
+      }
     }
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // 1. Freemium Gate: Free users can add up to 3 riders locally
-    if (!isProUser && riders.length >= 3) {
+    // 1. Freemium Gate: Free users can add up to 3 riders for testing
+    if (!isProUser && !isSuperAdmin && riders.length >= 3) {
       setIsAddModalOpen(false);
       onOpenSubscriptionModal?.('free_limit_reached');
       return;
@@ -1431,7 +1452,14 @@ export const RidersTab: React.FC<Props> = ({
             const rawActiveIncentive = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
             const activeAdvanceBalance = Math.max(0, rawActiveAdvance - rawActiveIncentive);
             const activeIncentiveBalance = Math.max(0, rawActiveIncentive - rawActiveAdvance);
-            const liveUnpaidPayout = (stats.unpaidAmount + activeIncentiveBalance) - activeAdvanceBalance;
+
+            // Unrecovered Settlement Deficits (e.g. Lakhindar -₹2,635, Shambhu -₹211 where advance deduction exceeded gross payout)
+            const riderSettlementDeficit = (settlements || [])
+              .filter((s) => s.riderId === rider.id && (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
+              .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
+
+            const totalOutstandingAdvance = activeAdvanceBalance + riderSettlementDeficit;
+            const liveUnpaidPayout = (stats.unpaidAmount + activeIncentiveBalance) - totalOutstandingAdvance;
 
             return (
               <div
@@ -1545,14 +1573,25 @@ export const RidersTab: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    {/* Advance Balance Badge - Net Active Outstanding Advance */}
+                    {/* Advance Balance Badge - Net Active Outstanding Advance & Deficits */}
                     <div className="text-right">
-                      <div className={`text-xs ${activeAdvanceBalance > 0 ? 'text-rose-400 font-semibold' : 'text-slate-500'}`}>
-                        {activeAdvanceBalance > 0 ? 'बकाया एडवांस' : 'एडवांस'}
+                      <div className={`text-xs ${totalOutstandingAdvance > 0 ? 'text-rose-400 font-semibold' : 'text-slate-500'}`}>
+                        {totalOutstandingAdvance > 0 
+                          ? (riderSettlementDeficit > 0 && activeAdvanceBalance > 0 
+                              ? 'कुल बकाया (एडवांस+घाटा)' 
+                              : riderSettlementDeficit > 0 
+                              ? 'पुराना बकाया (घाटा)' 
+                              : 'बकाया एडवांस') 
+                          : 'एडवांस'}
                       </div>
-                      <div className={`text-sm font-bold font-mono ${activeAdvanceBalance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
-                        {activeAdvanceBalance > 0 ? formatINR(activeAdvanceBalance) : '₹0'}
+                      <div className={`text-sm font-bold font-mono ${totalOutstandingAdvance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                        {totalOutstandingAdvance > 0 ? formatINR(totalOutstandingAdvance) : '₹0'}
                       </div>
+                      {riderSettlementDeficit > 0 && activeAdvanceBalance > 0 && (
+                        <div className="text-[10px] text-rose-300/80 font-mono">
+                          {formatINR(activeAdvanceBalance)} + {formatINR(riderSettlementDeficit)} बकाया
+                        </div>
+                      )}
                     </div>
 
                     {/* Incentive Total Badge - Surplus Incentive Only */}

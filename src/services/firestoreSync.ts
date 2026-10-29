@@ -2280,25 +2280,71 @@ export async function syncPublicRiderStatement(
     const rawAdvances = advances.length > 0 ? advances : (rider.advances || []);
     const cleanAdvances = purgePhantomAdvances(rawAdvances);
 
-    // Filter and sort settlements for this rider
-    const riderSettlements = settlements
-      .filter((s) => s.riderId === rider.id)
-      .sort((a, b) => new Date(b.paidAt || b.startDate).getTime() - new Date(a.paidAt || a.startDate).getTime())
-      .map((s) => ({
-        id: s.id,
-        startDate: s.startDate,
-        endDate: s.endDate,
-        totalParcels: s.totalParcels,
-        baseAmount: s.baseAmount,
-        incentiveAmount: s.incentiveAmount,
-        grossTotal: s.grossTotal,
-        advanceAmount: s.advanceAmount || 0,
-        advanceDate: s.advanceDate,
-        advanceReason: s.advanceReason,
-        netTotal: s.netTotal,
-        paidAt: s.paidAt,
-        status: s.status || 'PAID',
-      }));
+    // If settlements parameter is not passed or empty, NEVER wipe out authentic settlements!
+    let riderSettlements: any[] = [];
+    if (settlements && settlements.length > 0) {
+      riderSettlements = settlements
+        .filter((s) => s.riderId === rider.id || (rider.phone && (s as any).riderPhone === rider.phone))
+        .sort((a, b) => new Date(b.paidAt || b.startDate).getTime() - new Date(a.paidAt || a.startDate).getTime())
+        .map((s) => ({
+          id: s.id,
+          startDate: s.startDate,
+          endDate: s.endDate,
+          totalParcels: Number(s.totalParcels) || 0,
+          baseAmount: Number(s.baseAmount) || 0,
+          incentiveAmount: Number(s.incentiveAmount) || 0,
+          grossTotal: Number(s.grossTotal) || 0,
+          advanceAmount: Number(s.advanceAmount) || 0,
+          advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
+          advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
+          netTotal: Number(s.netTotal) || 0,
+          paidAt: s.paidAt || s.endDate,
+          status: s.status || 'PAID',
+        }));
+    } else {
+      // Retain existing settlements from public_statements document if available
+      try {
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const oldData = snap.data() as PublicRiderStatement;
+          if (Array.isArray(oldData.salaries) && oldData.salaries.length > 0) {
+            riderSettlements = oldData.salaries;
+          }
+        }
+      } catch (e) {
+        console.warn('Could not read existing salaries from doc:', e);
+      }
+
+      // If still empty, query collectionGroup('settlements') to find all authentic settlements for this rider
+      if (riderSettlements.length === 0) {
+        try {
+          const qSettle = query(collectionGroup(db, 'settlements'), where('riderId', '==', rider.id));
+          const snapSettle = await getDocs(qSettle);
+          if (!snapSettle.empty) {
+            riderSettlements = snapSettle.docs.map((d) => {
+              const s = d.data() as SettlementRecord;
+              return {
+                id: s.id,
+                startDate: s.startDate,
+                endDate: s.endDate,
+                totalParcels: Number(s.totalParcels) || 0,
+                baseAmount: Number(s.baseAmount) || 0,
+                incentiveAmount: Number(s.incentiveAmount) || 0,
+                grossTotal: Number(s.grossTotal) || 0,
+                advanceAmount: Number(s.advanceAmount) || 0,
+                advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
+                advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
+                netTotal: Number(s.netTotal) || 0,
+                paidAt: s.paidAt || s.endDate,
+                status: s.status || 'PAID',
+              };
+            });
+          }
+        } catch (e) {
+          console.warn('collectionGroup settlements lookup notice:', e);
+        }
+      }
+    }
 
     // Dynamically pull authentic advances directly from settlements into advances
     riderSettlements.forEach((s) => {
@@ -2381,6 +2427,52 @@ export async function syncPublicRiderStatement(
 }
 
 /**
+ * Real-time listener for public rider statement document (/public_statements/{riderId}).
+ * Provides instant real-time parity between Admin and Rider views.
+ * When document updates on Admin phone, Rider phone updates in real time (< 500ms).
+ */
+export function subscribeToPublicRiderStatement(
+  riderId: string,
+  onUpdate: (statement: PublicRiderStatement | null) => void,
+  onError?: (error: Error) => void
+): () => void {
+  if (!riderId) {
+    onUpdate(null);
+    return () => {};
+  }
+
+  const cleanId = riderId.trim();
+  const docRef = doc(db, 'public_statements', cleanId);
+
+  // Perform immediate fetch / self-healing in parallel
+  fetchPublicRiderStatement(cleanId)
+    .then((initialData) => {
+      if (initialData) onUpdate(initialData);
+    })
+    .catch(() => {});
+
+  // Listen to Firestore real-time snapshot
+  const unsubscribe = onSnapshot(
+    docRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data() as PublicRiderStatement;
+        if (Array.isArray(data.advances)) {
+          data.advances = purgePhantomAdvances(data.advances);
+        }
+        onUpdate(data);
+      }
+    },
+    (err) => {
+      console.warn('Real-time statement subscription notice:', err);
+      if (onError) onError(err);
+    }
+  );
+
+  return unsubscribe;
+}
+
+/**
  * Fetch public read-only statement by riderId from Firestore (/public_statements/{riderId})
  * Callable without authentication.
  * Fetches rider profile, advances, delivery entries, and settlements.
@@ -2411,16 +2503,52 @@ export async function fetchPublicRiderStatement(
       console.warn('public_statements direct lookup notice:', e);
     }
 
-    // If existing statement has detailed advances or deliveries/salaries, return it
-    if (existingStatement && (
-      (existingStatement.advances && existingStatement.advances.length > 0) ||
-      (existingStatement.salaries && existingStatement.salaries.length > 0) ||
-      (existingStatement.recentDeliveries && existingStatement.recentDeliveries.length > 0)
-    )) {
+    // If existing statement exists, ensure its salaries and advances are complete
+    if (existingStatement) {
       if (Array.isArray(existingStatement.advances)) {
         existingStatement.advances = purgePhantomAdvances(existingStatement.advances);
       }
-      return existingStatement;
+
+      // Check if salaries are missing or empty in this existingStatement
+      if (!Array.isArray(existingStatement.salaries) || existingStatement.salaries.length === 0) {
+        try {
+          const qSettle = query(collectionGroup(db, 'settlements'), where('riderId', 'in', [cleanId, decodedId]));
+          const snapSettle = await getDocs(qSettle);
+          if (!snapSettle.empty) {
+            existingStatement.salaries = snapSettle.docs.map((d) => {
+              const s = d.data() as SettlementRecord;
+              return {
+                id: s.id,
+                startDate: s.startDate,
+                endDate: s.endDate,
+                totalParcels: Number(s.totalParcels) || 0,
+                baseAmount: Number(s.baseAmount) || 0,
+                incentiveAmount: Number(s.incentiveAmount) || 0,
+                grossTotal: Number(s.grossTotal) || 0,
+                advanceAmount: Number(s.advanceAmount) || 0,
+                advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
+                advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
+                netTotal: Number(s.netTotal) || 0,
+                paidAt: s.paidAt || s.endDate,
+                status: s.status || 'PAID',
+              };
+            });
+            // Background save back to document so it stays locked & permanent
+            setDoc(doc(db, 'public_statements', cleanId), { salaries: existingStatement.salaries }, { merge: true }).catch(() => {});
+          }
+        } catch (e) {
+          console.warn('Background settlements replenishment notice:', e);
+        }
+      }
+
+      // If existing statement has detailed advances or deliveries/salaries, return it
+      if (
+        (existingStatement.advances && existingStatement.advances.length > 0) ||
+        (existingStatement.salaries && existingStatement.salaries.length > 0) ||
+        (existingStatement.recentDeliveries && existingStatement.recentDeliveries.length > 0)
+      ) {
+        return existingStatement;
+      }
     }
 
     // 2. Fetch rider profile document (direct /riders, collection query, or collectionGroup)

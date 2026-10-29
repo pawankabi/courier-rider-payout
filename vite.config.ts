@@ -184,6 +184,25 @@ function smsDispatchProxyPlugin() {
   };
 }
 
+function directApkDownloadPlugin() {
+  return {
+    name: 'direct-apk-download-plugin',
+    configureServer(server: any) {
+      server.middlewares.use((req: any, res: any, next: any) => {
+        const url = req.url?.split('?')[0];
+        if (url === '/download-admin' || url === '/download/admin') {
+          const githubUrl = 'https://github.com/pawankabi/courier-rider-payout/releases/latest/download/Admin-Payout-Release.apk';
+          res.statusCode = 302;
+          res.setHeader('Location', githubUrl);
+          res.end();
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig(({ command, mode }) => {
   const isDev = command === 'serve';
   const appTarget = process.env.VITE_APP_TARGET || (mode === 'companion' ? 'cod_companion' : 'admin');
@@ -197,6 +216,7 @@ export default defineConfig(({ command, mode }) => {
       safeTailwindcss(),
       oldAppSyncProxyPlugin(),
       smsDispatchProxyPlugin(),
+      directApkDownloadPlugin(),
       !isDev && VitePWA({
         disable: false,
         registerType: 'autoUpdate',

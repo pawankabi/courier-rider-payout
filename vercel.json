@@ -21,6 +21,11 @@
       "permanent": false
     },
     {
+      "source": "/download-admin",
+      "destination": "https://github.com/pawankabi/courier-rider-payout/releases/latest/download/Admin-Payout-Release.apk",
+      "permanent": false
+    },
+    {
       "source": "/download/app",
       "destination": "https://github.com/pawankabi/courier-rider-payout/releases/latest/download/COD-Entry-Rider-Release.apk",
       "permanent": false

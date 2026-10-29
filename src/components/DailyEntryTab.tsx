@@ -375,17 +375,17 @@ export const DailyEntryTab: React.FC<Props> = ({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                Daily Delivery Entry
+                दैनिक डिलीवरी एंट्री
               </h2>
               <p className="text-xs text-slate-300">
-                Log rider deliveries with automatic ₹{activeBaseRate} base {showIncentiveControl && hasIncentive ? `& ₹${activeIncentiveRate} incentive` : ''} payout computation
+                राइडर डिलीवरी दर्ज करें • हब रेट कार्ड अनुसार स्वचालित पे-आउट गणना
               </p>
             </div>
           </div>
 
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/80 border border-emerald-500/30 text-xs font-medium text-emerald-200">
             <Coins className="w-3.5 h-3.5 text-amber-400" />
-            <span>Base: ₹{activeBaseRate}{showIncentiveControl ? ` | Incentive: ₹${activeIncentiveRate}` : ''}</span>
+            <span>दर: ₹{activeBaseRate}{showIncentiveControl && activeIncentiveRate > 0 ? ` + ₹${activeIncentiveRate} इंसेंटिव` : ''}</span>
           </div>
         </div>
 
