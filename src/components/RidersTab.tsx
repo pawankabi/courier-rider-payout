@@ -1453,12 +1453,19 @@ export const RidersTab: React.FC<Props> = ({
             const activeAdvanceBalance = Math.max(0, rawActiveAdvance - rawActiveIncentive);
             const activeIncentiveBalance = Math.max(0, rawActiveIncentive - rawActiveAdvance);
 
-            // Unrecovered Settlement Deficits (e.g. Lakhindar -₹2,635, Shambhu -₹211 where advance deduction exceeded gross payout)
-            const riderSettlementDeficit = (settlements || [])
-              .filter((s) => s.riderId === rider.id && (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
-              .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
+            // If the deficit is already captured in advances (via adv_deficit_* or deficit reason), do not double-count!
+            const deficitAlreadyInAdvances = (rider.advances || []).some(
+              (a) => !a.isSettled && (a as any).status !== 'PAID' && (a.id?.startsWith('adv_deficit_') || a.id?.includes('rem') || a.reason?.includes('सेटलमेंट घाटा') || a.reason?.includes('settlement deficit'))
+            );
 
-            const totalOutstandingAdvance = activeAdvanceBalance + riderSettlementDeficit;
+            // Unrecovered Settlement Deficits that are NOT yet captured in rider.advances
+            const unabsorbedSettlementDeficit = deficitAlreadyInAdvances
+              ? 0
+              : (settlements || [])
+                  .filter((s) => s.riderId === rider.id && (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
+                  .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
+
+            const totalOutstandingAdvance = activeAdvanceBalance + unabsorbedSettlementDeficit;
             const liveUnpaidPayout = (stats.unpaidAmount + activeIncentiveBalance) - totalOutstandingAdvance;
 
             return (
@@ -1577,9 +1584,9 @@ export const RidersTab: React.FC<Props> = ({
                     <div className="text-right">
                       <div className={`text-xs ${totalOutstandingAdvance > 0 ? 'text-rose-400 font-semibold' : 'text-slate-500'}`}>
                         {totalOutstandingAdvance > 0 
-                          ? (riderSettlementDeficit > 0 && activeAdvanceBalance > 0 
+                          ? (unabsorbedSettlementDeficit > 0 && activeAdvanceBalance > 0 
                               ? 'कुल बकाया (एडवांस+घाटा)' 
-                              : riderSettlementDeficit > 0 
+                              : unabsorbedSettlementDeficit > 0 
                               ? 'पुराना बकाया (घाटा)' 
                               : 'बकाया एडवांस') 
                           : 'एडवांस'}
@@ -1587,9 +1594,9 @@ export const RidersTab: React.FC<Props> = ({
                       <div className={`text-sm font-bold font-mono ${totalOutstandingAdvance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
                         {totalOutstandingAdvance > 0 ? formatINR(totalOutstandingAdvance) : '₹0'}
                       </div>
-                      {riderSettlementDeficit > 0 && activeAdvanceBalance > 0 && (
+                      {unabsorbedSettlementDeficit > 0 && activeAdvanceBalance > 0 && (
                         <div className="text-[10px] text-rose-300/80 font-mono">
-                          {formatINR(activeAdvanceBalance)} + {formatINR(riderSettlementDeficit)} बकाया
+                          {formatINR(activeAdvanceBalance)} + {formatINR(unabsorbedSettlementDeficit)} बकाया
                         </div>
                       )}
                     </div>

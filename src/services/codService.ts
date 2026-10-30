@@ -1602,8 +1602,14 @@ export function subscribeToDailyCodSheet(
   const effectiveHubId = hubId.trim();
   const localCacheKey = `cp_cod_sheet_${effectiveHubId}_${targetDate}`;
 
-  // Helper to ensure empty entries list is populated with active riders
+  // Helper to ensure empty entries list is populated with active riders (UNLOCKED sheets only)
   const enrichWithActiveRiders = async (baseData: DailyCodSheetData) => {
+    // If the sheet is already locked, it is an immutable historical snapshot. Never alter or inject riders!
+    if (baseData.isLocked) {
+      onUpdate({ ...baseData, hubId: effectiveHubId });
+      return;
+    }
+
     if (!baseData.entries || baseData.entries.length === 0) {
       const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
       if (activeRiders.length > 0) {
@@ -1615,7 +1621,6 @@ export function subscribeToDailyCodSheet(
         };
         try {
           localStorage.setItem(localCacheKey, JSON.stringify(enriched));
-          localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(enriched));
         } catch {}
         onUpdate(enriched);
         return;
@@ -1672,40 +1677,46 @@ export function subscribeToDailyCodSheet(
           const company1Name = raw.company1Name || DEFAULT_COMPANY_1;
           const company2Name = raw.company2Name || DEFAULT_COMPANY_2;
 
-          const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
-          const activeRiderIds = new Set(activeRiders.map((r) => r.id));
-          const activeRiderPhones = new Set(
-            activeRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
-          );
+          const isSheetLocked = Boolean(raw.isLocked);
+          let finalEntries = existingEntries;
 
-          // Strictly filter out any riders from other hubs that might have been in the doc
-          const scopedEntries = existingEntries.filter((e) => {
-            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-            return activeRiderIds.has(e.riderId) || (cleanPhone && activeRiderPhones.has(cleanPhone));
-          });
-
-          let finalEntries = scopedEntries;
-
-          if (finalEntries.length === 0) {
-            if (activeRiders.length > 0) {
-              finalEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
-            }
-          } else {
-            const existingRiderIds = new Set(finalEntries.map((e) => e.riderId));
-            const existingPhones = new Set(
-              finalEntries
-                .map((e) => (e.riderPhone || '').replace(/\D/g, '').slice(-10))
-                .filter(Boolean)
+          // If the sheet is locked, NEVER alter or re-enrich entries. Keep the exact locked snapshot!
+          if (!isSheetLocked) {
+            const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
+            const activeRiderIds = new Set(activeRiders.map((r) => r.id));
+            const activeRiderPhones = new Set(
+              activeRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
             );
 
-            const missingRiders = activeRiders.filter((r) => {
-              const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
-              return !existingRiderIds.has(r.id) && (!cleanPhone || !existingPhones.has(cleanPhone));
+            // Strictly filter out any riders from other hubs that might have been in the doc
+            const scopedEntries = existingEntries.filter((e) => {
+              const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+              return activeRiderIds.has(e.riderId) || (cleanPhone && activeRiderPhones.has(cleanPhone));
             });
 
-            if (missingRiders.length > 0) {
-              const missingEntries = buildDefaultCodEntriesForRiders(targetDate, missingRiders);
-              finalEntries = [...finalEntries, ...missingEntries];
+            if (scopedEntries.length === 0) {
+              if (activeRiders.length > 0) {
+                finalEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
+              }
+            } else {
+              const existingRiderIds = new Set(scopedEntries.map((e) => e.riderId));
+              const existingPhones = new Set(
+                scopedEntries
+                  .map((e) => (e.riderPhone || '').replace(/\D/g, '').slice(-10))
+                  .filter(Boolean)
+              );
+
+              const missingRiders = activeRiders.filter((r) => {
+                const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
+                return !existingRiderIds.has(r.id) && (!cleanPhone || !existingPhones.has(cleanPhone));
+              });
+
+              if (missingRiders.length > 0) {
+                const missingEntries = buildDefaultCodEntriesForRiders(targetDate, missingRiders);
+                finalEntries = [...scopedEntries, ...missingEntries];
+              } else {
+                finalEntries = scopedEntries;
+              }
             }
           }
 

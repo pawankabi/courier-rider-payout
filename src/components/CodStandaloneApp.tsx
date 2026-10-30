@@ -593,6 +593,80 @@ export const CodStandaloneApp: React.FC<Props> = ({
     );
   };
 
+  // 2a. Bulk Toggle Verification for All Riders in Column (Company 1, Company 2, Cash, Online)
+  const handleToggleAllVerify = async (field: 'company1' | 'company2' | 'cash' | 'online') => {
+    const fieldLabel =
+      field === 'company1'
+        ? settings.company1Name
+        : field === 'company2'
+        ? settings.company2Name
+        : field === 'cash'
+        ? 'Cash Deposit'
+        : 'Online Deposit';
+
+    if (!checkFieldVerificationPermission(field)) {
+      showToast(`⚠️ Permission Denied: You cannot verify ${fieldLabel}. Contact Hub Incharge.`, 'error');
+      return;
+    }
+
+    if (isHistoricalDate && !ownerTemporaryUnlock && !isOwnerOrMasterAdmin) {
+      showToast('Past dates are locked in read-only mode.', 'error');
+      return;
+    }
+
+    if (filteredRows.length === 0) {
+      showToast('⚠️ No rider rows found for this date.', 'info');
+      return;
+    }
+
+    const verifiedProp = `${field}Verified` as keyof CodDailyEntry;
+    const verifiedByProp = `${field}VerifiedBy` as keyof CodDailyEntry;
+    const verifiedAtProp = `${field}VerifiedAt` as keyof CodDailyEntry;
+
+    // Check if all filtered rows are currently verified
+    const allCurrentlyVerified = filteredRows.every((r) => Boolean(r[verifiedProp]));
+    const nextVal = !allCurrentlyVerified;
+    const nowIso = new Date().toISOString();
+
+    const targetRiderIds = new Set(filteredRows.map((r) => r.riderId));
+
+    const updatedEntries = gridEntries.map((row) => {
+      if (!targetRiderIds.has(row.riderId)) return row;
+      return {
+        ...row,
+        [verifiedProp]: nextVal,
+        [verifiedByProp]: nextVal ? activeUser.name : undefined,
+        [verifiedAtProp]: nextVal ? nowIso : undefined,
+        updatedAt: nowIso,
+        updatedBy: activeUser.name,
+      };
+    });
+
+    setGridEntries(updatedEntries);
+    await saveCodDailyEntries(userId, selectedDate, updatedEntries);
+
+    recordCodAuditLog(userId, {
+      changedBy: activeUser.name,
+      role: activeUser.role,
+      riderId: 'all',
+      riderName: `All ${filteredRows.length} Riders`,
+      date: selectedDate,
+      field: `Bulk ${field.toUpperCase()} Verification`,
+      previousValue: allCurrentlyVerified ? 'All Verified ✓' : 'Partially Verified',
+      newValue: nextVal ? 'All Verified ✓' : 'All Unverified',
+      notes: `All riders ${field.toUpperCase()} marked as ${nextVal ? 'VERIFIED' : 'UNVERIFIED'} by ${activeUser.name}`,
+    }).then(() => {
+      loadCodAuditLogs(userId).then(setAuditLogs);
+    });
+
+    showToast(
+      nextVal
+        ? `✅ सभी ${filteredRows.length} राइडर्स के ${fieldLabel} पर (✓) लगा दिया गया!`
+        : `सभी ${filteredRows.length} राइडर्स के ${fieldLabel} से (✓) हटा दिया गया।`,
+      'success'
+    );
+  };
+
   // 2b. Toggle Cash Lock Override (Admin & Staff Manual Override)
   const handleToggleCashLock = async (riderId: string) => {
     if (!checkFieldVerificationPermission('cash')) {
@@ -2489,19 +2563,91 @@ export const CodStandaloneApp: React.FC<Props> = ({
                       TOTAL SUMMARY ({filteredRows.length} Riders)
                     </td>
                     <td className="p-3 text-sky-300 font-mono">
-                      {formatINR(gridTotals.c1)}
+                      <div className="font-bold text-xs">{formatINR(gridTotals.c1)}</div>
+                      {filteredRows.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAllVerify('company1')}
+                          className={`mt-1.5 w-full inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded-lg text-[10px] font-bold border transition active:scale-95 cursor-pointer ${
+                            filteredRows.every((r) => r.company1Verified)
+                              ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/35'
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-emerald-400 hover:border-emerald-500/40'
+                          }`}
+                          title={`इस कॉलम के सभी (${filteredRows.length}) राइडर्स के ${settings.company1Name} पर एक साथ (✓) लगाएं या हटाएं`}
+                        >
+                          <Check className="w-3 h-3 shrink-0" />
+                          <span>सभी {filteredRows.every((r) => r.company1Verified) ? 'हटाएं' : '✓'}</span>
+                          <span className="text-[9px] opacity-75">
+                            ({filteredRows.filter((r) => r.company1Verified).length}/{filteredRows.length})
+                          </span>
+                        </button>
+                      )}
                     </td>
                     <td className="p-3 text-amber-300 font-mono">
-                      {formatINR(gridTotals.c2)}
+                      <div className="font-bold text-xs">{formatINR(gridTotals.c2)}</div>
+                      {filteredRows.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAllVerify('company2')}
+                          className={`mt-1.5 w-full inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded-lg text-[10px] font-bold border transition active:scale-95 cursor-pointer ${
+                            filteredRows.every((r) => r.company2Verified)
+                              ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/35'
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-emerald-400 hover:border-emerald-500/40'
+                          }`}
+                          title={`इस कॉलम के सभी (${filteredRows.length}) राइडर्स के ${settings.company2Name} पर एक साथ (✓) लगाएं या हटाएं`}
+                        >
+                          <Check className="w-3 h-3 shrink-0" />
+                          <span>सभी {filteredRows.every((r) => r.company2Verified) ? 'हटाएं' : '✓'}</span>
+                          <span className="text-[9px] opacity-75">
+                            ({filteredRows.filter((r) => r.company2Verified).length}/{filteredRows.length})
+                          </span>
+                        </button>
+                      )}
                     </td>
                     <td className="p-3 text-emerald-300 bg-slate-850 font-mono text-sm">
                       {formatINR(gridTotals.totalCod)}
                     </td>
                     <td className="p-3 text-emerald-400 font-mono">
-                      {formatINR(gridTotals.cash)}
+                      <div className="font-bold text-xs">{formatINR(gridTotals.cash)}</div>
+                      {filteredRows.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAllVerify('cash')}
+                          className={`mt-1.5 w-full inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded-lg text-[10px] font-bold border transition active:scale-95 cursor-pointer ${
+                            filteredRows.every((r) => r.cashVerified)
+                              ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/35'
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-emerald-400 hover:border-emerald-500/40'
+                          }`}
+                          title="इस कॉलम के सभी राइडर्स के Cash Deposit पर एक साथ (✓) लगाएं या हटाएं"
+                        >
+                          <Check className="w-3 h-3 shrink-0" />
+                          <span>सभी {filteredRows.every((r) => r.cashVerified) ? 'हटाएं' : '✓'}</span>
+                          <span className="text-[9px] opacity-75">
+                            ({filteredRows.filter((r) => r.cashVerified).length}/{filteredRows.length})
+                          </span>
+                        </button>
+                      )}
                     </td>
                     <td className="p-3 text-purple-400 font-mono">
-                      {formatINR(gridTotals.online)}
+                      <div className="font-bold text-xs">{formatINR(gridTotals.online)}</div>
+                      {filteredRows.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAllVerify('online')}
+                          className={`mt-1.5 w-full inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded-lg text-[10px] font-bold border transition active:scale-95 cursor-pointer ${
+                            filteredRows.every((r) => r.onlineVerified)
+                              ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/35'
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-emerald-400 hover:border-emerald-500/40'
+                          }`}
+                          title="इस कॉलम के सभी राइडर्स के Online Deposit पर एक साथ (✓) लगाएं या हटाएं"
+                        >
+                          <Check className="w-3 h-3 shrink-0" />
+                          <span>सभी {filteredRows.every((r) => r.onlineVerified) ? 'हटाएं' : '✓'}</span>
+                          <span className="text-[9px] opacity-75">
+                            ({filteredRows.filter((r) => r.onlineVerified).length}/{filteredRows.length})
+                          </span>
+                        </button>
+                      )}
                     </td>
                     <td className="p-3 text-indigo-300 bg-slate-850 font-mono text-sm">
                       {formatINR(gridTotals.totalDeposit)}

@@ -2393,25 +2393,7 @@ function MainCourierApp() {
   }
 
   // DEVICE SECURITY / BIOMETRIC APP LOCK GATE:
-  // Strictly native Android APK only. Never rendered on web browsers.
-  if (isAppLocked && isNativeAndroid()) {
-    return (
-      <AppLockScreen
-        currentUserEmail={currentUser?.email || undefined}
-        onUnlock={() => {
-          recordAppUnlock();
-          setIsAppLocked(false);
-        }}
-        onSignOut={() => {
-          try {
-            sessionStorage.removeItem('cp_unlocked_this_session');
-          } catch {}
-          setIsAppLocked(false);
-          auth.signOut();
-        }}
-      />
-    );
-  }
+  // Handled as a fixed modal overlay inside main returns so unlocking never unmounts active views or resets dates/forms.
 
   // ENFORCE HARD PAYWALL GATE IN App.tsx (DO NOT ALLOW ACCESS TO DASHBOARD IF EXPIRED OR PENDING):
   // IF USER IS NOT SUPER ADMIN AND (isPendingApproval OR isExpired):
@@ -2481,14 +2463,50 @@ function MainCourierApp() {
   // In-App Rider Entry Sub-App View: साथी ऐप (CodCompanionApp) with back button
   if (isCodCompanionOpen && isCodAccessEnabled) {
     return (
-      <CodCompanionApp
-        onBackToMainApp={() => setIsCodCompanionOpen(false)}
-      />
+      <>
+        <CodCompanionApp
+          onBackToMainApp={() => setIsCodCompanionOpen(false)}
+        />
+        {isAppLocked && isNativeAndroid() && (
+          <AppLockScreen
+            currentUserEmail={currentUser?.email || undefined}
+            onUnlock={() => {
+              recordAppUnlock();
+              setIsAppLocked(false);
+            }}
+            onSignOut={() => {
+              try {
+                sessionStorage.removeItem('cp_unlocked_this_session');
+              } catch {}
+              setIsAppLocked(false);
+              auth.signOut();
+            }}
+          />
+        )}
+      </>
     );
   }
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans w-full overflow-x-hidden">
+      {/* 0-SECOND & TIMEOUT DEVICE SECURITY / BIOMETRIC APP LOCK OVERLAY */}
+      {/* Kept mounted as an overlay so unlocking NEVER unmounts the app tree, forms, modals, or dates */}
+      {isAppLocked && isNativeAndroid() && (
+        <AppLockScreen
+          currentUserEmail={currentUser?.email || undefined}
+          onUnlock={() => {
+            recordAppUnlock();
+            setIsAppLocked(false);
+          }}
+          onSignOut={() => {
+            try {
+              sessionStorage.removeItem('cp_unlocked_this_session');
+            } catch {}
+            setIsAppLocked(false);
+            auth.signOut();
+          }}
+        />
+      )}
       {/* Admin Inspection Banner */}
       {inspectedUser && (
         <div 
@@ -2971,6 +2989,7 @@ function MainCourierApp() {
               <AdvancesTab
                 key={`advances-tab-${restoreRefreshKey}`}
                 riders={dashboardRiders}
+                settlements={dashboardSettlements}
                 onSaveAdvance={handleSaveRiderAdvance}
                 onDeleteAdvance={handleDeleteRiderAdvance}
                 onViewLedger={handleViewLedger}

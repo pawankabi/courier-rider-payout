@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Rider, RiderAdvanceEntry, SettlementRecord, DeliveryEntry } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
+import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
 import { 
   generateStatementUrl, 
   formatAdvanceSmsText, 
@@ -151,8 +152,8 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
   const computeRunningBalances = (advList: RiderAdvanceEntry[]): { updatedAdvances: RiderAdvanceEntry[]; total: number } => {
     // Sort oldest first to calculate running cumulative balances
     const sorted = [...advList].sort((a, b) => {
-      const timeA = new Date(a.date || a.createdAt).getTime();
-      const timeB = new Date(b.date || b.createdAt).getTime();
+      const timeA = new Date(a.date || a.createdAt || 0).getTime();
+      const timeB = new Date(b.date || b.createdAt || 0).getTime();
       return timeA - timeB;
     });
 
@@ -165,15 +166,18 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       };
     });
 
+    // Active pending total must be computed using calculateActiveAdvanceTotal (excluding settled advances)
+    const activeAdvanceTotal = calculateActiveAdvanceTotal(advList, settlements, rider.id);
+
     // Return in reverse chronological order (newest first for UI display)
     return {
       updatedAdvances: computed.reverse(),
-      total: running,
+      total: activeAdvanceTotal,
     };
   };
 
-  // Running balance calculation: previousAdvanceTotal + newAdvanceAmount = currentTotalAdvance
-  const previousAdvanceTotal = typeof rider.totalAdvance === 'number' ? rider.totalAdvance : 0;
+  // Running balance calculation: true active outstanding advance
+  const previousAdvanceTotal = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
   const numericAmount = Math.max(0, Number(amount) || parseFloat(amount) || 0);
 
   // When editing, adjust running projection

@@ -14,14 +14,16 @@ import {
   Pencil,
   X,
 } from 'lucide-react';
-import { Rider, RiderAdvanceEntry } from '../types';
+import { Rider, RiderAdvanceEntry, SettlementRecord } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString } from '../utils/formatters';
+import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
 import { getRiderStatementUrl } from '../utils/shareLink';
 import { formatAdvanceSmsText, dispatchAutomatedSms } from '../services/smsService';
 import { sendNativeBackgroundSms, isNativeAndroid } from '../services/nativeSms';
 
 interface Props {
   riders: Rider[];
+  settlements?: SettlementRecord[];
   onSaveAdvance: (updatedRider: Rider, newAdvance: RiderAdvanceEntry) => Promise<void>;
   onDeleteAdvance?: (updatedRider: Rider, advanceId: string) => Promise<void>;
   onViewLedger?: (riderId: string) => void;
@@ -39,6 +41,7 @@ const ADVANCE_PRESETS = [
 
 export const AdvancesTab: React.FC<Props> = ({
   riders,
+  settlements,
   onSaveAdvance,
   onDeleteAdvance,
   onViewLedger,
@@ -114,12 +117,15 @@ export const AdvancesTab: React.FC<Props> = ({
 
   // Stats
   const totalOutstandingAdvance = useMemo(() => {
-    return (riders || []).reduce((sum, r) => sum + (Number(r.totalAdvance) || 0), 0);
-  }, [riders]);
+    return (riders || []).reduce(
+      (sum, r) => sum + calculateActiveAdvanceTotal(r.advances, settlements, r.id),
+      0
+    );
+  }, [riders, settlements]);
 
   const ridersWithAdvanceCount = useMemo(() => {
-    return (riders || []).filter((r) => Number(r.totalAdvance || 0) > 0).length;
-  }, [riders]);
+    return (riders || []).filter((r) => calculateActiveAdvanceTotal(r.advances, settlements, r.id) > 0).length;
+  }, [riders, settlements]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -144,14 +150,6 @@ export const AdvancesTab: React.FC<Props> = ({
     setIsSubmitting(true);
     try {
       const advId = `adv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-      const activeUnsettled = (targetRider.advances || []).filter(
-        (a) => !a.isSettled && (a as any).status !== 'PAID' && (Number(a.remainingAmount ?? a.amount) > 0)
-      );
-      const totalPendingAdvance = activeUnsettled.reduce(
-        (sum, a) => sum + Number(a.remainingAmount ?? a.amount ?? 0),
-        0
-      ) + num;
-
       const newAdvEntry: RiderAdvanceEntry = {
         id: advId,
         riderId: targetRider.id,
@@ -162,11 +160,14 @@ export const AdvancesTab: React.FC<Props> = ({
         date: date || getTodayDateString(),
         reason: reason.trim() || 'सामान्य एडवांस',
         isSettled: false,
-        runningBalance: totalPendingAdvance,
+        runningBalance: 0,
         createdAt: new Date().toISOString(),
       };
 
       const updatedAdvances = [newAdvEntry, ...(targetRider.advances || [])];
+      const totalPendingAdvance = calculateActiveAdvanceTotal(updatedAdvances, settlements, targetRider.id);
+      newAdvEntry.runningBalance = totalPendingAdvance;
+
       const updatedRider: Rider = {
         ...targetRider,
         totalAdvance: totalPendingAdvance,
@@ -249,7 +250,7 @@ export const AdvancesTab: React.FC<Props> = ({
         return a;
       });
 
-      const newTotal = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+      const newTotal = calculateActiveAdvanceTotal(updatedAdvances, settlements, rider.id);
       const updatedEntry = updatedAdvances.find((a) => a.id === entry.id)!;
 
       const updatedRider: Rider = {
@@ -275,7 +276,7 @@ export const AdvancesTab: React.FC<Props> = ({
     setIsDeleting(true);
     try {
       const remainingAdvances = (rider.advances || []).filter((a) => a.id !== entry.id);
-      const newTotal = remainingAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+      const newTotal = calculateActiveAdvanceTotal(remainingAdvances, settlements, rider.id);
       const updatedRider: Rider = {
         ...rider,
         totalAdvance: newTotal,
