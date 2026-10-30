@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, 
   IndianRupee, 
@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { Rider, RiderAdvanceEntry, SettlementRecord, DeliveryEntry } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
-import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
+import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal, isUnsettledAdvance } from '../utils/payoutCalculations';
 import { 
   generateStatementUrl, 
   formatAdvanceSmsText, 
@@ -166,8 +166,10 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       };
     });
 
-    // Active pending total must be computed using calculateActiveAdvanceTotal (excluding settled advances)
-    const activeAdvanceTotal = calculateActiveAdvanceTotal(advList, settlements, rider.id);
+    // Active pending total must be computed using net advance (active advances minus active incentives)
+    const rawAdvTotal = calculateActiveAdvanceTotal(advList, settlements, rider.id);
+    const rawIncTotal = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+    const activeAdvanceTotal = Math.max(0, rawAdvTotal - rawIncTotal);
 
     // Return in reverse chronological order (newest first for UI display)
     return {
@@ -176,8 +178,15 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     };
   };
 
+  // Pure ground-truth live net advance for the rider
+  const liveNetAdvance = useMemo(() => {
+    const adv = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
+    const inc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+    return Math.max(0, adv - inc);
+  }, [rider.advances, rider.incentives, settlements, rider.id]);
+
   // Running balance calculation: true active outstanding advance
-  const previousAdvanceTotal = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
+  const previousAdvanceTotal = liveNetAdvance;
   const numericAmount = Math.max(0, Number(amount) || parseFloat(amount) || 0);
 
   // When editing, adjust running projection
@@ -874,49 +883,64 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
                       <th className="py-2 px-3">Date</th>
                       <th className="py-2 px-3 text-right">Advance Amount</th>
                       <th className="py-2 px-3">Reason / Notes</th>
+                      <th className="py-2 px-3 text-center">Status</th>
                       <th className="py-2 px-3 text-right">Running Balance</th>
                       <th className="py-2 px-2 text-center w-16">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono">
-                    {rider.advances.map((adv) => (
-                      <tr key={adv.id} className="hover:bg-slate-850/40 transition">
-                        <td className="py-2 px-3 text-slate-200">
-                          {adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt)}
-                        </td>
-                        <td className="py-2 px-3 text-right font-bold text-rose-400">
-                          + {formatINR(adv.amount)}
-                        </td>
-                        <td className="py-2 px-3 text-slate-300 font-sans text-[11px]">
-                          {adv.reason || 'सामान्य एडवांस'}
-                        </td>
-                        <td className="py-2 px-3 text-right font-bold text-amber-300">
-                          {formatINR(adv.runningBalance !== undefined ? adv.runningBalance : previousAdvanceTotal)}
-                        </td>
-                        <td className="py-2 px-2 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleStartEdit(adv)}
-                              className="text-slate-400 hover:text-amber-400 p-1 rounded hover:bg-slate-800 transition"
-                              title="एडवांस एंट्री में बदलाव करें (Edit Entry)"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            {onDeleteAdvance && (
+                    {rider.advances.map((adv) => {
+                      const isUnsettled = isUnsettledAdvance(adv, settlements, rider.id);
+                      return (
+                        <tr key={adv.id} className="hover:bg-slate-850/40 transition">
+                          <td className="py-2 px-3 text-slate-200">
+                            {adv.date ? formatDateDisplay(adv.date) : formatDateDisplay(adv.createdAt)}
+                          </td>
+                          <td className="py-2 px-3 text-right font-bold text-rose-400">
+                            + {formatINR(adv.amount)}
+                          </td>
+                          <td className="py-2 px-3 text-slate-300 font-sans text-[11px]">
+                            {adv.reason || 'सामान्य एडवांस'}
+                          </td>
+                          <td className="py-2 px-3 text-center whitespace-nowrap">
+                            {isUnsettled ? (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold font-sans">
+                                सक्रिय
+                              </span>
+                            ) : (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold font-sans">
+                                सेटल (Settled)
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-right font-bold text-amber-300">
+                            {formatINR(adv.runningBalance !== undefined ? adv.runningBalance : previousAdvanceTotal)}
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <div className="flex items-center justify-center gap-1">
                               <button
                                 type="button"
-                                onClick={() => setDeletingAdvanceEntry(adv)}
-                                className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition cursor-pointer"
-                                title="एडवांस हटाएं (Delete Entry)"
+                                onClick={() => handleStartEdit(adv)}
+                                className="text-slate-400 hover:text-amber-400 p-1 rounded hover:bg-slate-800 transition"
+                                title="एडवांस एंट्री में बदलाव करें (Edit Entry)"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Pencil className="w-3.5 h-3.5" />
                               </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                              {onDeleteAdvance && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingAdvanceEntry(adv)}
+                                  className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition cursor-pointer"
+                                  title="एडवांस हटाएं (Delete Entry)"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -927,7 +951,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         {/* Modal Footer */}
         <div className="p-3 sm:p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 text-slate-400">
-            <span>कुल बकाया एडवांस: <strong className="text-amber-400">{formatINR(rider.totalAdvance || 0)}</strong></span>
+            <span>कुल बकाया एडवांस (Net Advance): <strong className="text-amber-400 font-mono text-sm">{formatINR(liveNetAdvance)}</strong></span>
           </div>
 
           <button

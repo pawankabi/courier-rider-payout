@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, AppUser, RiderAdvanceEntry } from '../types';
 import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
+import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal } from '../utils/payoutCalculations';
 import { generatePayoutPDF } from '../utils/pdfGenerator';
 import { exportSingleRiderToCSV } from '../utils/csvExport';
 import { saveRiderToFirestore, deleteRiderFromFirestore, saveDeliveryToFirestore, syncPublicRiderStatement } from '../services/firestoreSync';
@@ -60,6 +61,13 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
   const riderEntries = entries
     .filter((e) => e.riderId === rider.id)
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  // Ground truth net outstanding advance
+  const riderNetAdvance = React.useMemo(() => {
+    const adv = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
+    const inc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+    return Math.max(0, adv - inc);
+  }, [rider.advances, rider.incentives, settlements, rider.id]);
 
   // Edit Mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -386,7 +394,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
                 title="Manage rider advance & loan balance"
               >
                 <IndianRupee className="w-3.5 h-3.5" />
-                <span>एडवांस खाता ({formatINR(rider.totalAdvance || 0)})</span>
+                <span>एडवांस खाता ({formatINR(riderNetAdvance)})</span>
               </button>
 
               <button
@@ -715,7 +723,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
         {/* Modal Footer */}
         <div className="p-3 sm:p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between gap-3 text-xs">
           <div className="text-slate-400">
-            Total Deliveries: <strong className="text-white">{riderEntries.length}</strong> • Unpaid: <strong className="text-amber-400">{unpaidCount}</strong> • Advance: <strong className="text-amber-300">{formatINR(rider.totalAdvance || 0)}</strong>
+            Total Deliveries: <strong className="text-white">{riderEntries.length}</strong> • Unpaid: <strong className="text-amber-400">{unpaidCount}</strong> • Advance: <strong className="text-amber-300">{formatINR(riderNetAdvance)}</strong>
           </div>
           <button
             type="button"

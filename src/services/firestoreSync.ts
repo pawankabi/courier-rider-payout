@@ -42,10 +42,11 @@ import {
   saveRidersToStorage, 
   saveDeliveriesToStorage, 
   saveSettlementsToStorage, 
+  loadSettlementsFromStorage,
   setCachedAuthUserId 
 } from '../utils/storage';
 import { purgePhantomAdvances } from '../utils/pureLedgerEngine';
-import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
+import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal } from '../utils/payoutCalculations';
 
 export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
 
@@ -1750,7 +1751,13 @@ export function subscribeToUserData(
     // Strictly isolate: only include riders created by or belonging to this user's workspace
     const rawList = Array.from(ridersMap.values()).filter((r) => isEntityOwnedByUser(r, userId, effectiveEmail));
     const allWorkspaceAdvances = Array.from(advancesMap.values());
-    const settlementsList = Array.from(settlementsMap.values());
+    let settlementsList = Array.from(settlementsMap.values());
+    if (settlementsList.length === 0) {
+      const cachedSettlements = loadSettlementsFromStorage(userId);
+      if (Array.isArray(cachedSettlements) && cachedSettlements.length > 0) {
+        settlementsList = cachedSettlements;
+      }
+    }
 
     const list = rawList.map((r) => {
       // Merge advances from rider doc and workspace advances collection
@@ -1777,10 +1784,12 @@ export function subscribeToUserData(
       });
 
       const totalAdv = calculateActiveAdvanceTotal(dedupedAdvances, settlementsList, r.id);
+      const totalInc = calculateActiveIncentiveTotal(r.incentives, settlementsList, r.id);
+      const netAdv = Math.max(0, totalAdv - totalInc);
       return {
         ...r,
         advances: dedupedAdvances,
-        totalAdvance: totalAdv,
+        totalAdvance: netAdv,
       };
     });
 
@@ -1898,6 +1907,7 @@ export function subscribeToUserData(
         settlementsMap.set(docSnap.id, s);
       });
       notifySettlements();
+      notifyRiders();
     },
     (error) => {
       console.warn('Warning listening to workspace settlements collection:', error);

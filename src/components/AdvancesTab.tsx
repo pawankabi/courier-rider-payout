@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Rider, RiderAdvanceEntry, SettlementRecord } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString } from '../utils/formatters';
-import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
+import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal, isUnsettledAdvance } from '../utils/payoutCalculations';
 import { getRiderStatementUrl } from '../utils/shareLink';
 import { formatAdvanceSmsText, dispatchAutomatedSms } from '../services/smsService';
 import { sendNativeBackgroundSms, isNativeAndroid } from '../services/nativeSms';
@@ -115,16 +115,23 @@ export const AdvancesTab: React.FC<Props> = ({
     });
   }, [allAdvances, filterRiderId, searchQuery]);
 
+  // Helper: compute pure ground-truth net outstanding advance for a rider
+  const getRiderNetAdvance = (r: Rider): number => {
+    const adv = calculateActiveAdvanceTotal(r.advances, settlements, r.id);
+    const inc = calculateActiveIncentiveTotal(r.incentives, settlements, r.id);
+    return Math.max(0, adv - inc);
+  };
+
   // Stats
   const totalOutstandingAdvance = useMemo(() => {
     return (riders || []).reduce(
-      (sum, r) => sum + calculateActiveAdvanceTotal(r.advances, settlements, r.id),
+      (sum, r) => sum + getRiderNetAdvance(r),
       0
     );
   }, [riders, settlements]);
 
   const ridersWithAdvanceCount = useMemo(() => {
-    return (riders || []).filter((r) => calculateActiveAdvanceTotal(r.advances, settlements, r.id) > 0).length;
+    return (riders || []).filter((r) => getRiderNetAdvance(r) > 0).length;
   }, [riders, settlements]);
 
   const showToast = (msg: string) => {
@@ -165,7 +172,9 @@ export const AdvancesTab: React.FC<Props> = ({
       };
 
       const updatedAdvances = [newAdvEntry, ...(targetRider.advances || [])];
-      const totalPendingAdvance = calculateActiveAdvanceTotal(updatedAdvances, settlements, targetRider.id);
+      const rawAdv = calculateActiveAdvanceTotal(updatedAdvances, settlements, targetRider.id);
+      const rawInc = calculateActiveIncentiveTotal(targetRider.incentives, settlements, targetRider.id);
+      const totalPendingAdvance = Math.max(0, rawAdv - rawInc);
       newAdvEntry.runningBalance = totalPendingAdvance;
 
       const updatedRider: Rider = {
@@ -250,7 +259,9 @@ export const AdvancesTab: React.FC<Props> = ({
         return a;
       });
 
-      const newTotal = calculateActiveAdvanceTotal(updatedAdvances, settlements, rider.id);
+      const rawAdv = calculateActiveAdvanceTotal(updatedAdvances, settlements, rider.id);
+      const rawInc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+      const newTotal = Math.max(0, rawAdv - rawInc);
       const updatedEntry = updatedAdvances.find((a) => a.id === entry.id)!;
 
       const updatedRider: Rider = {
@@ -276,7 +287,9 @@ export const AdvancesTab: React.FC<Props> = ({
     setIsDeleting(true);
     try {
       const remainingAdvances = (rider.advances || []).filter((a) => a.id !== entry.id);
-      const newTotal = calculateActiveAdvanceTotal(remainingAdvances, settlements, rider.id);
+      const rawAdv = calculateActiveAdvanceTotal(remainingAdvances, settlements, rider.id);
+      const rawInc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+      const newTotal = Math.max(0, rawAdv - rawInc);
       const updatedRider: Rider = {
         ...rider,
         totalAdvance: newTotal,
@@ -338,7 +351,7 @@ export const AdvancesTab: React.FC<Props> = ({
         <div className="p-4 rounded-2xl bg-slate-900/90 border border-amber-500/30 shadow-md">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              कुल बकाया एडवांस (Total Active Advance)
+              कुल बकाया एडवांस (Net Advance)
             </span>
             <TrendingDown className="w-4 h-4 text-rose-400" />
           </div>
@@ -411,11 +424,14 @@ export const AdvancesTab: React.FC<Props> = ({
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-medium focus:outline-none focus:border-amber-500 transition cursor-pointer"
               >
                 <option value="">-- डिलीवरी साथी चुनें --</option>
-                {activeRiders.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} ({r.phone || 'No phone'}) - Current Advance: ₹{r.totalAdvance || 0}
-                  </option>
-                ))}
+                {activeRiders.map((r) => {
+                  const netAdv = getRiderNetAdvance(r);
+                  return (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.phone || 'No phone'}) - कुल बकाया एडवांस: ₹{formatINR(netAdv)}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -538,11 +554,14 @@ export const AdvancesTab: React.FC<Props> = ({
               className="px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 cursor-pointer"
             >
               <option value="all">सभी राइडर्स (All Riders)</option>
-              {activeRiders.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} (₹{r.totalAdvance || 0})
-                </option>
-              ))}
+              {activeRiders.map((r) => {
+                const netAdv = getRiderNetAdvance(r);
+                return (
+                  <option key={r.id} value={r.id}>
+                    {r.name} (बकाया: ₹{formatINR(netAdv)})
+                  </option>
+                );
+              })}
             </select>
           </div>
         </div>
@@ -563,12 +582,14 @@ export const AdvancesTab: React.FC<Props> = ({
                   <th className="p-3 font-bold">दिनांक (Date)</th>
                   <th className="p-3 font-bold">राइडर (Rider)</th>
                   <th className="p-3 font-bold">कारण / विवरण (Reason)</th>
+                  <th className="p-3 font-bold text-center">स्थिति (Status)</th>
                   <th className="p-3 font-bold text-right">राशि (Amount ₹)</th>
                   <th className="p-3 font-bold text-center">एक्शन (Actions)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-medium">
                 {filteredAdvances.map(({ entry, rider }) => {
+                  const isUnsettled = isUnsettledAdvance(entry, settlements, rider.id);
                   return (
                     <tr
                       key={entry.id}
@@ -594,6 +615,17 @@ export const AdvancesTab: React.FC<Props> = ({
                       </td>
                       <td className="p-3 text-slate-200">
                         <span className="font-semibold">{entry.reason || 'सामान्य एडवांस'}</span>
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        {isUnsettled ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                            सक्रिय बकाया
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                            चुकता (Settled)
+                          </span>
+                        )}
                       </td>
                       <td className="p-3 text-right font-mono font-black text-rose-300 text-sm whitespace-nowrap">
                         -₹{formatINR(entry.amount)}

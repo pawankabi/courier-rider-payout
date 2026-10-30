@@ -10,6 +10,7 @@
 
 import { Rider, DeliveryEntry, SettlementRecord, PublicRiderStatement, RiderAdvanceEntry } from '../types';
 import { calculatePureRiderLedger, purgePhantomAdvances } from '../utils/pureLedgerEngine';
+import { calculateNetActiveAdvance } from '../utils/payoutCalculations';
 import { syncPublicRiderStatement } from './firestoreSync';
 import { 
   loadRidersFromStorage, 
@@ -212,10 +213,20 @@ export async function auditAndHealAllRiderLedgers(
       updatedAt: new Date().toISOString(),
     };
 
-    const pureResult = calculatePureRiderLedger(tempStatement, 'desc', false, settlements, rider.advances);
-
-    // Outstanding advance must match pure result unsettled advances or deficits
-    const expectedAdvance = pureResult.balanceStatus === 'rider_due' ? pureResult.netBalance : 0;
+    // 2. Canonical Net Active Advance and Incentive:
+    // Pure Khatabook/Banking single source of truth:
+    // Net Advance = Math.max(0, ActiveUnsettledAdvances - ActiveUnsettledIncentives)
+    // Net Incentive = Math.max(0, ActiveUnsettledIncentives - ActiveUnsettledAdvances)
+    // Note: Daily operational delivery earnings belong to weekly salary/settlement and do NOT reduce
+    // active cash advance until an official settlement payout is generated and paid!
+    const { netAdvance: rawExpectedAdvance, netIncentive: rawExpectedIncentive } = calculateNetActiveAdvance(
+      cleanAdvances,
+      rider.incentives || [],
+      settlements,
+      rider.id
+    );
+    const expectedAdvance = safeRoundINR(rawExpectedAdvance);
+    const expectedIncentive = safeRoundINR(rawExpectedIncentive);
     const currentStoredAdvance = safeRoundINR(rider.totalAdvance || 0);
 
     if (Math.abs(currentStoredAdvance - expectedAdvance) > 0.01) {
@@ -236,7 +247,6 @@ export async function auditAndHealAllRiderLedgers(
     }
 
     // Expected unsettled incentive check
-    const expectedIncentive = pureResult.unsettledIncentives;
     const currentStoredIncentive = safeRoundINR(rider.totalIncentive || 0);
 
     if (Math.abs(currentStoredIncentive - expectedIncentive) > 0.01) {

@@ -2378,8 +2378,12 @@ function MainCourierApp() {
       .reduce((sum, e) => sum + (e.totalEarnings || 0), 0);
   }, [dashboardEntries]);
   const totalAdvanceAmount = useMemo(() => {
-    return dashboardRiders.reduce((sum, r) => sum + (Number(r.totalAdvance) || 0), 0);
-  }, [dashboardRiders]);
+    return dashboardRiders.reduce((sum, r) => {
+      const adv = calculateActiveAdvanceTotal(r.advances, dashboardSettlements, r.id);
+      const inc = calculateActiveIncentiveTotal(r.incentives, dashboardSettlements, r.id);
+      return sum + Math.max(0, adv - inc);
+    }, 0);
+  }, [dashboardRiders, dashboardSettlements]);
 
   if (!isInitialized) {
     return (
@@ -3360,7 +3364,9 @@ function MainCourierApp() {
                 updatedAdvances = [updatedAdv, ...sourceList];
               }
 
-              const total = updatedAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+              const activeAdv = calculateActiveAdvanceTotal(updatedAdvances, settlements, rider.id);
+              const activeInc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+              const total = Math.max(0, activeAdv - activeInc);
               const updatedRider: Rider = { ...rider, totalAdvance: total, advances: updatedAdvances };
               await handleSaveRiderAdvance(updatedRider, updatedAdv);
             }}
@@ -3376,9 +3382,11 @@ function MainCourierApp() {
               const rem = sourceList.filter(
                 (a) => a.id !== cleanId && a.id !== advId && `adv-${a.id}` !== advId
               );
-              const total = cleanId === 'prior-settled-advance' && rem.length === 0
+              const activeAdv = cleanId === 'prior-settled-advance' && rem.length === 0
                 ? 0
-                : rem.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+                : calculateActiveAdvanceTotal(rem, settlements, rider.id);
+              const activeInc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
+              const total = Math.max(0, activeAdv - activeInc);
               const updated: Rider = { ...rider, totalAdvance: total, advances: rem };
               await handleDeleteRiderAdvance(updated, cleanId);
             }}

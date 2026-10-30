@@ -579,14 +579,19 @@ export function calculatePureRiderLedger(
     processedRows.reverse();
   }
 
+  const rawActiveAdvAmt = validAdvances.filter((a) => isUnsettledAdvanceEntry(a)).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const rawActiveIncAmt = validIncentives.filter((i) => !i.isSettled && !i.isPaid && (i as any).status !== 'PAID').reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+  const canonicalUnsettledAdvances = Math.max(0, rawActiveAdvAmt - rawActiveIncAmt);
+  const canonicalUnsettledIncentives = Math.max(0, rawActiveIncAmt - rawActiveAdvAmt);
+
   return {
     timelineRows: processedRows,
     totalPlus,
     totalMinus,
     totalPaidToRider: totalMinus,
     totalSettledOrEarned: totalPlus,
-    unsettledAdvances: balanceStatus === 'rider_due' ? netBalance : 0,
-    unsettledIncentives: validIncentives.filter((i) => !i.isSettled && !i.isPaid && (i as any).status !== 'PAID').reduce((sum, i) => sum + (Number(i.amount) || 0), 0),
+    unsettledAdvances: canonicalUnsettledAdvances,
+    unsettledIncentives: canonicalUnsettledIncentives,
     unpaidSalary: 0,
     netBalance,
     rawDifference: finalDifference,

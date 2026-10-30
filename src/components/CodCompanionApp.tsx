@@ -254,6 +254,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   // Hub Collection UPI ID & 1-Click Payment Tracker
   const [syncedHubUpiId, setSyncedHubUpiId] = useState<string>('');
   const [onlinePaymentSent, setOnlinePaymentSent] = useState<boolean>(false);
+  const [isCopiedUpi, setIsCopiedUpi] = useState<boolean>(false);
 
   // Rider Active Portal Tab: Daily Delivery / COD Submission vs Khatabook Passbook
   const [riderActiveTab, setRiderActiveTab] = useState<'cod_entry' | 'khatabook'>('cod_entry');
@@ -430,8 +431,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     };
   }, []);
 
-  // Launch GPay / PhonePe / Paytm with exact amount and Hub UPI ID
-  const handleLaunchUpiApp = () => {
+  // 1-Click Direct Clean UPI Launcher (Solution 2: Profile Mode - Open Payee Profile without Pre-filled Amount, 100% Bank Approval)
+  const handleLaunchUpiApp = (targetApp: 'gpay' | 'phonepe' | 'paytm' | 'all' = 'all') => {
     const amt = Number(editOnline);
     if (!amt || amt <= 0) {
       showToast('कृपया पहले सही ऑनलाइन रकम (Online ₹) दर्ज करें।', 'error');
@@ -442,22 +443,48 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       return;
     }
 
-    const payeeName = sheetData?.hubName || 'Courier Hub';
-    const riderName = editingEntry?.riderName || authUser?.name || 'Rider';
-    const note = `COD Collection - ${riderName}`;
     const cleanUpi = activeHubUpiId.trim();
+    const cleanAmt = String(Math.round(amt));
 
-    // Universal UPI Deep Link:
-    const upiUri = `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=${encodeURIComponent(payeeName)}&am=${amt}&cu=INR&tn=${encodeURIComponent(note)}`;
+    // Also auto-copy UPI ID to clipboard as instant safety net
+    try {
+      navigator.clipboard.writeText(cleanUpi);
+      setIsCopiedUpi(true);
+      setTimeout(() => setIsCopiedUpi(false), 4000);
+    } catch {}
+
+    // Pure Clean VPA-only URI:
+    // CRITICAL FIX: Omit 'pn' completely!
+    // Passing 'pn=Courier+Hub' caused Google Pay to display 'courier+hub' initially, which created
+    // a name discrepancy against the actual bank-registered merchant name. This tipped off Google Pay's
+    // security engine that an untrusted external app was spoofing the payee name, causing payment permission decline.
+    // Passing ONLY 'pa' allows Google Pay to do a clean native NPCI directory lookup showing ONLY the authentic registered bank name.
+    const upiUri = `upi://pay?pa=${encodeURIComponent(cleanUpi)}`;
+
+    const appLabel = targetApp === 'gpay' ? 'Google Pay' : targetApp === 'phonepe' ? 'PhonePe' : targetApp === 'paytm' ? 'Paytm' : 'UPI ऐप';
 
     sessionStorage.setItem('cp_pending_upi_transfer', JSON.stringify({
-      amount: amt,
+      amount: cleanAmt,
       riderId: editingEntry?.riderId,
       time: Date.now(),
     }));
 
-    showToast('🚀 Google Pay / PhonePe / Paytm खोला जा रहा है...', 'info');
+    showToast(`🚀 ${appLabel} खुल रहा है! बैंक नाम सत्यापित होगा, 'Pay' दबाकर ₹${cleanAmt} भेजें।`, 'info');
+
     window.location.href = upiUri;
+  };
+
+  // 1-Click Copy UPI ID to Clipboard
+  const handleCopyUpiId = () => {
+    if (!activeHubUpiId) return;
+    try {
+      navigator.clipboard.writeText(activeHubUpiId.trim());
+      setIsCopiedUpi(true);
+      showToast(`✅ हब UPI ID (${activeHubUpiId}) कॉपी हो गई!`, 'success');
+      setTimeout(() => setIsCopiedUpi(false), 3000);
+    } catch {
+      showToast(`हब UPI ID: ${activeHubUpiId}`, 'info');
+    }
   };
 
   // 2. Handle Login: Exact Hub Lookup on Login directly via authenticateCodStaffCompanion
@@ -3251,34 +3278,108 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                   className="w-full px-3.5 py-2.5 bg-sky-50/50 border border-sky-300 rounded-xl text-sky-700 font-mono text-lg font-bold focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white"
                 />
 
-                {/* ⚡ 1-Click Direct GPay / PhonePe / Paytm Transfer Button for Rider */}
+                {/* ⚡ 1-Click Direct Automatic Payment Suite for Rider */}
                 {isRider && Number(editOnline) > 0 && (
-                  <div className="mt-2.5 space-y-2">
+                  <div className="mt-3 p-3.5 bg-gradient-to-br from-sky-50 via-indigo-50/50 to-blue-50 border border-sky-200 rounded-2xl shadow-xs space-y-3">
                     {activeHubUpiId ? (
-                      <button
-                        type="button"
-                        onClick={handleLaunchUpiApp}
-                        className="w-full py-2.5 px-3 bg-gradient-to-r from-sky-600 via-indigo-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer active:scale-95"
-                      >
-                        <Smartphone className="w-4 h-4 text-sky-200" />
-                        <span>⚡ ₹{Number(editOnline).toLocaleString('en-IN')} सीधे GPay / PhonePe / Paytm से भेजें</span>
-                      </button>
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                            <span className="text-xs font-black text-slate-800">
+                              ⚡ ऑटोमैटिक पेमेंट (₹{Number(editOnline).toLocaleString('en-IN')})
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-sky-700 bg-sky-100 font-bold px-2 py-0.5 rounded-full border border-sky-300">
+                            Google Pay Business
+                          </span>
+                        </div>
+
+                        {/* 1-Click Direct App Buttons */}
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* GPay Direct */}
+                          <button
+                            type="button"
+                            onClick={() => handleLaunchUpiApp('gpay')}
+                            className="py-2.5 px-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 hover:from-blue-700 hover:to-sky-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer active:scale-95"
+                          >
+                            <span>⚡ Google Pay</span>
+                          </button>
+
+                          {/* PhonePe Direct */}
+                          <button
+                            type="button"
+                            onClick={() => handleLaunchUpiApp('phonepe')}
+                            className="py-2.5 px-3 bg-gradient-to-r from-purple-600 to-indigo-700 hover:from-purple-700 hover:to-indigo-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer active:scale-95"
+                          >
+                            <span>⚡ PhonePe</span>
+                          </button>
+                        </div>
+
+                        {/* Universal UPI App (Paytm, BHIM, Cred) */}
+                        <button
+                          type="button"
+                          onClick={() => handleLaunchUpiApp('all')}
+                          className="w-full py-2.5 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs cursor-pointer active:scale-95"
+                        >
+                          <Smartphone className="w-4 h-4 text-cyan-300" />
+                          <span>अन्य कोई भी UPI ऐप (Paytm / BHIM) से भेजें</span>
+                        </button>
+
+                        {/* Open Profile Transfer Guidance */}
+                        <div className="p-2.5 rounded-xl bg-sky-50 border border-sky-200 text-sky-900 text-[11px] leading-relaxed space-y-0.5">
+                          <div>
+                            💡 <strong>सत्यापित ट्रांसफर:</strong> UPI ऐप में सीधे आपका <strong>असली बैंक नाम</strong> दिखेगा (कोई 'courier+hub' नहीं)। वहाँ <strong>'Pay'</strong> दबाकर ₹{Math.round(Number(editOnline) || 0)} भरें और पिन डालें।
+                          </div>
+                          <div className="text-[10px] text-sky-700">
+                            (हब UPI ID भी क्लिपबोर्ड पर ऑटो-कॉपी हो जाती है)
+                          </div>
+                        </div>
+
+                        {/* 1-Tap Copy Hub UPI ID Fallback */}
+                        <div className="pt-2 border-t border-sky-200/70 flex items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="text-[11px] text-slate-500 font-medium">हब UPI ID:</span>
+                            <span className="font-mono text-slate-800 font-bold truncate max-w-[170px]" title={activeHubUpiId}>
+                              {activeHubUpiId}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleCopyUpiId}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer shrink-0 ${
+                              isCopiedUpi
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-sky-100 hover:bg-sky-200 text-sky-800 border border-sky-300'
+                            }`}
+                          >
+                            {isCopiedUpi ? <Check className="w-3 h-3" /> : <Receipt className="w-3 h-3 text-sky-600" />}
+                            <span>{isCopiedUpi ? 'कॉपी हो गई ✓' : 'कॉपी करें'}</span>
+                          </button>
+                        </div>
+                      </>
                     ) : (
-                      <div className="p-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-center gap-1.5">
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
                         <span>हब एडमिन द्वारा कलेक्शन UPI ID सेट नहीं किया गया है।</span>
                       </div>
                     )}
 
+                    {/* Post-Return Feedback Banner (No Auto-Submit) */}
                     {onlinePaymentSent && (
-                      <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-bold flex items-center justify-between animate-in fade-in shadow-xs">
-                        <span className="flex items-center gap-1.5">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>पेमेंट ऐप से वापस आ गए ✓ (ट्रांसफर प्रोसेस हुआ)</span>
-                        </span>
-                        <span className="text-[10px] text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md font-semibold">
-                          नो UTR झंझट
-                        </span>
+                      <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold space-y-1 shadow-xs animate-in fade-in">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>पेमेंट ऐप से वापस आ गए ✓ (अमाउंट दर्ज है)</span>
+                          </span>
+                          <span className="text-[10px] text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md font-bold">
+                            ऑटो-सबमिट नहीं होगा
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-emerald-800 font-normal">
+                          अपनी रकम और नोट विवरण जांच लें। यदि सब सही है, तो नीचे <strong>"💾 एंट्री सेव करें"</strong> पर क्लिक करें।
+                        </p>
                       </div>
                     )}
                   </div>
