@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>Courier Rider Payout</title>
+    <title>Courier Payout Pro</title>
     <script>
       // Filter benign Vite HMR client disconnect/transport noise when HMR is disabled by platform
       (function() {
@@ -86,21 +86,34 @@
     <link rel="icon" type="image/svg+xml" href="/admin-logo.svg" />
     <link rel="manifest" href="/manifest.json" />
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script type="module" crossorigin src="/assets/index-o4WoKHi0.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/vendor-react-jrF7e2F0.js">
-    <link rel="modulepreload" crossorigin href="/assets/vendor-firebase-Kgpy1mjd.js">
-    <link rel="modulepreload" crossorigin href="/assets/vendor-pdf-CUYbDkbv.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-Xuc1HISA.css">
+    <script type="module" crossorigin src="/assets/index-DuoBB9zk.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/vendor-react-BQ1FuAAx.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-firebase-DCl4xqpj.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-pdf-BqOOcIVZ.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-C-bwYGpq.css">
   <link rel="manifest" href="/manifest.webmanifest"></head>
   <body class="bg-[#0b0f19] text-slate-100 antialiased selection:bg-blue-600 selection:text-white min-h-screen overflow-x-hidden">
     <div id="root">
       <div style="min-height:100vh;background-color:#0b0f19;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#94a3b8;font-family:system-ui,-apple-system,sans-serif;">
         <div style="width:48px;height:48px;border-radius:12px;background:#030712;border:1px solid rgba(6,182,212,0.4);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 25px -5px rgba(6,182,212,0.3);margin-bottom:12px;">
-          <img src="/admin-logo.svg" width="38" height="38" alt="Logo" style="border-radius:8px;" />
+          <img id="splash-icon" src="/admin-logo.svg" width="38" height="38" alt="Logo" style="border-radius:8px;" />
         </div>
-        <div style="font-weight:700;font-size:15px;color:#f8fafc;letter-spacing:-0.01em;">Courier Payout Pro</div>
+        <div id="splash-title" style="font-weight:700;font-size:15px;color:#f8fafc;letter-spacing:-0.01em;">Courier Payout Pro</div>
         <div style="font-size:11px;color:#64748b;margin-top:4px;">Loading local cache...</div>
       </div>
+      <script>
+        (function() {
+          try {
+            var isRider = window.location.hash.indexOf('cod-entry') !== -1 || window.location.pathname.indexOf('cod-entry') !== -1;
+            if (isRider) {
+              var icon = document.getElementById('splash-icon');
+              var title = document.getElementById('splash-title');
+              if (icon) icon.src = '/rider-logo.svg';
+              if (title) title.textContent = 'COD Entry (Rider)';
+            }
+          } catch(e) {}
+        })();
+      </script>
     </div>
   </body>
 </html>
