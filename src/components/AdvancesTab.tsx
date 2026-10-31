@@ -17,6 +17,7 @@ import {
 import { Rider, RiderAdvanceEntry, SettlementRecord } from '../types';
 import { formatINR, formatDateDisplay, getTodayDateString } from '../utils/formatters';
 import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal, isUnsettledAdvance } from '../utils/payoutCalculations';
+import { calculateRiderFinancialState } from '../utils/masterAccountingEngine';
 import { getRiderStatementUrl } from '../utils/shareLink';
 import { formatAdvanceSmsText, dispatchAutomatedSms } from '../services/smsService';
 import { sendNativeBackgroundSms, isNativeAndroid } from '../services/nativeSms';
@@ -117,9 +118,7 @@ export const AdvancesTab: React.FC<Props> = ({
 
   // Helper: compute pure ground-truth net outstanding advance for a rider
   const getRiderNetAdvance = (r: Rider): number => {
-    const adv = calculateActiveAdvanceTotal(r.advances, settlements, r.id);
-    const inc = calculateActiveIncentiveTotal(r.incentives, settlements, r.id);
-    return Math.max(0, adv - inc);
+    return calculateRiderFinancialState(r.advances, r.incentives, settlements, r.id).netAdvance;
   };
 
   // Stats

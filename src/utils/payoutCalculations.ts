@@ -137,6 +137,8 @@ export function isUnsettledAdvance(
         (!riderId || String(s.riderId).trim() === String(riderId).trim()) &&
         (!s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED') &&
         advId !== `adv_deficit_${s.id}` &&
+        advId !== `adv_rem_${s.id}` &&
+        !advId.endsWith('_rem') &&
         Array.isArray(s.settledAdvanceIds) &&
         s.settledAdvanceIds.some((id) => String(id).trim() === advId)
     );
@@ -565,7 +567,7 @@ export function reindexAndSanitizeRiderBalances(
         );
 
         const existingIdx = sanitizedAdvances.findIndex(
-          (a) => a.id === deficitId || a.id === `${s.id}_rem`
+          (a) => a.id === deficitId || a.id === `adv_rem_${s.id}` || a.id === `${s.id}_rem`
         );
 
         if (existingIdx >= 0) {
@@ -579,19 +581,25 @@ export function reindexAndSanitizeRiderBalances(
             };
           }
         } else if (!isSettledInLaterSettlement) {
-          riderChanged = true;
-          sanitizedAdvances.push({
-            id: deficitId,
-            riderId: rider.id,
-            amount: deficitAmt,
-            date: s.endDate || (s.paidAt ? s.paidAt.split('T')[0] : ''),
-            createdAt: s.paidAt || new Date().toISOString(),
-            reason: `बकाया एडवांस (पिछला सेटलमेंट घाटा: ${formatDateDisplay(s.startDate)} - ${formatDateDisplay(s.endDate)})`,
-            isSettled: false,
-            isDeducted: false,
-            status: 'UNPAID',
-            runningBalance: deficitAmt,
-          });
+          // Only add if not already covered by another active residual advance
+          const hasResidualAlready = sanitizedAdvances.some(
+            (a) => !a.isSettled && (a as any).status !== 'PAID' && (a.id?.includes('rem') || a.id?.includes('deficit'))
+          );
+          if (!hasResidualAlready) {
+            riderChanged = true;
+            sanitizedAdvances.push({
+              id: `adv_rem_${s.id}`,
+              riderId: rider.id,
+              amount: deficitAmt,
+              date: s.endDate || (s.paidAt ? s.paidAt.split('T')[0] : ''),
+              createdAt: s.paidAt || new Date().toISOString(),
+              reason: `बकाया एडवांस (पिछला सेटलमेंट घाटा: ${formatDateDisplay(s.startDate)} - ${formatDateDisplay(s.endDate)})`,
+              isSettled: false,
+              isDeducted: false,
+              status: 'UNPAID',
+              runningBalance: deficitAmt,
+            });
+          }
         }
       }
     });

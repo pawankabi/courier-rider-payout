@@ -465,7 +465,17 @@ export function calculatePureRiderLedger(
   const totalSettlementDeficits = deficitSettlements.reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
 
   const alreadyHasDeficitAdvance = rawList.some(
-    (r) => r.type === 'advance' && (r.originalId?.startsWith('adv_deficit_') || r.title?.includes('पिछला सेटलमेंट घाटा'))
+    (r) =>
+      r.type === 'advance' &&
+      (r.originalId?.startsWith('adv_deficit_') ||
+        r.originalId?.startsWith('adv_rem_') ||
+        r.originalId?.includes('_rem') ||
+        r.originalId?.includes('rem') ||
+        r.id?.includes('deficit') ||
+        r.id?.includes('rem') ||
+        r.title?.includes('पिछला सेटलमेंट घाटा') ||
+        r.title?.includes('बकाया एडवांस') ||
+        r.title?.includes('सेटलमेंट शेष'))
   );
 
   if (totalSettlementDeficits > 0 && !alreadyHasDeficitAdvance) {

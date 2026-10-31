@@ -53,6 +53,10 @@ import {
   calculateActiveAdvanceTotal,
   calculateActiveIncentiveTotal
 } from '../utils/payoutCalculations';
+import {
+  calculateRiderFinancialState,
+  calculateMasterSettlement
+} from '../utils/masterAccountingEngine';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 import { VerifiedBadge } from './VerifiedBadge';
 
@@ -290,39 +294,42 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     (!matchingSettlement.status || matchingSettlement.status.trim().toUpperCase() === 'PAID')
   );
 
-  // Raw Active Unsettled Advance (including carried deficit)
-  const hasEmbeddedDeficit = activeAdvances.some(
-    (a) => a.id?.startsWith('adv_deficit_') || a.reason?.includes('पिछला सेटलमेंट घाटा')
-  );
-  const unrepresentedDeficit = hasEmbeddedDeficit ? 0 : carriedDeficit;
-  const rawTotalAdvance = liveActiveAdvanceTotal + unrepresentedDeficit;
+  // Master Engine: Ground-truth financial state for rider
+  const riderFinancialState = useMemo(() => {
+    if (!selectedRider) {
+      return { rawAdvance: 0, rawIncentive: 0, netAdvance: 0, netIncentive: 0, unsettledAdvancesCount: 0, unsettledIncentivesCount: 0 };
+    }
+    return calculateRiderFinancialState(
+      currentRiderAdvances,
+      selectedRider.incentives,
+      settlements,
+      selectedRider.id
+    );
+  }, [selectedRider, currentRiderAdvances, settlements]);
 
-  // Raw Active Unsettled Incentive / Repayment entries
+  // Raw Active Unsettled Advance & Incentive (Single Ground Truth)
+  const rawTotalAdvance = riderFinancialState.rawAdvance;
   const rawTotalIncentive = useMemo(() => {
     if (isFullySettledPeriod && matchingSettlement) {
       return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
     }
-    return activeIncentivesList.reduce((sum, inc) => sum + (Number(inc.amount) || 0), 0);
-  }, [isFullySettledPeriod, matchingSettlement, deliveryGross, activeIncentivesList]);
+    return riderFinancialState.rawIncentive;
+  }, [isFullySettledPeriod, matchingSettlement, deliveryGross, riderFinancialState.rawIncentive]);
 
-  // POINT 2 FIX: NET OUTSTANDING ADVANCE & SURPLUS INCENTIVE
-  // If rider took 3000 advance and repaid 2000 in incentive:
-  // netAdvanceRequired = 3000 - 2000 = 1000! Net incentive added to gross = 0!
-  // If rider took 3000 advance and repaid 3000:
-  // netAdvanceRequired = 0! Net incentive added to gross = 0!
+  // Net advance required to deduct (always exact, never doubled)
   const totalDeductionRequired = useMemo(() => {
     if (isFullySettledPeriod && matchingSettlement) {
       return matchingSettlement.advanceAmount || 0;
     }
-    return Math.max(0, rawTotalAdvance - rawTotalIncentive);
-  }, [isFullySettledPeriod, matchingSettlement, rawTotalAdvance, rawTotalIncentive]);
+    return riderFinancialState.netAdvance;
+  }, [isFullySettledPeriod, matchingSettlement, riderFinancialState.netAdvance]);
 
   const totalIncentive = useMemo(() => {
     if (isFullySettledPeriod && matchingSettlement) {
       return Math.max(0, (matchingSettlement.grossTotal || 0) - deliveryGross);
     }
-    return Math.max(0, rawTotalIncentive - rawTotalAdvance);
-  }, [isFullySettledPeriod, matchingSettlement, deliveryGross, rawTotalIncentive, rawTotalAdvance]);
+    return riderFinancialState.netIncentive;
+  }, [isFullySettledPeriod, matchingSettlement, deliveryGross, riderFinancialState.netIncentive]);
 
   const riderBonusIncentives = totalIncentive;
   const periodGross = deliveryGross + totalIncentive;
@@ -647,9 +654,8 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-100 focus:outline-none focus:border-blue-500 appearance-none"
               >
                 {riders.map((r) => {
-                  const rAdv = calculateActiveAdvanceTotal(r.advances, settlements, r.id);
-                  const rInc = calculateActiveIncentiveTotal(r.incentives, settlements, r.id);
-                  const rNetAdv = Math.max(0, rAdv - rInc);
+                  const rFin = calculateRiderFinancialState(r.advances, r.incentives, settlements, r.id);
+                  const rNetAdv = rFin.netAdvance;
                   return (
                     <option key={r.id} value={r.id}>
                       {r.name} • +91 {r.phone} {rNetAdv > 0 ? `(बकाया एडवांस: ${formatINR(rNetAdv)})` : ''}

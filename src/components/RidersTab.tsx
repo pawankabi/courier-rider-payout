@@ -57,6 +57,7 @@ import {
   calculateActiveAdvanceTotal,
   calculateActiveIncentiveTotal
 } from '../utils/payoutCalculations';
+import { calculateRiderFinancialState } from '../utils/masterAccountingEngine';
 import { FestivalBannerCard } from './FestivalBannerCard';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
 import { BulkDateRangeSmsModal } from './BulkDateRangeSmsModal';
@@ -1448,24 +1449,12 @@ export const RidersTab: React.FC<Props> = ({
             // When rider took 3000 advance and repaid 2000 in incentive/repayments:
             // Net Advance = 3000 - 2000 = 1000! Net Incentive = 0!
             // When rider took 3000 advance and repaid 3000: Net Advance = 0 (Clear)!
-            const rawActiveAdvance = calculateActiveAdvanceTotal(rider.advances, settlements, rider.id);
-            const rawActiveIncentive = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
-            const activeAdvanceBalance = Math.max(0, rawActiveAdvance - rawActiveIncentive);
-            const activeIncentiveBalance = Math.max(0, rawActiveIncentive - rawActiveAdvance);
-
-            // If the deficit is already captured in advances (via adv_deficit_* or deficit reason), do not double-count!
-            const deficitAlreadyInAdvances = (rider.advances || []).some(
-              (a) => !a.isSettled && (a as any).status !== 'PAID' && (a.id?.startsWith('adv_deficit_') || a.id?.includes('rem') || a.reason?.includes('सेटलमेंट घाटा') || a.reason?.includes('settlement deficit'))
-            );
-
-            // Unrecovered Settlement Deficits that are NOT yet captured in rider.advances
-            const unabsorbedSettlementDeficit = deficitAlreadyInAdvances
-              ? 0
-              : (settlements || [])
-                  .filter((s) => s.riderId === rider.id && (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
-                  .reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
-
-            const totalOutstandingAdvance = activeAdvanceBalance + unabsorbedSettlementDeficit;
+            const riderFin = calculateRiderFinancialState(rider.advances, rider.incentives, settlements, rider.id);
+            const rawActiveAdvance = riderFin.rawAdvance;
+            const rawActiveIncentive = riderFin.rawIncentive;
+            const activeAdvanceBalance = riderFin.netAdvance;
+            const activeIncentiveBalance = riderFin.netIncentive;
+            const totalOutstandingAdvance = riderFin.netAdvance;
             const liveUnpaidPayout = (stats.unpaidAmount + activeIncentiveBalance) - totalOutstandingAdvance;
 
             return (
@@ -1580,25 +1569,14 @@ export const RidersTab: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    {/* Advance Balance Badge - Net Active Outstanding Advance & Deficits */}
+                    {/* Advance Balance Badge - Net Active Outstanding Advance */}
                     <div className="text-right">
                       <div className={`text-xs ${totalOutstandingAdvance > 0 ? 'text-rose-400 font-semibold' : 'text-slate-500'}`}>
-                        {totalOutstandingAdvance > 0 
-                          ? (unabsorbedSettlementDeficit > 0 && activeAdvanceBalance > 0 
-                              ? 'कुल बकाया (एडवांस+घाटा)' 
-                              : unabsorbedSettlementDeficit > 0 
-                              ? 'पुराना बकाया (घाटा)' 
-                              : 'बकाया एडवांस') 
-                          : 'एडवांस'}
+                        {totalOutstandingAdvance > 0 ? 'बकाया एडवांस' : 'एडवांस'}
                       </div>
                       <div className={`text-sm font-bold font-mono ${totalOutstandingAdvance > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
                         {totalOutstandingAdvance > 0 ? formatINR(totalOutstandingAdvance) : '₹0'}
                       </div>
-                      {unabsorbedSettlementDeficit > 0 && activeAdvanceBalance > 0 && (
-                        <div className="text-[10px] text-rose-300/80 font-mono">
-                          {formatINR(activeAdvanceBalance)} + {formatINR(unabsorbedSettlementDeficit)} बकाया
-                        </div>
-                      )}
                     </div>
 
                     {/* Incentive Total Badge - Surplus Incentive Only */}

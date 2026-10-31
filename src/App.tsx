@@ -100,6 +100,11 @@ import {
   reindexAndSanitizeRiderBalances
 } from './utils/payoutCalculations';
 import {
+  executeSettlementAdvances,
+  calculateRiderFinancialState,
+  calculateMasterSettlement
+} from './utils/masterAccountingEngine';
+import {
   DailyEntrySkeleton,
   RidersTabSkeleton,
   AnalyticsReportsSkeleton,
@@ -1713,105 +1718,18 @@ function MainCourierApp() {
         let updatedRider: Rider = { ...targetRider };
 
         // 1. Advance settlement: An advance is ONLY settled if covered by actual gross earnings!
-        // If earnings are less than advanceAmount, only the covered portion is settled.
-        // The remaining unrecovered amount stays ACTIVE with isSettled: false, status: 'UNPAID'.
-        const maxCoverableByEarnings = Math.min(settlementDetails.grossTotal, advanceAmount);
-        let remainingDeduction = maxCoverableByEarnings;
-
-        const updatedAdvances: RiderAdvanceEntry[] = [];
-        (targetRider.advances || []).forEach((adv) => {
-          const isNegativeGhost = (Number(adv.amount) || 0) < 0 || adv.id?.startsWith('settle_adj') || adv.reason?.includes('सेटलमेंट समायोजन');
-          if (isNegativeGhost) return;
-
-          if (adv.isRecovery || adv.type === 'recovery') {
-            updatedAdvances.push(adv);
-            return;
-          }
-          if (adv.isSettled || adv.isDeducted || (adv as any).status === 'PAID') {
-            updatedAdvances.push(adv);
-            return;
-          }
-
-          const advAmt = Number(adv.amount) || 0;
-          if (advAmt <= 0) return;
-
-          if (remainingDeduction >= advAmt) {
-            // Fully covered by earnings in this settlement
-            remainingDeduction -= advAmt;
-            updatedAdvances.push({
-              ...adv,
-              isSettled: true,
-              isDeducted: true,
-              status: 'PAID',
-              settledPayoutId: settlementId,
-              settlementId: settlementId,
-            });
-          } else if (remainingDeduction > 0) {
-            // Partially covered by earnings!
-            const coveredAmt = remainingDeduction;
-            const uncoveredAmt = advAmt - coveredAmt;
-            remainingDeduction = 0;
-
-            // Covered portion
-            updatedAdvances.push({
-              ...adv,
-              amount: coveredAmt,
-              isSettled: true,
-              isDeducted: true,
-              status: 'PAID',
-              settledPayoutId: settlementId,
-              settlementId: settlementId,
-            });
-
-            // Uncovered portion remains ACTIVE debit carry forward
-            updatedAdvances.push({
-              id: `${adv.id}_rem`,
-              riderId: targetRider.id,
-              amount: uncoveredAmt,
-              date: adv.date,
-              createdAt: adv.createdAt || nowIso,
-              reason: adv.reason ? `${adv.reason} (बकाया शेष)` : 'बकाया एडवांस (Carry Forward Debt)',
-              isSettled: false,
-              isDeducted: false,
-              status: 'UNPAID',
-              runningBalance: uncoveredAmt,
-            });
-          } else {
-            // Not covered at all: stays ACTIVE!
-            updatedAdvances.push({
-              ...adv,
-              isSettled: false,
-              isDeducted: false,
-              status: 'UNPAID',
-            });
-          }
-        });
-
-        // Ensure uncoverable advance deficit (advanceAmount > grossTotal) remains as an active, unsettled advance!
-        const totalNetDeficit = advanceAmount - settlementDetails.grossTotal;
-        if (totalNetDeficit > 0) {
-          const deficitId = `adv_deficit_${settlementId}`;
-          const alreadyHasActiveDeficit = updatedAdvances.some(
-            (a) => (!a.isSettled && (a as any).status !== 'PAID' && a.id?.includes('rem')) || a.id === deficitId
-          );
-          if (!alreadyHasActiveDeficit) {
-            updatedAdvances.push({
-              id: deficitId,
-              riderId: targetRider.id,
-              amount: totalNetDeficit,
-              date: settlementDetails.endDate || getTodayDateString(),
-              createdAt: nowIso,
-              reason: `बकाया एडवांस (पिछला सेटलमेंट घाटा: ${formatDateDisplay(settlementDetails.startDate)} - ${formatDateDisplay(settlementDetails.endDate)})`,
-              isSettled: false,
-              isDeducted: false,
-              status: 'UNPAID',
-              runningBalance: totalNetDeficit,
-            });
-          }
-        }
+        // If earnings are less than advanceAmount, exactly ONE residual debt entry is created (no doubling!).
+        const { updatedAdvances, newTotalAdvance } = executeSettlementAdvances(
+          targetRider.advances || [],
+          settlementId,
+          settlementDetails.grossTotal,
+          advanceAmount,
+          targetRider.id,
+          settlementDetails.endDate || getTodayDateString(),
+          settlementDetails.startDate || ''
+        );
 
         // 2. Incentive settlement: Permanently flag ALL active incentives (Timeless / State-Scoped):
-        // { isSettled: true, isPaid: true, settledInPayoutId: settlementId }
         const updatedIncentives = (targetRider.incentives || []).map((inc) => {
           const incAmt = Number(inc.amount) || 0;
           if (incAmt <= 0) return inc;
@@ -1828,12 +1746,10 @@ function MainCourierApp() {
           return inc;
         });
 
-        const rawAdvTotal = calculateActiveAdvanceTotal(updatedAdvances);
-        const rawIncTotal = calculateActiveIncentiveTotal(updatedIncentives);
-        updatedRider.totalAdvance = Math.max(0, rawAdvTotal - rawIncTotal);
-        updatedRider.totalIncentive = Math.max(0, rawIncTotal - rawAdvTotal);
         updatedRider.advances = updatedAdvances;
+        updatedRider.totalAdvance = newTotalAdvance;
         updatedRider.incentives = updatedIncentives;
+        updatedRider.totalIncentive = 0;
 
         newSettlement.settledIncentiveIds = updatedIncentives
           .filter((i) => i.settledPayoutId === settlementId && i.isSettled)
@@ -2379,9 +2295,7 @@ function MainCourierApp() {
   }, [dashboardEntries]);
   const totalAdvanceAmount = useMemo(() => {
     return dashboardRiders.reduce((sum, r) => {
-      const adv = calculateActiveAdvanceTotal(r.advances, dashboardSettlements, r.id);
-      const inc = calculateActiveIncentiveTotal(r.incentives, dashboardSettlements, r.id);
-      return sum + Math.max(0, adv - inc);
+      return sum + calculateRiderFinancialState(r.advances, r.incentives, dashboardSettlements, r.id).netAdvance;
     }, 0);
   }, [dashboardRiders, dashboardSettlements]);
 
