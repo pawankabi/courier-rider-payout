@@ -37,6 +37,7 @@ import {
 } from '../services/razorpayCheckout';
 import { RazorpaySuccessModal } from './RazorpaySuccessModal';
 import { formatINR } from '../utils/formatters';
+import { launchUpiPayment } from '../services/upiLauncher';
 
 interface PaywallLockScreenProps {
   currentUser: User;
@@ -663,13 +664,22 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
                 </div>
 
                 {/* Prominent Full-Width UPI Button */}
-                <a
-                  href={`upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent('Courier Payout Pro')}&am=${monthlyFee}&cu=INR&tn=${encodeURIComponent('App Activation')}`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    launchUpiPayment({
+                      upiId,
+                      amount: monthlyFee,
+                      payeeName: 'Courier Payout Pro',
+                      note: 'App Activation',
+                      targetApp: 'all',
+                    });
+                  }}
                   className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-600 hover:from-emerald-400 hover:to-blue-500 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer text-center"
                 >
                   <Zap className="w-5 h-5 fill-slate-950 shrink-0" />
                   <span>Pay via UPI App (GPay / PhonePe / Paytm)</span>
-                </a>
+                </button>
 
                 {/* UPI ID Pill with 1-Tap Copy */}
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5">

@@ -77,6 +77,7 @@ import {
   syncPublicRiderStatement,
 } from '../services/firestoreSync';
 import { liveUpdateService, CURRENT_LOCAL_VERSION } from '../services/liveUpdateService';
+import { launchUpiPayment, generateUpiQrCodeDataUrl } from '../services/upiLauncher';
 
 interface CodCompanionAppProps {
   onBackToMainApp?: () => void;
@@ -256,6 +257,16 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const [onlinePaymentSent, setOnlinePaymentSent] = useState<boolean>(false);
   const [isCopiedUpi, setIsCopiedUpi] = useState<boolean>(false);
 
+  // Dynamic UPI QR Code Modal State
+  const [upiQrModal, setUpiQrModal] = useState<{
+    isOpen: boolean;
+    qrDataUrl: string;
+    amount: number;
+    upiId: string;
+    hubName: string;
+  } | null>(null);
+  const [isGeneratingQr, setIsGeneratingQr] = useState<boolean>(false);
+
   // Rider Active Portal Tab: Daily Delivery / COD Submission vs Khatabook Passbook
   const [riderActiveTab, setRiderActiveTab] = useState<'cod_entry' | 'khatabook'>('cod_entry');
   const isRiderFlavor = isRiderBuild();
@@ -431,8 +442,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     };
   }, []);
 
-  // 1-Click Direct Clean UPI Launcher (Solution 2: Profile Mode - Open Payee Profile without Pre-filled Amount, 100% Bank Approval)
-  const handleLaunchUpiApp = (targetApp: 'gpay' | 'phonepe' | 'paytm' | 'all' = 'all') => {
+  // 1-Click Direct Clean UPI Launcher with Auto-Filled Amount & Native Support
+  const handleLaunchUpiApp = async (targetApp: 'gpay' | 'phonepe' | 'paytm' | 'all' = 'all') => {
     const amt = Number(editOnline);
     if (!amt || amt <= 0) {
       showToast('कृपया पहले सही ऑनलाइन रकम (Online ₹) दर्ज करें।', 'error');
@@ -444,34 +455,72 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
 
     const cleanUpi = activeHubUpiId.trim();
-    const cleanAmt = String(Math.round(amt));
-
-    // Also auto-copy UPI ID to clipboard as instant safety net
-    try {
-      navigator.clipboard.writeText(cleanUpi);
-      setIsCopiedUpi(true);
-      setTimeout(() => setIsCopiedUpi(false), 4000);
-    } catch {}
-
-    // Pure Clean VPA-only URI:
-    // CRITICAL FIX: Omit 'pn' completely!
-    // Passing 'pn=Courier+Hub' caused Google Pay to display 'courier+hub' initially, which created
-    // a name discrepancy against the actual bank-registered merchant name. This tipped off Google Pay's
-    // security engine that an untrusted external app was spoofing the payee name, causing payment permission decline.
-    // Passing ONLY 'pa' allows Google Pay to do a clean native NPCI directory lookup showing ONLY the authentic registered bank name.
-    const upiUri = `upi://pay?pa=${encodeURIComponent(cleanUpi)}`;
-
-    const appLabel = targetApp === 'gpay' ? 'Google Pay' : targetApp === 'phonepe' ? 'PhonePe' : targetApp === 'paytm' ? 'Paytm' : 'UPI ऐप';
+    const cleanAmt = Math.round(amt);
+    const hubName = (sheetData?.hubName || 'Courier Hub').trim();
 
     sessionStorage.setItem('cp_pending_upi_transfer', JSON.stringify({
-      amount: cleanAmt,
+      amount: String(cleanAmt),
       riderId: editingEntry?.riderId,
       time: Date.now(),
     }));
 
-    showToast(`🚀 ${appLabel} खुल रहा है! बैंक नाम सत्यापित होगा, 'Pay' दबाकर ₹${cleanAmt} भेजें।`, 'info');
+    const appLabel = targetApp === 'gpay' ? 'Google Pay' : targetApp === 'phonepe' ? 'PhonePe' : targetApp === 'paytm' ? 'Paytm' : 'UPI ऐप';
+    showToast(`🚀 ${appLabel} खुल रहा है (₹${cleanAmt})...`, 'info');
 
-    window.location.href = upiUri;
+    const result = await launchUpiPayment({
+      upiId: cleanUpi,
+      amount: cleanAmt,
+      payeeName: hubName,
+      note: `COD Collection ${editingEntry?.riderName || ''}`.trim(),
+      targetApp,
+    });
+
+    if (!result.success) {
+      showToast(result.message, 'error');
+    }
+  };
+
+  // Show High-Resolution Dynamic UPI QR Code for instant scanning
+  const handleShowUpiQr = async () => {
+    const amt = Number(editOnline);
+    if (!amt || amt <= 0) {
+      showToast('कृपया पहले सही ऑनलाइन रकम (Online ₹) दर्ज करें।', 'error');
+      return;
+    }
+    if (!activeHubUpiId) {
+      showToast('हब एडमिन द्वारा UPI ID सेट नहीं किया गया है।', 'error');
+      return;
+    }
+
+    setIsGeneratingQr(true);
+    try {
+      const cleanUpi = activeHubUpiId.trim();
+      const cleanAmt = Math.round(amt);
+      const hubName = (sheetData?.hubName || 'Courier Hub').trim();
+
+      const qrUrl = await generateUpiQrCodeDataUrl({
+        upiId: cleanUpi,
+        amount: cleanAmt,
+        payeeName: hubName,
+        note: `COD ${editingEntry?.riderName || ''}`.trim(),
+      });
+
+      if (qrUrl) {
+        setUpiQrModal({
+          isOpen: true,
+          qrDataUrl: qrUrl,
+          amount: cleanAmt,
+          upiId: cleanUpi,
+          hubName,
+        });
+      } else {
+        showToast('QR कोड जनरेट नहीं हो सका।', 'error');
+      }
+    } catch {
+      showToast('QR कोड बनाने में त्रुटि हुई।', 'error');
+    } finally {
+      setIsGeneratingQr(false);
+    }
   };
 
   // 1-Click Copy UPI ID to Clipboard
@@ -3314,25 +3363,45 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                           >
                             <span>⚡ PhonePe</span>
                           </button>
+
+                          {/* Paytm Direct */}
+                          <button
+                            type="button"
+                            onClick={() => handleLaunchUpiApp('paytm')}
+                            className="py-2.5 px-3 bg-gradient-to-r from-sky-600 via-cyan-600 to-blue-700 hover:from-sky-700 hover:to-blue-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer active:scale-95"
+                          >
+                            <span>⚡ Paytm</span>
+                          </button>
+
+                          {/* Dynamic QR Code Modal Launcher */}
+                          <button
+                            type="button"
+                            onClick={handleShowUpiQr}
+                            disabled={isGeneratingQr}
+                            className="py-2.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer active:scale-95 disabled:opacity-60"
+                          >
+                            <QrCode className="w-4 h-4 text-emerald-200" />
+                            <span>{isGeneratingQr ? 'बन रहा है...' : '📷 QR स्कैन करें'}</span>
+                          </button>
                         </div>
 
-                        {/* Universal UPI App (Paytm, BHIM, Cred) */}
+                        {/* Universal UPI App (BHIM, Cred, Amazon Pay) */}
                         <button
                           type="button"
                           onClick={() => handleLaunchUpiApp('all')}
                           className="w-full py-2.5 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs cursor-pointer active:scale-95"
                         >
                           <Smartphone className="w-4 h-4 text-cyan-300" />
-                          <span>अन्य कोई भी UPI ऐप (Paytm / BHIM) से भेजें</span>
+                          <span>अन्य कोई भी UPI ऐप (BHIM / Cred / Navi) से भेजें</span>
                         </button>
 
                         {/* Open Profile Transfer Guidance */}
-                        <div className="p-2.5 rounded-xl bg-sky-50 border border-sky-200 text-sky-900 text-[11px] leading-relaxed space-y-0.5">
+                        <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-[11px] leading-relaxed space-y-0.5">
                           <div>
-                            💡 <strong>सत्यापित ट्रांसफर:</strong> UPI ऐप में सीधे आपका <strong>असली बैंक नाम</strong> दिखेगा (कोई 'courier+hub' नहीं)। वहाँ <strong>'Pay'</strong> दबाकर ₹{Math.round(Number(editOnline) || 0)} भरें और पिन डालें।
+                            💡 <strong>ऑटो-फिल पेमेंट:</strong> ऐप खुलते ही ₹{Math.round(Number(editOnline) || 0)} रकम और हब बैंक खाता पहले से भरा हुआ मिलेगा। केवल अपना <strong>UPI पिन</strong> डालकर भुगतान पूरा करें।
                           </div>
-                          <div className="text-[10px] text-sky-700">
-                            (हब UPI ID भी क्लिपबोर्ड पर ऑटो-कॉपी हो जाती है)
+                          <div className="text-[10px] text-emerald-800">
+                            (हब UPI ID: <strong>{activeHubUpiId}</strong> भी बैकअप के लिए क्लिपबोर्ड पर ऑटो-कॉपी हो गई है)
                           </div>
                         </div>
 
@@ -3468,6 +3537,75 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL 1.4: DYNAMIC UPI QR CODE SCANNER MODAL (Auto-filled ₹ Amount)
+      ===================================================================== */}
+      {upiQrModal && upiQrModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 text-center space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <QrCode className="w-5 h-5" />
+                </div>
+                <div className="text-left">
+                  <h3 className="text-sm font-black text-slate-900">UPI QR पेमेंट</h3>
+                  <p className="text-[10px] text-slate-500 font-medium truncate max-w-[170px]">{upiQrModal.hubName}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUpiQrModal(null)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Amount Badge */}
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl">
+              <span className="text-xs font-semibold text-emerald-800 block">भुगतान हेतु कुल रकम:</span>
+              <span className="text-3xl font-black font-mono text-emerald-700 tracking-tight">
+                ₹{upiQrModal.amount.toLocaleString('en-IN')}
+              </span>
+            </div>
+
+            {/* QR Code Canvas / Image */}
+            <div className="flex justify-center p-2 bg-slate-50 rounded-2xl border border-slate-200 shadow-inner">
+              <img
+                src={upiQrModal.qrDataUrl}
+                alt="UPI Payment QR Code"
+                className="w-64 h-64 rounded-xl shadow-xs"
+              />
+            </div>
+
+            {/* UPI ID Pill & Guidance */}
+            <div className="space-y-1.5 text-xs">
+              <div className="p-2 bg-slate-100 rounded-xl flex items-center justify-between gap-2 font-mono text-[11px]">
+                <span className="text-slate-500 font-sans">हब UPI ID:</span>
+                <span className="font-bold text-slate-800 truncate select-all">{upiQrModal.upiId}</span>
+              </div>
+              <p className="text-[11px] text-slate-500 font-medium">
+                Google Pay, PhonePe, Paytm या किसी भी स्कैनर से स्कैन करके तुरंत पेमेंट करें।
+              </p>
+            </div>
+
+            {/* Close Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setUpiQrModal(null);
+                setOnlinePaymentSent(true);
+              }}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>पेमेंट पूरा हुआ / बंद करें</span>
+            </button>
           </div>
         </div>
       )}
