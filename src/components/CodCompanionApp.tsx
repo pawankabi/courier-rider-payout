@@ -421,7 +421,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           const parsed = JSON.parse(raw);
           if (Date.now() - parsed.time < 600000) {
             setOnlinePaymentSent(true);
-            showToast(`✅ ₹${Number(parsed.amount).toLocaleString('en-IN')} का UPI ट्रांसफर प्रोसेस हुआ! अब एंट्री सेव करें।`, 'success');
+            const refText = parsed.txnRef ? ` (Txn Ref: ${parsed.txnRef})` : '';
+            showToast(`✅ ₹${Number(parsed.amount).toLocaleString('en-IN')} का UPI पेमेंट ट्रांसफर खोला गया${refText}! अब एंट्री सेव करें।`, 'success');
           }
         } catch {}
         sessionStorage.removeItem('cp_pending_upi_transfer');
@@ -455,17 +456,21 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
 
     const cleanUpi = activeHubUpiId.trim();
-    const cleanAmt = Math.round(amt);
+    const cleanAmt = Math.round(amt * 100) / 100;
     const hubName = (sheetData?.hubName || 'Courier Hub').trim();
+    const ts = Date.now().toString().slice(-8);
+    const rand = Math.floor(100000 + Math.random() * 900000);
+    const autoTxnRef = `TXN${ts}${rand}`;
 
     sessionStorage.setItem('cp_pending_upi_transfer', JSON.stringify({
       amount: String(cleanAmt),
       riderId: editingEntry?.riderId,
+      txnRef: autoTxnRef,
       time: Date.now(),
     }));
 
     const appLabel = targetApp === 'gpay' ? 'Google Pay' : targetApp === 'phonepe' ? 'PhonePe' : targetApp === 'paytm' ? 'Paytm' : 'UPI ऐप';
-    showToast(`🚀 ${appLabel} खुल रहा है (₹${cleanAmt})...`, 'info');
+    showToast(`🚀 ${appLabel} खुल रहा है (₹${cleanAmt.toFixed(2)} | Txn: ${autoTxnRef})...`, 'info');
 
     const result = await launchUpiPayment({
       upiId: cleanUpi,
@@ -473,6 +478,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       payeeName: hubName,
       note: `COD Collection ${editingEntry?.riderName || ''}`.trim(),
       targetApp,
+      transactionRef: autoTxnRef,
     });
 
     if (!result.success) {

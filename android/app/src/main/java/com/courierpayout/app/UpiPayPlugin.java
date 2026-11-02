@@ -30,36 +30,28 @@ public class UpiPayPlugin extends Plugin {
                 intent.setPackage(targetPackage.trim());
             }
 
-            // Check if there is an app that can handle this intent
-            if (intent.resolveActivity(getContext().getPackageManager()) != null) {
+            try {
                 getContext().startActivity(intent);
                 JSObject ret = new JSObject();
                 ret.put("success", true);
                 ret.put("launched", true);
                 call.resolve(ret);
                 return;
-            }
-
-            // If a specific package was requested but not found, try generic UPI chooser
-            if (targetPackage != null && !targetPackage.trim().isEmpty()) {
+            } catch (Exception directEx) {
+                // If targeted package fails, fallback directly to system UPI chooser
                 Intent genericIntent = new Intent(Intent.ACTION_VIEW, parsedUri);
                 genericIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                if (genericIntent.resolveActivity(getContext().getPackageManager()) != null) {
-                    getContext().startActivity(genericIntent);
-                    JSObject ret = new JSObject();
-                    ret.put("success", true);
-                    ret.put("launched", true);
-                    ret.put("fallback", true);
-                    call.resolve(ret);
-                    return;
-                }
-            }
+                Intent chooser = Intent.createChooser(genericIntent, "Pay via UPI");
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-            // If neither worked, report not found
-            JSObject ret = new JSObject();
-            ret.put("success", false);
-            ret.put("error", "No compatible UPI app found on this device.");
-            call.resolve(ret);
+                getContext().startActivity(chooser);
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("launched", true);
+                ret.put("fallback", true);
+                call.resolve(ret);
+                return;
+            }
 
         } catch (Exception e) {
             call.reject("Failed to launch UPI app: " + e.getMessage());

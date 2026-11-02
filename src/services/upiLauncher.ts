@@ -15,6 +15,7 @@ export interface UpiLaunchResult {
   method: 'native' | 'scheme' | 'intent' | 'fallback';
   message: string;
   qrDataUrl?: string;
+  transactionRef?: string;
 }
 
 // Native Plugin Interface for Capacitor Android
@@ -31,65 +32,64 @@ const APP_PACKAGES: Record<string, string> = {
 };
 
 /**
- * Builds clean, NPCI-standard UPI URI WITHOUT suspicious 'mode=02' or unsigned tokens
- * This resolves Google Pay's automated "This transaction may be risky" error.
+ * Generates an NPCI-compliant unique Transaction Reference (tr)
+ * Bank fraud engines (Paytm Protect, PhonePe, GPay) require a unique tr per attempt.
+ * Without tr, deep-link payments get flagged with "UPI Risk Policy" / "Risky transaction".
+ */
+export function generateUniqueTxnRef(): string {
+  const ts = Date.now().toString().slice(-8); // 8-digit unique timestamp
+  const rand = Math.floor(100000 + Math.random() * 900000); // 6-digit random sequence
+  return `TXN${ts}${rand}`;
+}
+
+/**
+ * Builds clean, NPCI-standard UPI URI with mandatory tr, mc=4215 (Courier Services)
+ * and strict 2-decimal amount format (am=X.00).
+ * Mode=02 is omitted to prevent triggering unsigned merchant JWS cert errors.
  */
 export function buildStandardUpiUri(options: UpiPaymentOptions): string {
   const cleanUpi = options.upiId.trim();
   const cleanAmt = Math.round(options.amount * 100) / 100;
-  const amtStr = cleanAmt % 1 === 0 ? String(cleanAmt) : cleanAmt.toFixed(2);
-  const cleanName = (options.payeeName || 'Hub Collection').trim().replace(/[^a-zA-Z0-9 ]/g, ' ');
-  const cleanNote = (options.note || 'COD Payment').trim().replace(/[^a-zA-Z0-9 ]/g, ' ');
+  const amtStr = cleanAmt.toFixed(2);
+  const cleanName = (options.payeeName || 'Hub Collection').trim().replace(/[^a-zA-Z0-9 ]/g, ' ').substring(0, 50);
+  const cleanNote = (options.note || 'COD Payment').trim().replace(/[^a-zA-Z0-9 ]/g, ' ').substring(0, 30);
+  const txnRef = (options.transactionRef || generateUniqueTxnRef()).trim().replace(/[^a-zA-Z0-9]/g, '').substring(0, 35);
 
   const params = new URLSearchParams();
   params.set('pa', cleanUpi);
   params.set('pn', cleanName);
-  params.set('am', amtStr);
+  params.set('mc', '4215'); // NPCI MCC for Courier & Delivery Services
+  params.set('tr', txnRef);  // Unique Transaction Reference to pass bank risk checks
+  params.set('am', amtStr);  // Strictly formatted with 2 decimal places
   params.set('cu', 'INR');
   params.set('tn', cleanNote);
-
-  // NOTE: NEVER add 'mode=02' here without an enterprise NPCI bank certificate.
-  // Passing 'mode=02' without a signed certificate triggers Google Pay's anti-fraud
-  // alarm: "This transaction may be risky. For your safety, it can't be completed at this time."
 
   return `upi://pay?${params.toString()}`;
 }
 
 /**
- * Builds app-specific custom schemes which bypass Chrome's generic intent filter
+ * Builds standard universal scheme for mobile browsers.
+ * Replaces unsafe proprietary 'paytmmp://' (which Paytm Protect rejects)
+ * with standard NPCI upi:// protocol.
  */
-export function buildAppSpecificScheme(options: UpiPaymentOptions, targetApp: 'gpay' | 'phonepe' | 'paytm' | 'all'): string {
-  const cleanUpi = encodeURIComponent(options.upiId.trim());
-  const cleanAmt = Math.round(options.amount * 100) / 100;
-  const amtStr = cleanAmt % 1 === 0 ? String(cleanAmt) : cleanAmt.toFixed(2);
-  const cleanName = encodeURIComponent((options.payeeName || 'Hub Collection').trim().replace(/[^a-zA-Z0-9 ]/g, ' '));
-  const cleanNote = encodeURIComponent((options.note || 'COD Payment').trim().replace(/[^a-zA-Z0-9 ]/g, ' '));
-
-  const query = `pa=${cleanUpi}&pn=${cleanName}&am=${amtStr}&cu=INR&tn=${cleanNote}`;
-
-  if (targetApp === 'gpay') {
-    return `tez://upi/pay?${query}`;
-  }
-  if (targetApp === 'phonepe') {
-    return `phonepe://pay?${query}`;
-  }
-  if (targetApp === 'paytm') {
-    return `paytmmp://pay?${query}`;
-  }
-  return `upi://pay?${query}`;
+export function buildAppSpecificScheme(options: UpiPaymentOptions, _targetApp: 'gpay' | 'phonepe' | 'paytm' | 'all'): string {
+  return buildStandardUpiUri(options);
 }
 
 /**
- * Builds Android Intent URL for direct web browser execution on Chrome Android
+ * Builds Android Intent URL for direct Chrome Android execution.
+ * Directly targets the specific package (Paytm, PhonePe, Google Pay) using the
+ * standard upi scheme and verified transaction reference.
  */
 export function buildAndroidIntentUrl(options: UpiPaymentOptions, targetApp: 'gpay' | 'phonepe' | 'paytm' | 'all' = 'all'): string {
   const cleanUpi = encodeURIComponent(options.upiId.trim());
   const cleanAmt = Math.round(options.amount * 100) / 100;
-  const amtStr = cleanAmt % 1 === 0 ? String(cleanAmt) : cleanAmt.toFixed(2);
-  const cleanName = encodeURIComponent((options.payeeName || 'Hub Collection').trim().replace(/[^a-zA-Z0-9 ]/g, ' '));
-  const cleanNote = encodeURIComponent((options.note || 'COD Payment').trim().replace(/[^a-zA-Z0-9 ]/g, ' '));
+  const amtStr = cleanAmt.toFixed(2);
+  const cleanName = encodeURIComponent((options.payeeName || 'Hub Collection').trim().replace(/[^a-zA-Z0-9 ]/g, ' ').substring(0, 50));
+  const cleanNote = encodeURIComponent((options.note || 'COD Payment').trim().replace(/[^a-zA-Z0-9 ]/g, ' ').substring(0, 30));
+  const txnRef = encodeURIComponent((options.transactionRef || generateUniqueTxnRef()).trim().replace(/[^a-zA-Z0-9]/g, '').substring(0, 35));
 
-  const query = `pa=${cleanUpi}&pn=${cleanName}&am=${amtStr}&cu=INR&tn=${cleanNote}`;
+  const query = `pa=${cleanUpi}&pn=${cleanName}&mc=4215&tr=${txnRef}&am=${amtStr}&cu=INR&tn=${cleanNote}`;
 
   const pkg = APP_PACKAGES[targetApp];
   if (pkg) {
@@ -101,7 +101,7 @@ export function buildAndroidIntentUrl(options: UpiPaymentOptions, targetApp: 'gp
 /**
  * Generates high-res QR code for scanning
  * Physical QR code scans are categorized by NPCI as 'Mode 01' (Customer In-Person Scan),
- * which NEVER triggers the 'Transaction is risky' block in Google Pay.
+ * which NEVER triggers the 'Transaction is risky' block in Google Pay or Paytm.
  */
 export async function generateUpiQrCodeDataUrl(options: UpiPaymentOptions): Promise<string> {
   const upiUri = buildStandardUpiUri(options);
@@ -124,6 +124,7 @@ export async function generateUpiQrCodeDataUrl(options: UpiPaymentOptions): Prom
 /**
  * Master 1-Click Launch Function
  * Works across Native Android APK and Mobile Browsers without tripping fraud filters.
+ * Generates and preserves unique transaction reference (tr) for end-to-end reconciliation.
  */
 export async function launchUpiPayment(options: UpiPaymentOptions): Promise<UpiLaunchResult> {
   if (!options.upiId || options.amount <= 0) {
@@ -134,18 +135,25 @@ export async function launchUpiPayment(options: UpiPaymentOptions): Promise<UpiL
     };
   }
 
-  // 1. Auto-copy UPI ID to clipboard as immediate fail-safe
+  // 1. Ensure a unique transaction reference (tr) is generated
+  const txnRef = options.transactionRef || generateUniqueTxnRef();
+  const optionsWithTxn: UpiPaymentOptions = {
+    ...options,
+    transactionRef: txnRef,
+  };
+
+  // 2. Auto-copy UPI ID to clipboard as immediate fail-safe
   try {
     if (navigator?.clipboard?.writeText) {
       await navigator.clipboard.writeText(options.upiId.trim());
     }
   } catch {}
 
-  const standardUri = buildStandardUpiUri(options);
+  const standardUri = buildStandardUpiUri(optionsWithTxn);
   const targetApp = options.targetApp || 'all';
   const targetPackage = APP_PACKAGES[targetApp];
 
-  // 2. If running inside Capacitor Native Android APK:
+  // 3. If running inside Capacitor Native Android APK:
   if (Capacitor.isNativePlatform()) {
     try {
       const nativeRes = await UpiPayPlugin.launchUpi({
@@ -158,6 +166,7 @@ export async function launchUpiPayment(options: UpiPaymentOptions): Promise<UpiL
           success: true,
           method: 'native',
           message: `${targetApp === 'gpay' ? 'Google Pay' : targetApp === 'phonepe' ? 'PhonePe' : targetApp === 'paytm' ? 'Paytm' : 'UPI ऐप'} खुल रहा है...`,
+          transactionRef: txnRef,
         };
       }
     } catch (err) {
@@ -165,36 +174,38 @@ export async function launchUpiPayment(options: UpiPaymentOptions): Promise<UpiL
     }
   }
 
-  // 3. For Google Pay or direct app schemes:
-  // Using direct app scheme (tez://, phonepe://, paytmmp://) bypasses Google Pay's external intent flags
-  const appScheme = buildAppSpecificScheme(options, targetApp);
+  // 4. For Mobile Browser on Android:
   const isAndroid = /android/i.test(navigator.userAgent || '');
-
-  try {
-    window.location.href = appScheme;
-    return {
-      success: true,
-      method: 'scheme',
-      message: `${targetApp === 'gpay' ? 'Google Pay' : targetApp === 'phonepe' ? 'PhonePe' : targetApp === 'paytm' ? 'Paytm' : 'UPI ऐप'} खुल रहा है...`,
-    };
-  } catch {
-    // Fallback to intent URL on Android
-    if (isAndroid) {
-      const intentUrl = buildAndroidIntentUrl(options, targetApp);
+  if (isAndroid) {
+    const intentUrl = buildAndroidIntentUrl(optionsWithTxn, targetApp);
+    try {
       window.location.href = intentUrl;
       return {
         success: true,
         method: 'intent',
-        message: 'UPI ऐप खोला जा रहा है...',
+        message: `${targetApp === 'gpay' ? 'Google Pay' : targetApp === 'phonepe' ? 'PhonePe' : targetApp === 'paytm' ? 'Paytm' : 'UPI ऐप'} खोला जा रहा है...`,
+        transactionRef: txnRef,
       };
+    } catch (e) {
+      console.warn('Android intent failed, falling back to standard URI:', e);
     }
+  }
 
-    // Default standard scheme fallback
+  // 5. Default standard scheme (works for iOS and universal desktop/mobile)
+  try {
     window.location.href = standardUri;
     return {
       success: true,
       method: 'scheme',
       message: 'UPI ऐप खोला जा रहा है...',
+      transactionRef: txnRef,
+    };
+  } catch (e) {
+    return {
+      success: false,
+      method: 'fallback',
+      message: 'UPI ऐप नहीं खोला जा सका। कृपया QR कोड स्कैन करें।',
+      transactionRef: txnRef,
     };
   }
 }
