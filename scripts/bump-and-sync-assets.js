@@ -6,10 +6,35 @@ console.log('🔄 [Version & Assets Sync] Starting automated version bump and ic
 // 1. Read package.json and determine new version
 const pkgPath = path.resolve('package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-const currentVersion = pkg.version || '1.0.9';
+let currentVersion = pkg.version || '1.0.25';
 
-// Parse semver (e.g., 1.0.9 -> 1.0.10)
-const parts = currentVersion.split('.').map(n => parseInt(n, 10));
+// Query GitHub Releases API to guarantee the new version is strictly higher than any published release
+try {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  const ghRes = await fetch('https://api.github.com/repos/pawankabi/courier-rider-payout/releases/latest', {
+    headers: { 'User-Agent': 'CourierPayout-AutoBump', Accept: 'application/vnd.github.v3+json' },
+    signal: controller.signal,
+  });
+  clearTimeout(timer);
+  if (ghRes.ok) {
+    const ghData = await ghRes.json();
+    const rawTag = (ghData.tag_name || ghData.name || '').replace(/^v/i, '').trim();
+    if (rawTag) {
+      const ghP = rawTag.split('.').map((n) => parseInt(n, 10) || 0);
+      const curP = currentVersion.split('.').map((n) => parseInt(n, 10) || 0);
+      if (ghP[2] > curP[2]) {
+        currentVersion = rawTag;
+        console.log(`🌐 GitHub latest release discovered: v${rawTag} (ensuring next version is strictly higher)`);
+      }
+    }
+  }
+} catch (e) {
+  // Offline or timeout fallback to package.json
+}
+
+// Parse semver (e.g., 1.0.24 -> 1.0.25)
+const parts = currentVersion.split('.').map((n) => parseInt(n, 10));
 if (parts.length === 3 && !isNaN(parts[2])) {
   parts[2] += 1;
 } else {
