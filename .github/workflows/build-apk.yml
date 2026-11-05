@@ -71,8 +71,19 @@ jobs:
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "Building Release APKs for Version: v$VERSION_NAME (Code: $VERSION_CODE)"
 
+      - name: Ensure Gradle Wrapper Exists
+        run: |
+          mkdir -p android/gradle/wrapper
+          if [ ! -f "android/gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Fetching official gradle-wrapper.jar..."
+            curl -sSL -o android/gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.14.3/gradle/wrapper/gradle-wrapper.jar || true
+          fi
+
       - name: Make Gradlew Executable
-        run: chmod +x android/gradlew
+        run: |
+          if [ -f "android/gradlew" ]; then
+            chmod +x android/gradlew
+          fi
 
       - name: Accept Android SDK Licenses
         run: |
@@ -81,7 +92,11 @@ jobs:
       - name: Compile Both Release APKs (COD Rider Companion & Admin)
         run: |
           cd android
-          ./gradlew assembleRiderRelease assembleAdminRelease --no-daemon
+          if [ -f "./gradlew" ] && [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            ./gradlew assembleRiderRelease assembleAdminRelease --no-daemon
+          else
+            gradle assembleRiderRelease assembleAdminRelease --no-daemon
+          fi
 
       - name: Collect & Standardize Release APKs
         run: |

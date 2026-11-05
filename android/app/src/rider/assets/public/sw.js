@@ -80,9 +80,6 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "rider-maskable-512x512.png",
     "revision": "55a67bb21c1004ba6d683c8750050d68"
   }, {
-    "url": "rider-logo.svg",
-    "revision": "142e513c97461268beddf40e123b02b1"
-  }, {
     "url": "rider-apple-touch-icon.png",
     "revision": "1c0de51c91118646e8f578c99b671c88"
   }, {
@@ -98,11 +95,8 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "pwa-512x512.png",
     "revision": "6f90c8b47b7b5089dfffc7737da86e62"
   }, {
-    "url": "pwa-192x192.png",
-    "revision": "3d08a186e9382e72f14f687e9063948e"
-  }, {
     "url": "index.html",
-    "revision": "dec2dbdfaec1fb19334e00f61d90bb0d"
+    "revision": "35fa59fa995ba5c34a44f10f951fbd79"
   }, {
     "url": "icon.svg",
     "revision": "71ec083ef2733f3feaf10cff3875f9ce"
@@ -113,16 +107,16 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "admin-logo.svg",
     "revision": "71ec083ef2733f3feaf10cff3875f9ce"
   }, {
-    "url": "assets/web-vdKUBPPj.js",
+    "url": "assets/web-bxZoEDUv.js",
     "revision": null
   }, {
-    "url": "assets/web-DH726uyC.js",
+    "url": "assets/web-QQfrnJg_.js",
     "revision": null
   }, {
-    "url": "assets/web-Ck0E6FQB.js",
+    "url": "assets/web-Dje7w_UV.js",
     "revision": null
   }, {
-    "url": "assets/web-CZFcSUH1.js",
+    "url": "assets/web-C9YO1NlQ.js",
     "revision": null
   }, {
     "url": "assets/vendor-react-jrF7e2F0.js",
@@ -131,25 +125,25 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "assets/vendor-pdf-CUYbDkbv.js",
     "revision": null
   }, {
-    "url": "assets/vendor-firebase-DCl4xqpj.js",
+    "url": "assets/vendor-firebase-BoJiYniB.js",
     "revision": null
   }, {
     "url": "assets/purify.es-DedTAGkB.js",
     "revision": null
   }, {
-    "url": "assets/native--GpQ8t6P.js",
+    "url": "assets/native-CHaqwASl.js",
     "revision": null
   }, {
     "url": "assets/index.es-CsLtj_j5.js",
     "revision": null
   }, {
-    "url": "assets/index-DIRhZTxG.css",
+    "url": "assets/index-D9I61qMm.css",
     "revision": null
   }, {
-    "url": "assets/index-B_vxVEoh.js",
+    "url": "assets/index-CFYfE0o2.js",
     "revision": null
   }, {
-    "url": "assets/base-CnEkfr0R.js",
+    "url": "assets/base-BKv2oA50.js",
     "revision": null
   }, {
     "url": "admin-logo.svg",
@@ -160,9 +154,6 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
   }, {
     "url": "icon.svg",
     "revision": "71ec083ef2733f3feaf10cff3875f9ce"
-  }, {
-    "url": "pwa-192x192.png",
-    "revision": "3d08a186e9382e72f14f687e9063948e"
   }, {
     "url": "pwa-512x512.png",
     "revision": "6f90c8b47b7b5089dfffc7737da86e62"
@@ -178,9 +169,6 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
   }, {
     "url": "rider-apple-touch-icon.png",
     "revision": "1c0de51c91118646e8f578c99b671c88"
-  }, {
-    "url": "rider-logo.svg",
-    "revision": "142e513c97461268beddf40e123b02b1"
   }, {
     "url": "rider-maskable-512x512.png",
     "revision": "55a67bb21c1004ba6d683c8750050d68"
