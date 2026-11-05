@@ -33,8 +33,10 @@ import {
 import { AdminToolsDrawer } from './components/AdminToolsDrawer';
 import { copyAppShareLink, SHARE_SUCCESS_MESSAGE, getRiderStatementUrl } from './utils/shareLink';
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { auth } from './firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
 import { 
+  cleanForFirestore, 
   syncUserProfile, 
   subscribeToUserData, 
   subscribeToCurrentUserDoc,
@@ -78,7 +80,8 @@ import {
   checkSubscriptionLock,
   RiderAdvanceEntry,
   RiderIncentiveEntry,
-  PublicRiderStatement
+  PublicRiderStatement,
+  HubAutoBackupSnapshot
 } from './types';
 import { RiderLedgerStatement } from './components/RiderLedgerStatement';
 import { StatementErrorBoundary } from './components/StatementErrorBoundary';
@@ -111,6 +114,7 @@ import {
   SettlementTabSkeleton,
 } from './components/SkeletonLoaders';
 import { downloadJsonBackup, parseBackupFile } from './utils/backup';
+import { exportAllCodDataForBackup, importAllCodDataFromBackup } from './services/codService';
 import { initKeepAlive } from './utils/keepAlive';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { DailyEntryTab } from './components/DailyEntryTab';
@@ -154,6 +158,19 @@ import { isRiderBuild } from './utils/shareLink';
 import { liveUpdateService, syncLatestManifestToFirestore } from './services/liveUpdateService';
 import { SafetyShieldModal } from './components/SafetyShieldModal';
 import { auditAndHealAllRiderLedgers, takeSafetySnapshot, initAutonomousSafetySentinel } from './services/safetyShield';
+import { TrashRecoveryModal } from './components/TrashRecoveryModal';
+import { CloudBackupsModal } from './components/CloudBackupsModal';
+import { HubProfitLossModal } from './components/HubProfitLossModal';
+import { RiderAttendanceModal } from './components/RiderAttendanceModal';
+import { SecurityPinModal } from './components/SecurityPinModal';
+import { ChangeSecurityPinModal } from './components/ChangeSecurityPinModal';
+import { createAutoCloudBackup } from './services/autoBackupService';
+import { 
+  restoreRiderInFirestore, 
+  restoreDeliveryInFirestore, 
+  restoreAdvanceInFirestore, 
+  restoreIncentiveInFirestore 
+} from './services/firestoreSync';
 
 /**
  * Route Resolver for COD Entry (हिसाब किताब) Standalone Companion Mobile Web App:
@@ -456,6 +473,13 @@ function MainCourierApp() {
   const [isSafetyShieldModalOpen, setIsSafetyShieldModalOpen] = useState(false);
   const [isAdminToolsDrawerOpen, setIsAdminToolsDrawerOpen] = useState(false);
   const [legalPoliciesInitialTab, setLegalPoliciesInitialTab] = useState<PolicyTab>('about');
+  const [isTrashRecoveryOpen, setIsTrashRecoveryOpen] = useState(false);
+  const [isCloudBackupsOpen, setIsCloudBackupsOpen] = useState(false);
+  const [isProfitLossOpen, setIsProfitLossOpen] = useState(false);
+  const [isAttendanceOpen, setIsAttendanceOpen] = useState(false);
+  const [isSecurityPinOpen, setIsSecurityPinOpen] = useState(false);
+  const [securityPinAction, setSecurityPinAction] = useState<(() => void) | null>(null);
+  const [securityPinDescription, setSecurityPinDescription] = useState<string>('');
 
   // Autonomous Background Safety Sentinel:
   // 100% Background and Automatic (Zero user clicks, zero audits, zero refreshes needed).
@@ -482,6 +506,48 @@ function MainCourierApp() {
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
     setLegalPoliciesInitialTab(tab);
     setIsLegalPoliciesModalOpen(true);
+  };
+
+  // Master Security PIN Protection Engine for High-Impact Financial Operations
+  const executeWithPinVerification = (action: () => void | Promise<void>, description: string): Promise<void> => {
+    return new Promise<void>((resolve) => {
+      setSecurityPinDescription(description);
+      setSecurityPinAction(() => async () => {
+        try {
+          await Promise.resolve(action());
+        } finally {
+          resolve();
+        }
+      });
+      setIsSecurityPinOpen(true);
+    });
+  };
+
+  const [isChangePinModalOpen, setIsChangePinModalOpen] = useState(false);
+
+  const handleSaveSecurityPin = async (newPin: string) => {
+    const targetUserId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    const updated: UserRateConfig = {
+      ...userRateConfig,
+      masterSecurityPin: newPin,
+    };
+    setUserRateConfig(updated);
+    saveSettingsToStorage(updated, targetUserId);
+    saveSettingsToStorage(updated);
+
+    if (targetUserId && targetUserId !== 'guest' && db) {
+      try {
+        const userRef = doc(db, 'users', targetUserId);
+        await setDoc(userRef, { rateConfig: cleanForFirestore(updated) }, { merge: true });
+      } catch (err) {
+        console.warn('Error saving new security pin to Firestore:', err);
+      }
+    }
+
+    setToastMessage({
+      text: `मास्टर सुरक्षा पिन सफलतापूर्वक बदल दिया गया! (नया पिन: ${newPin})`,
+      type: 'success',
+    });
   };
 
   // User Permissions & Dynamic Rate Config (Admin Overrides)
@@ -831,17 +897,32 @@ function MainCourierApp() {
   // Force-refresh counter for instantly re-mounting/populating components on backup restore
   const [restoreRefreshKey, setRestoreRefreshKey] = useState(0);
 
-  // Download Backup handler
-  const handleDownloadBackup = () => {
+  // Download Master Hub Backup handler (Payout ledger + daily COD sheets with denominations + audit logs)
+  const handleDownloadBackup = async () => {
+    const targetUserId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    let codExportData = { sheets: [] as any[], auditLogs: [] as any[] };
+    try {
+      codExportData = await exportAllCodDataForBackup(targetUserId);
+    } catch (err) {
+      console.warn('COD backup export note:', err);
+    }
+
     downloadJsonBackup({
       userEmail: currentUser?.email,
       riders,
       entries,
       settlements,
       settings: userRateConfig,
+      codSheets: codExportData.sheets,
+      codAuditLogs: codExportData.auditLogs,
     });
+
+    const codNotice =
+      codExportData.sheets.length > 0
+        ? `, ${codExportData.sheets.length} दैनिक COD शीट्स (नोटों की गिनती व शॉर्टेज सहित)`
+        : '';
     setToastMessage({
-      text: `Backup downloaded: ${entries.length} deliveries, ${riders.length} riders, ${settlements.length} settlements saved to your device.`,
+      text: `मास्टर बैकअप डाउनलोड हुआ: ${entries.length} डिलीवरी, ${riders.length} राइडर्स, ${settlements.length} सेटलमेंट्स${codNotice} आपके डिवाइस में सुरक्षित सेव हो गए।`,
       type: 'success',
     });
   };
@@ -939,11 +1020,28 @@ function MainCourierApp() {
         dbNotice = ' & synced to cloud database';
       }
 
-      // 4. Show success toast with exact count of restored riders
+      // 4. Restore any COD sheets and audit logs present in backup
+      let codRestoreNotice = '';
+      if (Array.isArray(parsed.codSheets) && parsed.codSheets.length > 0) {
+        try {
+          const restoredSheets = await importAllCodDataFromBackup(
+            targetUserId,
+            parsed.codSheets,
+            parsed.codAuditLogs
+          );
+          if (restoredSheets > 0) {
+            codRestoreNotice = `, और ${restoredSheets} दैनिक COD शीट्स`;
+          }
+        } catch (codErr) {
+          console.warn('COD restore notice:', codErr);
+        }
+      }
+
+      // 5. Show success toast with exact count of restored riders
       const entriesNotice = stampedEntries.length > 0 ? `, ${stampedEntries.length} entries` : '';
       const settlementsNotice = stampedSettlements.length > 0 ? `, and ${stampedSettlements.length} settlements` : '';
       setToastMessage({
-        text: `Successfully restored ${stampedRiders.length} riders${entriesNotice}${settlementsNotice}${dbNotice}!`,
+        text: `Successfully restored ${stampedRiders.length} riders${entriesNotice}${settlementsNotice}${codRestoreNotice}${dbNotice}!`,
         type: 'success',
       });
     } catch (err: any) {
@@ -956,6 +1054,108 @@ function MainCourierApp() {
       setIsRestoringBackup(false);
     }
   };
+
+  // Direct 1-Click Restore of an Automated Cloud Snapshot - Protected by Master PIN
+  const handleRestoreCloudSnapshot = async (snapshot: HubAutoBackupSnapshot): Promise<void> => {
+    return executeWithPinVerification(async () => {
+      const targetUserId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+      const targetUserEmail = inspectedUser ? inspectedUser.email : (currentUser?.email || null);
+
+      const stampedRiders = (snapshot.riders || []).map((r, i) => ({
+        ...r,
+        createdBy: targetUserId,
+        createdByEmail: targetUserEmail || '',
+        workspaceId: targetUserId,
+        userId: targetUserId,
+        order: typeof r.order === 'number' ? r.order : i,
+      }));
+
+      const stampedEntries = (snapshot.deliveries || []).map((entry) => ({
+        ...entry,
+        createdBy: targetUserId,
+        createdByEmail: targetUserEmail || '',
+        workspaceId: targetUserId,
+        userId: targetUserId,
+      }));
+
+      const stampedSettlements = (snapshot.settlements || []).map((s) => ({
+        ...s,
+        createdBy: targetUserId,
+        createdByEmail: targetUserEmail || '',
+        workspaceId: targetUserId,
+        userId: targetUserId,
+      }));
+
+      const importedSettings = snapshot.settings;
+
+      saveRidersToStorage(stampedRiders, targetUserId);
+      saveDeliveriesToStorage(stampedEntries, targetUserId);
+      saveSettlementsToStorage(stampedSettlements, targetUserId);
+
+      saveRidersToStorage(stampedRiders);
+      saveDeliveriesToStorage(stampedEntries);
+      saveSettlementsToStorage(stampedSettlements);
+
+      if (importedSettings) {
+        saveSettingsToStorage(importedSettings, targetUserId);
+        saveSettingsToStorage(importedSettings);
+      }
+
+      try {
+        localStorage.removeItem('courier_daily_entry_draft_v1');
+      } catch {}
+
+      setRiders([...stampedRiders]);
+      setEntries([...stampedEntries]);
+      setSettlements([...stampedSettlements]);
+      if (importedSettings) {
+        setUserRateConfig((prev) => ({ ...prev, ...importedSettings }));
+      }
+
+      setRestoreRefreshKey((prev) => prev + 1);
+
+      if (targetUserId && targetUserId !== 'guest') {
+        setSyncStatus('syncing');
+        await batchImportBackupToFirestore(
+          targetUserId,
+          stampedRiders,
+          stampedEntries,
+          stampedSettlements,
+          importedSettings,
+          targetUserEmail
+        );
+        setSyncStatus('synced');
+      }
+
+      if (Array.isArray(snapshot.codSheets) && snapshot.codSheets.length > 0) {
+        try {
+          await importAllCodDataFromBackup(
+            targetUserId,
+            snapshot.codSheets,
+            []
+          );
+        } catch (codErr) {
+          console.warn('COD restore notice:', codErr);
+        }
+      }
+
+      setToastMessage({
+        text: `क्लाउड स्नैपशॉट (${formatDateDisplay(snapshot.date)}) सफलतापूर्वक रीस्टोर हो गया! ${stampedRiders.length} राइडर्स एवं ${stampedEntries.length} डिलीवरी रिकॉर्ड्स अपडेट हो गए।`,
+        type: 'success',
+      });
+    }, `क्लाउड स्नैपशॉट (${formatDateDisplay(snapshot.date)}) से डेटा रीस्टोर करने के लिए 4-अंकों का मास्टर सुरक्षा पिन दर्ज करें:`);
+  };
+
+  // Automated background daily cloud backup
+  useEffect(() => {
+    const effectiveHubId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    if (effectiveHubId && effectiveHubId !== 'guest' && riders.length > 0) {
+      createAutoCloudBackup(effectiveHubId, riders, entries, settlements, userRateConfig).catch((e) => {
+        console.warn('Auto cloud backup background notice:', e);
+      });
+    }
+  }, [inspectedUser, currentUser, riders.length, entries.length, settlements.length]);
+
 
   /**
    * Sync from Old App URL Handler:
@@ -1507,22 +1707,48 @@ function MainCourierApp() {
     }
   };
 
-  // Delete Delivery Entry
-  const handleDeleteEntry = async (id: string) => {
-    const updated = entries.filter((e) => e.id !== id);
+  // Soft-Delete Delivery Entry (Zero Data Loss) - Protected by Master PIN
+  const handleDeleteEntry = async (id: string): Promise<void> => {
+    return executeWithPinVerification(async () => {
+      const updated = entries.map((e) => (e.id === id ? { ...e, isDeleted: true, deletedAt: new Date().toISOString() } : e));
+      updateEntries(updated);
+
+      if (isProUser && targetUid) {
+        setSyncStatus('syncing');
+        try {
+          await deleteDeliveryFromFirestore(targetUid, id);
+          setSyncStatus('synced');
+        } catch (err) {
+          console.error('Error soft-deleting delivery from Firestore', err);
+        }
+      } else {
+        setSyncStatus('local');
+      }
+      setToastMessage({
+        text: 'डिलीवरी सुरक्षित रीसायकल बिन में स्थानांतरित कर दी गई। आवश्यकता पड़ने पर आप इसे 1-क्लिक में रीस्टोर कर सकते हैं।',
+        type: 'info',
+      });
+    }, 'डिलीवरी रिकॉर्ड को रीसायकल बिन (कचरा पेटी) में स्थानांतरित करने के लिए 4-अंकों का मास्टर सुरक्षा पिन दर्ज करें:');
+  };
+
+  // Restore Delivery Entry from Trash
+  const handleRestoreEntry = async (id: string) => {
+    const updated = entries.map((e) => (e.id === id ? { ...e, isDeleted: false, deletedAt: undefined } : e));
     updateEntries(updated);
 
     if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
-        await deleteDeliveryFromFirestore(targetUid, id);
+        await restoreDeliveryInFirestore(targetUid, id);
         setSyncStatus('synced');
       } catch (err) {
-        console.error('Error deleting delivery from Firestore', err);
+        console.error('Error restoring delivery in Firestore', err);
       }
-    } else {
-      setSyncStatus('local');
     }
+    setToastMessage({
+      text: 'डिलीवरी एंट्री सफलतापूर्वक लेजर में बहाल हो गई!',
+      type: 'success',
+    });
   };
 
   // Add Rider
@@ -1618,22 +1844,89 @@ function MainCourierApp() {
     }
   };
 
-  // Delete Rider
-  const handleDeleteRider = async (id: string) => {
-    const updated = riders.filter((r) => r.id !== id);
+  // Soft-Delete Rider (Zero Data Loss) - Protected by Master PIN
+  const handleDeleteRider = async (id: string): Promise<void> => {
+    return executeWithPinVerification(async () => {
+      const updated = riders.map((r) =>
+        r.id === id ? { ...r, isDeleted: true, deletedAt: new Date().toISOString(), active: false, status: 'inactive' as const } : r
+      );
+      updateRiders(updated);
+
+      if (isProUser && targetUid) {
+        setSyncStatus('syncing');
+        try {
+          await deleteRiderFromFirestore(targetUid, id);
+          setSyncStatus('synced');
+        } catch (err) {
+          console.error('Error soft-deleting rider from Firestore', err);
+        }
+      } else {
+        setSyncStatus('local');
+      }
+      setToastMessage({
+        text: 'राइडर सुरक्षित रीसायकल बिन में स्थानांतरित कर दिया गया। कभी भी 1-क्लिक में पुनः सक्रिय किया जा सकता है।',
+        type: 'info',
+      });
+    }, 'राइडर को हटाने/रीसायकल बिन में स्थानांतरित करने के लिए 4-अंकों का मास्टर सुरक्षा पिन दर्ज करें:');
+  };
+
+  // Restore Rider from Trash
+  const handleRestoreRider = async (id: string) => {
+    const updated = riders.map((r) =>
+      r.id === id ? { ...r, isDeleted: false, deletedAt: undefined, active: true, status: 'active' as const } : r
+    );
     updateRiders(updated);
 
     if (isProUser && targetUid) {
       setSyncStatus('syncing');
       try {
-        await deleteRiderFromFirestore(targetUid, id);
+        await restoreRiderInFirestore(targetUid, id);
         setSyncStatus('synced');
       } catch (err) {
-        console.error('Error deleting rider from Firestore', err);
+        console.error('Error restoring rider in Firestore', err);
       }
-    } else {
-      setSyncStatus('local');
     }
+    setToastMessage({
+      text: 'राइडर सफलतापूर्वक बहाल व सक्रिय हो गया!',
+      type: 'success',
+    });
+  };
+
+  // Restore Advance from Trash
+  const handleRestoreAdvance = async (riderId: string, advanceId: string) => {
+    const targetRider = riders.find((r) => r.id === riderId);
+    if (!targetRider) return;
+
+    let restoredAmt = 0;
+    const updatedAdvances = (targetRider.advances || []).map((adv) => {
+      if (adv.id === advanceId) {
+        restoredAmt = Number(adv.amount) || 0;
+        return { ...adv, isDeleted: false, deletedAt: undefined, status: 'UNPAID' };
+      }
+      return adv;
+    });
+
+    const updatedRider: Rider = {
+      ...targetRider,
+      advances: updatedAdvances,
+      totalAdvance: (Number(targetRider.totalAdvance) || 0) + restoredAmt,
+    };
+
+    const updatedRiders = riders.map((r) => (r.id === riderId ? updatedRider : r));
+    updateRiders(updatedRiders);
+
+    if (isProUser && targetUid) {
+      try {
+        await restoreAdvanceInFirestore(targetUid, advanceId);
+        await saveRiderToFirestore(targetUid, updatedRider);
+      } catch (err) {
+        console.error('Error restoring advance in Firestore', err);
+      }
+    }
+    setToastMessage({
+      text: 'अग्रिम भुगतान (Advance) सफलतापूर्वक बहाल हो गया!',
+      type: 'success',
+    });
   };
 
   // Mark all entries as Paid with optional advance deduction
@@ -1864,51 +2157,53 @@ function MainCourierApp() {
     });
   };
 
-  // Delete Rider Advance Entry
-  const handleDeleteRiderAdvance = async (updatedRider: Rider, advanceId: string) => {
-    const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
-    const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+  // Delete Rider Advance Entry - Protected by Master PIN
+  const handleDeleteRiderAdvance = async (updatedRider: Rider, advanceId: string): Promise<void> => {
+    return executeWithPinVerification(async () => {
+      const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+      const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
-    setRiders((prev) => {
-      const next = prev.map((r) => (r.id === updatedRider.id ? updatedRider : r));
-      saveRidersToStorage(next, targetUid);
-      return next;
-    });
+      setRiders((prev) => {
+        const next = prev.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+        saveRidersToStorage(next, targetUid);
+        return next;
+      });
 
-    // 1. Remove advance document from Firestore
-    try {
-      await deleteAdvanceFromFirestore(targetUid || '', advanceId);
-    } catch (err) {
-      console.warn('Error deleting advance from Firestore:', err);
-    }
-
-    if (isProUser && targetUid) {
+      // 1. Remove advance document from Firestore
       try {
-        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+        await deleteAdvanceFromFirestore(targetUid || '', advanceId);
       } catch (err) {
-        console.warn('Error updating rider after advance delete:', err);
+        console.warn('Error deleting advance from Firestore:', err);
       }
-    } else {
-      setSyncStatus('local');
-    }
 
-    try {
-      await syncPublicRiderStatement(
-        updatedRider,
-        updatedRider.advances || [],
-        settlements,
-        entries,
-        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
-        userRateConfig.hubSignature
-      );
-    } catch (err) {
-      console.warn('Error syncing public statement:', err);
-    }
+      if (isProUser && targetUid) {
+        try {
+          await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+        } catch (err) {
+          console.warn('Error updating rider after advance delete:', err);
+        }
+      } else {
+        setSyncStatus('local');
+      }
 
-    setToastMessage({
-      text: `एडवांस एंट्री सफलतापूर्वक हटाई गई।`,
-      type: 'info',
-    });
+      try {
+        await syncPublicRiderStatement(
+          updatedRider,
+          updatedRider.advances || [],
+          settlements,
+          entries,
+          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+          userRateConfig.hubSignature
+        );
+      } catch (err) {
+        console.warn('Error syncing public statement:', err);
+      }
+
+      setToastMessage({
+        text: `एडवांस एंट्री सफलतापूर्वक हटाई गई।`,
+        type: 'info',
+      });
+    }, 'राइडर का एडवांस हटाने के लिए 4-अंकों का मास्टर सुरक्षा पिन दर्ज करें:');
   };
 
   // Save Rider Incentive / Bonus Entry, dispatch background SMS, and sync public statement
@@ -2087,66 +2382,68 @@ function MainCourierApp() {
     });
   };
 
-  // Reset Rider Account (Clear all advances, incentives, and set balance to ₹0)
-  const handleResetRiderAccount = async (riderId: string) => {
-    const targetRider = riders.find((r) => r.id === riderId);
-    if (!targetRider) return;
+  // Reset Rider Account (Clear all advances, incentives, and set balance to ₹0) - Protected by Master PIN
+  const handleResetRiderAccount = async (riderId: string): Promise<void> => {
+    return executeWithPinVerification(async () => {
+      const targetRider = riders.find((r) => r.id === riderId);
+      if (!targetRider) return;
 
-    const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
-    const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+      const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+      const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
-    // Reset rider in local state
-    const updatedRider: Rider = {
-      ...targetRider,
-      totalAdvance: 0,
-      totalIncentive: 0,
-      advances: [],
-      incentives: [],
-    };
+      // Reset rider in local state
+      const updatedRider: Rider = {
+        ...targetRider,
+        totalAdvance: 0,
+        totalIncentive: 0,
+        advances: [],
+        incentives: [],
+      };
 
-    const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
-    setRiders(updatedRiders);
-    saveRidersToStorage(updatedRiders, targetUid);
+      const updatedRiders = riders.map((r) => (r.id === updatedRider.id ? updatedRider : r));
+      setRiders(updatedRiders);
+      saveRidersToStorage(updatedRiders, targetUid);
 
-    // Flush corrupt local storage snapshots so fresh server data takes immediate effect
-    try {
-      localStorage.removeItem(`cp_stmt_${riderId}`);
-      sessionStorage.removeItem(`cp_stmt_${riderId}`);
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const k = localStorage.key(i);
-        if (k && (k.includes(riderId) || k.includes('statement') || k.includes('ledger'))) {
-          localStorage.removeItem(k);
+      // Flush corrupt local storage snapshots so fresh server data takes immediate effect
+      try {
+        localStorage.removeItem(`cp_stmt_${riderId}`);
+        sessionStorage.removeItem(`cp_stmt_${riderId}`);
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.includes(riderId) || k.includes('statement') || k.includes('ledger'))) {
+            localStorage.removeItem(k);
+          }
         }
+      } catch {}
+
+      // Delete docs and reset in Firestore
+      try {
+        await resetRiderAccountInFirestore(targetUid || '', riderId);
+        if (isProUser && targetUid) {
+          await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+        }
+      } catch (err) {
+        console.warn('Error resetting rider account in Firestore:', err);
       }
-    } catch {}
 
-    // Delete docs and reset in Firestore
-    try {
-      await resetRiderAccountInFirestore(targetUid || '', riderId);
-      if (isProUser && targetUid) {
-        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
+      try {
+        await syncPublicRiderStatement(
+          updatedRider,
+          [],
+          settlements,
+          entries,
+          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+          userRateConfig.hubSignature
+        );
+      } catch (err) {
+        console.warn('Error syncing reset statement:', err);
       }
-    } catch (err) {
-      console.warn('Error resetting rider account in Firestore:', err);
-    }
 
-    try {
-      await syncPublicRiderStatement(
-        updatedRider,
-        [],
-        settlements,
-        entries,
-        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
-        userRateConfig.hubSignature
-      );
-    } catch (err) {
-      console.warn('Error syncing reset statement:', err);
-    }
-
-    setToastMessage({
-      text: `${targetRider.name} का खाता सफलतापूर्वक रीसेट (₹0) कर दिया गया!`,
-      type: 'success',
-    });
+      setToastMessage({
+        text: `${targetRider.name} का खाता सफलतापूर्वक रीसेट (₹0) कर दिया गया!`,
+        type: 'success',
+      });
+    }, 'राइडर का पूरा खाता और बैलेंस रीसेट (₹0) करने के लिए 4-अंकों का मास्टर सुरक्षा पिन दर्ज करें:');
   };
 
   // Toggle single entry status
@@ -2222,23 +2519,24 @@ function MainCourierApp() {
   // Immediately hides and purges any riders or entries created by other external Gmail accounts!
   const dashboardRiders = useMemo(() => {
     if (!currentUser && !inspectedUser) {
-      return riders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
+      return riders.filter((r) => !r.isDeleted && (!r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest'));
     }
 
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
-    return riders.filter((rider) => isEntityOwnedByUser(rider, currentOwnerId, currentOwnerEmail));
+    return riders.filter((rider) => !rider.isDeleted && isEntityOwnedByUser(rider, currentOwnerId, currentOwnerEmail));
   }, [riders, currentUser, inspectedUser]);
 
   // Ensure entries on the main dashboard only belong to visible dashboard riders and user ownership
   const dashboardEntries = useMemo(() => {
-    if (!currentUser && !inspectedUser) return entries;
+    if (!currentUser && !inspectedUser) return entries.filter((e) => !e.isDeleted);
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
     const allowedRiderIds = new Set(dashboardRiders.map((r) => r.id));
 
     return entries.filter((e) => {
+      if (e.isDeleted) return false;
       if (e.riderId && !allowedRiderIds.has(e.riderId)) {
         return false;
       }
@@ -2248,18 +2546,32 @@ function MainCourierApp() {
 
   // Ensure settlements on the main dashboard only belong to visible dashboard riders and user ownership
   const dashboardSettlements = useMemo(() => {
-    if (!currentUser && !inspectedUser) return settlements;
+    if (!currentUser && !inspectedUser) return settlements.filter((s) => !s.isDeleted);
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
     const allowedRiderIds = new Set(dashboardRiders.map((r) => r.id));
 
     return settlements.filter((s) => {
+      if (s.isDeleted) return false;
       if (s.riderId && !allowedRiderIds.has(s.riderId)) {
         return false;
       }
       return isEntityOwnedByUser(s, currentOwnerId, currentOwnerEmail);
     });
   }, [settlements, dashboardRiders, currentUser, inspectedUser]);
+
+  // Total count of deleted items in Recycle Bin (Zero Data Loss)
+  const totalTrashCount = useMemo(() => {
+    const delEnt = entries.filter((e) => Boolean(e.isDeleted)).length;
+    const delRid = riders.filter((r) => Boolean(r.isDeleted)).length;
+    let delAdv = 0;
+    riders.forEach((r) => {
+      (r.advances || []).forEach((a) => {
+        if (a.isDeleted || a.status === 'DELETED' || a.status === 'RESET_ARCHIVED') delAdv++;
+      });
+    });
+    return delEnt + delRid + delAdv;
+  }, [entries, riders]);
 
   // Live master fleet advances aggregated from dashboard riders - EXACT data source powering Advances Tab
   const advances = useMemo(() => {
@@ -2574,6 +2886,7 @@ function MainCourierApp() {
               onEnableCloudBackup={() => openSubscriptionModal('cloud_backup')}
               onOpenLegalPolicies={() => handleOpenLegalPolicies('about')}
               onOpenProfileSettings={() => setIsProfileModalOpen(true)}
+              onOpenChangeSecurityPin={() => setIsChangePinModalOpen(true)}
             />
           </div>
         </div>
@@ -2588,14 +2901,59 @@ function MainCourierApp() {
               <span className="text-slate-600 hidden sm:inline">•</span>
               <span className="text-slate-400 hidden sm:inline">₹{userRateConfig?.defaultBaseRate ?? 13} बेस रेट</span>
             </div>
-            <div className="flex items-center gap-2 text-slate-400 text-[11px] shrink-0">
-              <span>{dashboardRiders.length} राइडर्स</span>
-              <span className="text-slate-600">•</span>
-              <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                <span>🛡️</span>
-                <span className="hidden sm:inline">100% ऑटो-सुरक्षा सक्रिय</span>
-                <span className="sm:hidden">ऑटो-सुरक्षित</span>
-              </span>
+            <div className="flex items-center gap-2 text-slate-400 text-[11px] shrink-0 flex-wrap">
+              <span className="hidden sm:inline">{dashboardRiders.length} राइडर्स</span>
+              <span className="text-slate-600 hidden sm:inline">•</span>
+
+              {/* Quick Operation Actions */}
+              <button
+                type="button"
+                onClick={() => setIsAttendanceOpen(true)}
+                className="px-2 py-0.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700/80 hover:border-slate-500 flex items-center gap-1 font-semibold transition active:scale-95 cursor-pointer text-[11px]"
+                title="दैनिक राइडर हाजिरी व बैग नंबर आवंटन"
+              >
+                <span>📋</span>
+                <span>हाजिरी</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsProfitLossOpen(true)}
+                className="px-2 py-0.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-800/60 hover:border-emerald-600 flex items-center gap-1 font-semibold transition active:scale-95 cursor-pointer text-[11px]"
+                title="दैनिक हब लाभ-हानि एवं खर्च हिसाब"
+              >
+                <span>📈</span>
+                <span>P&L</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsCloudBackupsOpen(true)}
+                className="px-2 py-0.5 rounded-lg bg-blue-950/70 hover:bg-blue-900/80 text-blue-300 border border-blue-800/60 hover:border-blue-600 flex items-center gap-1 font-semibold transition active:scale-95 cursor-pointer text-[11px]"
+                title="स्वचालित क्लाउड बैकअप स्नैपशॉट्स"
+              >
+                <span>☁️</span>
+                <span className="hidden sm:inline">बैकअप</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsTrashRecoveryOpen(true)}
+                className={`px-2 py-0.5 rounded-lg border flex items-center gap-1 font-semibold transition active:scale-95 cursor-pointer text-[11px] ${
+                  totalTrashCount > 0
+                    ? 'bg-rose-950/80 border-rose-600/70 text-rose-300 hover:bg-rose-900'
+                    : 'bg-slate-800/70 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+                title="रीसायकल बिन एवं डाटा रिकवरी (0% डाटा हानि)"
+              >
+                <span>🗑️</span>
+                <span>कचरा पेटी</span>
+                {totalTrashCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-[10px] font-black text-white leading-none">
+                    {totalTrashCount}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -3140,6 +3498,77 @@ function MainCourierApp() {
         onCheckLiveUpdate={handleManualCheckLiveUpdate}
         isCheckingUpdate={isCheckingUpdate}
         activeHubName={activeHubName}
+        onOpenTrashRecovery={() => setIsTrashRecoveryOpen(true)}
+        onOpenCloudBackups={() => setIsCloudBackupsOpen(true)}
+        onOpenProfitLoss={() => setIsProfitLossOpen(true)}
+        onOpenAttendance={() => setIsAttendanceOpen(true)}
+        onOpenChangeSecurityPin={() => setIsChangePinModalOpen(true)}
+      />
+
+      {/* Zero Data Loss - Recycle Bin & Recovery Modal */}
+      <TrashRecoveryModal
+        isOpen={isTrashRecoveryOpen}
+        onClose={() => setIsTrashRecoveryOpen(false)}
+        riders={riders}
+        entries={entries}
+        onRestoreRider={handleRestoreRider}
+        onRestoreEntry={handleRestoreEntry}
+        onRestoreAdvance={handleRestoreAdvance}
+      />
+
+      {/* Automated Daily Cloud Snapshots Modal */}
+      <CloudBackupsModal
+        isOpen={isCloudBackupsOpen}
+        onClose={() => setIsCloudBackupsOpen(false)}
+        hubId={targetUid || 'guest'}
+        riders={riders}
+        entries={entries}
+        settlements={settlements}
+        settings={userRateConfig}
+        onRestoreSnapshot={handleRestoreCloudSnapshot}
+      />
+
+      {/* Hub Net Profit & Loss Ledger Modal */}
+      <HubProfitLossModal
+        isOpen={isProfitLossOpen}
+        onClose={() => setIsProfitLossOpen(false)}
+        hubId={targetUid || 'guest'}
+        entries={entries}
+        defaultCompanyRate={userRateConfig.companyRatePerParcel || 18}
+      />
+
+      {/* Rider Daily Attendance & Bag Allocation Modal */}
+      <RiderAttendanceModal
+        isOpen={isAttendanceOpen}
+        onClose={() => setIsAttendanceOpen(false)}
+        hubId={targetUid || 'guest'}
+        riders={riders}
+      />
+
+      {/* Master Security PIN Modal */}
+      <SecurityPinModal
+        isOpen={isSecurityPinOpen}
+        onClose={() => {
+          setIsSecurityPinOpen(false);
+          setSecurityPinAction(null);
+        }}
+        onSuccess={() => {
+          setIsSecurityPinOpen(false);
+          if (securityPinAction) {
+            securityPinAction();
+            setSecurityPinAction(null);
+          }
+        }}
+        description={securityPinDescription}
+        configuredPin={userRateConfig.masterSecurityPin || '8409'}
+      />
+
+      {/* Change Master Security PIN Modal */}
+      <ChangeSecurityPinModal
+        isOpen={isChangePinModalOpen}
+        onClose={() => setIsChangePinModalOpen(false)}
+        currentPin={userRateConfig.masterSecurityPin || '8409'}
+        onSavePin={handleSaveSecurityPin}
       />
 
       {/* Firebase Authentication Modal */}
@@ -3220,6 +3649,7 @@ function MainCourierApp() {
         onOpenSubscription={() => openSubscriptionModal('manual')}
         hubName={activeHubName}
         isVerifiedHub={isVerifiedHub}
+        onOpenChangeSecurityPin={() => setIsChangePinModalOpen(true)}
       />
 
       {/* In-App Khatabook Statement / Ledger Screen Overlay with sticky top Close/Back button */}

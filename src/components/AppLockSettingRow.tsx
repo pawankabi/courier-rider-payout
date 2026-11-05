@@ -27,11 +27,6 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
   onStatusChanged,
   className = '',
 }) => {
-  // Never show on Web browsers
-  if (!isNativeAndroid()) {
-    return null;
-  }
-
   const [enabled, setEnabled] = useState<boolean>(() => isAppLockEnabled());
   const [isChanging, setIsChanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +34,7 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
   const [biometryInfo, setBiometryInfo] = useState<BiometryStatus | null>(null);
 
   useEffect(() => {
+    if (!isNativeAndroid()) return;
     checkBiometryStatus().then((status) => {
       setBiometryInfo(status);
     });
@@ -55,6 +51,11 @@ export const AppLockSettingRow: React.FC<AppLockSettingRowProps> = ({
       window.removeEventListener('courier-payout:app-lock-changed', handleLockChanged);
     };
   }, []);
+
+  // Never render on Web browsers
+  if (!isNativeAndroid()) {
+    return null;
+  }
 
   const handleToggle = async () => {
     if (isChanging) return;

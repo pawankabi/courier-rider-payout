@@ -18,7 +18,8 @@ import {
   CloudDownload,
   CreditCard,
   Scale,
-  Fingerprint
+  Fingerprint,
+  KeyRound
 } from 'lucide-react';
 import { auth } from '../firebase';
 import { AppLockSettingRow } from './AppLockSettingRow';
@@ -38,6 +39,7 @@ interface Props {
   onEnableCloudBackup?: () => void;
   onOpenLegalPolicies?: () => void;
   onOpenProfileSettings?: () => void;
+  onOpenChangeSecurityPin?: () => void;
 }
 
 export const UserAccountMenu: React.FC<Props> = ({ 
@@ -52,7 +54,8 @@ export const UserAccountMenu: React.FC<Props> = ({
   onOpenSubscription,
   onEnableCloudBackup,
   onOpenLegalPolicies,
-  onOpenProfileSettings
+  onOpenProfileSettings,
+  onOpenChangeSecurityPin
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -266,6 +269,20 @@ export const UserAccountMenu: React.FC<Props> = ({
             >
               <UserIcon className="w-3.5 h-3.5 text-blue-400" />
               <span>Profile & Security Settings</span>
+            </button>
+          )}
+
+          {/* Master Security PIN Change action */}
+          {onOpenChangeSecurityPin && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onOpenChangeSecurityPin();
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
+              <span>मास्टर सुरक्षा पिन बदलें (Change PIN)</span>
             </button>
           )}
 

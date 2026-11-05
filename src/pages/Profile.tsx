@@ -33,6 +33,7 @@ interface ProfileProps {
   onOpenSubscription?: () => void;
   hubName?: string;
   isVerifiedHub?: boolean;
+  onOpenChangeSecurityPin?: () => void;
 }
 
 export const Profile: React.FC<ProfileProps> = ({ 
@@ -41,6 +42,7 @@ export const Profile: React.FC<ProfileProps> = ({
   onOpenSubscription,
   hubName,
   isVerifiedHub = false,
+  onOpenChangeSecurityPin,
 }) => {
   const [appLockOn, setAppLockOn] = useState<boolean>(() => isAppLockEnabled());
   const [isVerifying, setIsVerifying] = useState(false);
@@ -307,6 +309,38 @@ export const Profile: React.FC<ProfileProps> = ({
             <span className="leading-tight">{feedbackMessage.text}</span>
           </div>
         )}
+      </div>
+
+      {/* Master Security PIN Card */}
+      <div className="p-5 rounded-2xl bg-slate-850 border border-slate-750 space-y-3 shadow-lg">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-xl bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">
+              <KeyRound className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-white text-sm">
+                मास्टर सुरक्षा पिन (Master Security PIN)
+              </h3>
+              <p className="text-xs text-slate-400">
+                खाता रीसेट, डिलीट व बैकअप रीस्टोर करने का 4-अंकों का गुप्त पिन
+              </p>
+            </div>
+          </div>
+          {onOpenChangeSecurityPin && (
+            <button
+              type="button"
+              onClick={onOpenChangeSecurityPin}
+              className="py-1.5 px-3 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 text-xs font-bold flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>पिन बदलें (Change PIN)</span>
+            </button>
+          )}
+        </div>
+        <div className="text-[11px] text-slate-400 p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+          प्रारंभिक डिफ़ॉल्ट पिन: <span className="font-mono text-white font-bold">8409</span> • किसी भी वित्तीय रिकॉर्ड के सुरक्षित संपादन के लिए आवश्यक
+        </div>
       </div>
 
       {/* Cloud & Subscription Card */}

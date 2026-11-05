@@ -1,9 +1,9 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
-import App from './App.tsx';
+import App from './App';
 import './index.css';
 
-import { liveUpdateService } from './services/liveUpdateService.ts';
+import { liveUpdateService } from './services/liveUpdateService';
 
 // Auto-register service worker in production builds for instant PWA cache loading,
 // and trigger immediate background updates for installed riders and admin without needing APK re-downloads.
@@ -67,7 +67,7 @@ if (import.meta.env.PROD && typeof window !== 'undefined') {
 }
 
 
-import { AppErrorBoundary } from './components/AppErrorBoundary.tsx';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

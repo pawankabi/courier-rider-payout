@@ -19,6 +19,10 @@ export interface RiderAdvanceEntry {
   status?: 'PAID' | 'UNPAID' | string;
   isRecovery?: boolean; // Cash received from rider / advance recovery (Credit)
   type?: 'advance' | 'recovery';
+  isDeleted?: boolean; // Soft-delete flag (Zero data loss)
+  deletedAt?: string;
+  deletedBy?: string;
+  deleteReason?: string;
 }
 
 export interface RiderIncentiveEntry {
@@ -38,6 +42,10 @@ export interface RiderIncentiveEntry {
   settledInPayoutId?: string;
   status?: 'PAID' | 'UNPAID' | string;
   source?: 'manual' | 'surplus';
+  isDeleted?: boolean; // Soft-delete flag (Zero data loss)
+  deletedAt?: string;
+  deletedBy?: string;
+  deleteReason?: string;
 }
 
 export interface Rider {
@@ -62,6 +70,10 @@ export interface Rider {
   advances?: RiderAdvanceEntry[]; // Detailed advance payment records
   totalIncentive?: number; // Running incentive & bonus earnings
   incentives?: RiderIncentiveEntry[]; // Detailed incentive & bonus records
+  isDeleted?: boolean; // Soft-delete flag (Zero data loss)
+  deletedAt?: string;
+  deletedBy?: string;
+  deleteReason?: string;
 }
 
 export interface PublicRiderStatement {
@@ -128,6 +140,10 @@ export interface DeliveryEntry {
   createdByEmail?: string;
   workspaceId?: string;
   userId?: string;
+  isDeleted?: boolean; // Soft-delete flag (Zero data loss)
+  deletedAt?: string;
+  deletedBy?: string;
+  deleteReason?: string;
 }
 
 export interface SettlementRecord {
@@ -156,6 +172,10 @@ export interface SettlementRecord {
   openingBalanceType?: 'payable' | 'rider_debt' | 'zero';
   settledIncentiveIds?: string[];
   settledAdvanceIds?: string[];
+  isDeleted?: boolean; // Soft-delete flag (Zero data loss)
+  deletedAt?: string;
+  deletedBy?: string;
+  deleteReason?: string;
 }
 
 export type TabType = 'entry' | 'riders' | 'advance' | 'incentive' | 'reports' | 'settlement' | 'festivals' | 'admin';
@@ -205,6 +225,8 @@ export interface UserRateConfig {
   minParcelThreshold?: number; // parcel minimum for incentive (e.g. 0 or 80)
   hubSignature?: string; // Custom Hub / Business Signature (e.g. "सरायकेला कूरियर डिलीवरी टीम")
   hubUpiId?: string; // Custom Hub UPI ID for direct rider GPay / PhonePe / Paytm online collection (e.g. "hub@okaxis" or "9876543210@ybl")
+  companyRatePerParcel?: number; // Company contract payout per parcel (e.g. ₹18) for P&L calculations
+  masterSecurityPin?: string; // Master Security PIN for sensitive financial operations (default '8409')
 }
 
 export const DEFAULT_USER_RATE_CONFIG: UserRateConfig = {
@@ -214,7 +236,53 @@ export const DEFAULT_USER_RATE_CONFIG: UserRateConfig = {
   minParcelThreshold: 0,
   hubSignature: '',
   hubUpiId: '',
+  companyRatePerParcel: 18,
+  masterSecurityPin: '8409',
 };
+
+export interface HubAutoBackupSnapshot {
+  id: string;
+  date: string; // YYYY-MM-DD
+  createdAt: string; // ISO
+  createdBy: string;
+  hubId: string;
+  summary: {
+    totalRiders: number;
+    totalDeliveries: number;
+    totalSettlements: number;
+    totalCodSheets: number;
+    totalCodAmount: number;
+    totalCashDeposited: number;
+  };
+  riders: Rider[];
+  deliveries: DeliveryEntry[];
+  settlements: SettlementRecord[];
+  codSheets?: DailyCodSheetData[];
+  settings?: any;
+}
+
+export interface RiderAttendanceRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+  riderId: string;
+  riderName: string;
+  status: 'PRESENT' | 'ABSENT' | 'HALF_DAY';
+  markedAt: string; // ISO
+  markedBy?: string;
+  bagNumber?: string;
+  assignedParcelsCount?: number;
+  notes?: string;
+}
+
+export interface HubDailyExpenseRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+  category: 'FUEL' | 'OFFICE_RENT' | 'STAFF_TEA_SNACKS' | 'MAINTENANCE' | 'OTHER';
+  description: string;
+  amount: number;
+  paidBy?: string;
+  createdAt: string;
+}
 
 export type UserPlanType = 'free' | 'paid';
 export type UserPaymentStatus = 'active' | 'expiring_soon' | 'expired' | 'verification_pending' | 'awaiting_approval';

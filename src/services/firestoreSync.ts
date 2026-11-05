@@ -2083,15 +2083,44 @@ export async function saveRiderToFirestore(
 }
 
 /**
- * Delete Rider from isolated user workspace
+ * Soft-Delete Rider from user workspace (Zero Data Loss - Never hard deletes)
  */
 export async function deleteRiderFromFirestore(userId: string, riderId: string): Promise<void> {
-  if (!userId) return;
-  const workspaceRef = doc(db, 'workspaces', userId, 'riders', riderId);
-  await deleteDoc(workspaceRef).catch(() => {});
+  if (!userId || !riderId) return;
+  const softDeletePayload = {
+    isDeleted: true,
+    deletedAt: new Date().toISOString(),
+    active: false,
+    status: 'inactive' as const,
+  };
+  try {
+    const workspaceRef = doc(db, 'workspaces', userId, 'riders', riderId);
+    await setDoc(workspaceRef, softDeletePayload, { merge: true });
+  } catch {}
   try {
     const rootRef = doc(db, 'riders', riderId);
-    await deleteDoc(rootRef).catch(() => {});
+    await setDoc(rootRef, softDeletePayload, { merge: true });
+  } catch {}
+}
+
+/**
+ * Restore soft-deleted Rider back to active list
+ */
+export async function restoreRiderInFirestore(userId: string, riderId: string): Promise<void> {
+  if (!userId || !riderId) return;
+  const restorePayload = {
+    isDeleted: false,
+    deletedAt: null,
+    active: true,
+    status: 'active' as const,
+  };
+  try {
+    const workspaceRef = doc(db, 'workspaces', userId, 'riders', riderId);
+    await setDoc(workspaceRef, restorePayload, { merge: true });
+  } catch {}
+  try {
+    const rootRef = doc(db, 'riders', riderId);
+    await setDoc(rootRef, restorePayload, { merge: true });
   } catch {}
 }
 
@@ -2140,15 +2169,47 @@ export async function saveDeliveryToFirestore(
 }
 
 /**
- * Delete Delivery Entry from isolated user workspace
+ * Soft-Delete Delivery Entry from user workspace (Zero Data Loss - Never hard deletes)
  */
 export async function deleteDeliveryFromFirestore(
   userId: string,
   entryId: string
 ): Promise<void> {
-  if (!userId) return;
-  const workspaceRef = doc(db, 'workspaces', userId, 'entries', entryId);
-  await deleteDoc(workspaceRef).catch(() => {});
+  if (!userId || !entryId) return;
+  const softDeletePayload = {
+    isDeleted: true,
+    deletedAt: new Date().toISOString(),
+  };
+  try {
+    const workspaceRef = doc(db, 'workspaces', userId, 'entries', entryId);
+    await setDoc(workspaceRef, softDeletePayload, { merge: true });
+  } catch {}
+  try {
+    const rootRef = doc(db, 'deliveries', entryId);
+    await setDoc(rootRef, softDeletePayload, { merge: true });
+  } catch {}
+}
+
+/**
+ * Restore soft-deleted Delivery Entry back to active entries list
+ */
+export async function restoreDeliveryInFirestore(
+  userId: string,
+  entryId: string
+): Promise<void> {
+  if (!userId || !entryId) return;
+  const restorePayload = {
+    isDeleted: false,
+    deletedAt: null,
+  };
+  try {
+    const workspaceRef = doc(db, 'workspaces', userId, 'entries', entryId);
+    await setDoc(workspaceRef, restorePayload, { merge: true });
+  } catch {}
+  try {
+    const rootRef = doc(db, 'deliveries', entryId);
+    await setDoc(rootRef, restorePayload, { merge: true });
+  } catch {}
 }
 
 /**
@@ -3168,7 +3229,7 @@ export async function updateIncentiveInFirestore(
 }
 
 /**
- * Delete advance document from Firestore root and workspace collections
+ * Soft-Delete advance document from Firestore (Zero Data Loss - Never hard deletes)
  */
 export async function deleteAdvanceFromFirestore(
   userId: string,
@@ -3176,52 +3237,68 @@ export async function deleteAdvanceFromFirestore(
 ): Promise<void> {
   if (!advanceId) return;
   const cleanId = advanceId.replace(/^adv-/, '');
+  const softDeletePayload = {
+    isDeleted: true,
+    deletedAt: new Date().toISOString(),
+    status: 'DELETED',
+  };
 
-  // 1. Direct doc delete by ID
   try {
-    await deleteDoc(doc(db, 'advances', cleanId));
-  } catch (err) {
-    console.warn('Direct /advances cleanId delete notice:', err);
-  }
+    await setDoc(doc(db, 'advances', cleanId), softDeletePayload, { merge: true });
+  } catch {}
   if (cleanId !== advanceId) {
     try {
-      await deleteDoc(doc(db, 'advances', advanceId));
+      await setDoc(doc(db, 'advances', advanceId), softDeletePayload, { merge: true });
     } catch {}
   }
-
-  // 2. Query any doc matching this id in 'advances' collection
-  try {
-    const q1 = query(collection(db, 'advances'), where('id', 'in', [cleanId, advanceId]));
-    const snap1 = await getDocs(q1);
-    for (const d of snap1.docs) {
-      await deleteDoc(d.ref).catch(() => {});
-    }
-  } catch {}
-
-  // 3. User workspace subcollections
   if (userId) {
     try {
-      await deleteDoc(doc(db, 'workspaces', userId, 'advances', cleanId));
+      await setDoc(doc(db, 'workspaces', userId, 'advances', cleanId), softDeletePayload, { merge: true });
     } catch {}
     if (cleanId !== advanceId) {
       try {
-        await deleteDoc(doc(db, 'workspaces', userId, 'advances', advanceId));
+        await setDoc(doc(db, 'workspaces', userId, 'advances', advanceId), softDeletePayload, { merge: true });
       } catch {}
     }
   }
-
-  // 4. Also check collectionGroup('advances')
-  try {
-    const qCg = query(collectionGroup(db, 'advances'), where('id', 'in', [cleanId, advanceId]));
-    const snapCg = await getDocs(qCg);
-    for (const d of snapCg.docs) {
-      await deleteDoc(d.ref).catch(() => {});
-    }
-  } catch {}
 }
 
 /**
- * Delete incentive document from Firestore root and workspace collections
+ * Restore soft-deleted advance document back to active ledger
+ */
+export async function restoreAdvanceInFirestore(
+  userId: string,
+  advanceId: string
+): Promise<void> {
+  if (!advanceId) return;
+  const cleanId = advanceId.replace(/^adv-/, '');
+  const restorePayload = {
+    isDeleted: false,
+    deletedAt: null,
+    status: 'UNPAID',
+  };
+  try {
+    await setDoc(doc(db, 'advances', cleanId), restorePayload, { merge: true });
+  } catch {}
+  if (cleanId !== advanceId) {
+    try {
+      await setDoc(doc(db, 'advances', advanceId), restorePayload, { merge: true });
+    } catch {}
+  }
+  if (userId) {
+    try {
+      await setDoc(doc(db, 'workspaces', userId, 'advances', cleanId), restorePayload, { merge: true });
+    } catch {}
+    if (cleanId !== advanceId) {
+      try {
+        await setDoc(doc(db, 'workspaces', userId, 'advances', advanceId), restorePayload, { merge: true });
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Soft-Delete incentive document from Firestore root and workspace collections (Zero Data Loss)
  */
 export async function deleteIncentiveFromFirestore(
   userId: string,
@@ -3229,68 +3306,89 @@ export async function deleteIncentiveFromFirestore(
 ): Promise<void> {
   if (!incentiveId) return;
   const cleanId = incentiveId.replace(/^inc-/, '');
+  const softDeletePayload = {
+    isDeleted: true,
+    deletedAt: new Date().toISOString(),
+    status: 'DELETED',
+  };
 
-  // 1. Direct doc delete
   try {
-    await deleteDoc(doc(db, 'incentives', cleanId));
-  } catch (err) {
-    console.warn('Direct /incentives cleanId delete notice:', err);
-  }
+    await setDoc(doc(db, 'incentives', cleanId), softDeletePayload, { merge: true });
+  } catch {}
   if (cleanId !== incentiveId) {
     try {
-      await deleteDoc(doc(db, 'incentives', incentiveId));
+      await setDoc(doc(db, 'incentives', incentiveId), softDeletePayload, { merge: true });
     } catch {}
   }
-
-  // 2. Query matching in 'incentives' collection
-  try {
-    const q1 = query(collection(db, 'incentives'), where('id', 'in', [cleanId, incentiveId]));
-    const snap1 = await getDocs(q1);
-    for (const d of snap1.docs) {
-      await deleteDoc(d.ref).catch(() => {});
-    }
-  } catch {}
-
-  // 3. Delete from workspace
   if (userId) {
     try {
-      await deleteDoc(doc(db, 'workspaces', userId, 'incentives', cleanId));
+      await setDoc(doc(db, 'workspaces', userId, 'incentives', cleanId), softDeletePayload, { merge: true });
     } catch {}
     if (cleanId !== incentiveId) {
       try {
-        await deleteDoc(doc(db, 'workspaces', userId, 'incentives', incentiveId));
+        await setDoc(doc(db, 'workspaces', userId, 'incentives', incentiveId), softDeletePayload, { merge: true });
       } catch {}
     }
   }
-
-  // 4. CollectionGroup incentives
-  try {
-    const qCg = query(collectionGroup(db, 'incentives'), where('id', 'in', [cleanId, incentiveId]));
-    const snapCg = await getDocs(qCg);
-    for (const d of snapCg.docs) {
-      await deleteDoc(d.ref).catch(() => {});
-    }
-  } catch {}
 }
 
 /**
- * Permanently reset a rider's ledger/advances/incentives in Firestore
+ * Restore soft-deleted incentive document back to active incentives
+ */
+export async function restoreIncentiveInFirestore(
+  userId: string,
+  incentiveId: string
+): Promise<void> {
+  if (!incentiveId) return;
+  const cleanId = incentiveId.replace(/^inc-/, '');
+  const restorePayload = {
+    isDeleted: false,
+    deletedAt: null,
+    status: 'UNPAID',
+  };
+  try {
+    await setDoc(doc(db, 'incentives', cleanId), restorePayload, { merge: true });
+  } catch {}
+  if (cleanId !== incentiveId) {
+    try {
+      await setDoc(doc(db, 'incentives', incentiveId), restorePayload, { merge: true });
+    } catch {}
+  }
+  if (userId) {
+    try {
+      await setDoc(doc(db, 'workspaces', userId, 'incentives', cleanId), restorePayload, { merge: true });
+    } catch {}
+    if (cleanId !== incentiveId) {
+      try {
+        await setDoc(doc(db, 'workspaces', userId, 'incentives', incentiveId), restorePayload, { merge: true });
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Safely archive a rider's ledger/advances/incentives in Firestore without data loss
  */
 export async function resetRiderAccountInFirestore(
   userId: string,
   riderId: string
 ): Promise<void> {
   if (!riderId) return;
+  const archivePayload = {
+    isDeleted: true,
+    status: 'RESET_ARCHIVED',
+    resetAt: new Date().toISOString(),
+  };
 
-  // 1. Delete all advance docs for this rider from root and workspace collections
+  // 1. Archive advances rather than deleting
   try {
     const qAdvRoot = query(collection(db, 'advances'), where('riderId', '==', riderId));
     const snapAdvRoot = await getDocs(qAdvRoot);
     for (const d of snapAdvRoot.docs) {
-      await deleteDoc(d.ref).catch(() => {});
+      await setDoc(d.ref, archivePayload, { merge: true }).catch(() => {});
     }
   } catch (e) {
-    console.warn('Error deleting root advances during reset:', e);
+    console.warn('Error archiving root advances during reset:', e);
   }
 
   if (userId) {
@@ -3298,22 +3396,22 @@ export async function resetRiderAccountInFirestore(
       const qAdvWs = query(collection(db, 'workspaces', userId, 'advances'), where('riderId', '==', riderId));
       const snapAdvWs = await getDocs(qAdvWs);
       for (const d of snapAdvWs.docs) {
-        await deleteDoc(d.ref).catch(() => {});
+        await setDoc(d.ref, archivePayload, { merge: true }).catch(() => {});
       }
     } catch (e) {
-      console.warn('Error deleting workspace advances during reset:', e);
+      console.warn('Error archiving workspace advances during reset:', e);
     }
   }
 
-  // 2. Delete all incentive docs for this rider
+  // 2. Archive incentives rather than deleting
   try {
     const qIncRoot = query(collection(db, 'incentives'), where('riderId', '==', riderId));
     const snapIncRoot = await getDocs(qIncRoot);
     for (const d of snapIncRoot.docs) {
-      await deleteDoc(d.ref).catch(() => {});
+      await setDoc(d.ref, archivePayload, { merge: true }).catch(() => {});
     }
   } catch (e) {
-    console.warn('Error deleting root incentives during reset:', e);
+    console.warn('Error archiving root incentives during reset:', e);
   }
 
   if (userId) {
@@ -3321,19 +3419,19 @@ export async function resetRiderAccountInFirestore(
       const qIncWs = query(collection(db, 'workspaces', userId, 'incentives'), where('riderId', '==', riderId));
       const snapIncWs = await getDocs(qIncWs);
       for (const d of snapIncWs.docs) {
-        await deleteDoc(d.ref).catch(() => {});
+        await setDoc(d.ref, archivePayload, { merge: true }).catch(() => {});
       }
     } catch (e) {
-      console.warn('Error deleting workspace incentives during reset:', e);
+      console.warn('Error archiving workspace incentives during reset:', e);
     }
   }
 
-  // CollectionGroup deep purge for any nested subcollections
+  // CollectionGroup archive
   try {
     const qCgAdv = query(collectionGroup(db, 'advances'), where('riderId', '==', riderId));
     const snapCgAdv = await getDocs(qCgAdv);
     for (const d of snapCgAdv.docs) {
-      await deleteDoc(d.ref).catch(() => {});
+      await setDoc(d.ref, archivePayload, { merge: true }).catch(() => {});
     }
   } catch (e) {}
 
@@ -3341,7 +3439,7 @@ export async function resetRiderAccountInFirestore(
     const qCgInc = query(collectionGroup(db, 'incentives'), where('riderId', '==', riderId));
     const snapCgInc = await getDocs(qCgInc);
     for (const d of snapCgInc.docs) {
-      await deleteDoc(d.ref).catch(() => {});
+      await setDoc(d.ref, archivePayload, { merge: true }).catch(() => {});
     }
   } catch (e) {}
 

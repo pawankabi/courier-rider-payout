@@ -10,7 +10,12 @@ import {
   RefreshCw, 
   Wrench,
   ChevronRight,
-  Database
+  Database,
+  Trash2,
+  Cloud,
+  TrendingUp,
+  Users,
+  KeyRound
 } from 'lucide-react';
 import { APP_VERSION } from '../utils/version';
 
@@ -26,6 +31,11 @@ interface Props {
   onCheckLiveUpdate: () => void;
   isCheckingUpdate?: boolean;
   activeHubName: string;
+  onOpenTrashRecovery?: () => void;
+  onOpenCloudBackups?: () => void;
+  onOpenProfitLoss?: () => void;
+  onOpenAttendance?: () => void;
+  onOpenChangeSecurityPin?: () => void;
 }
 
 export const AdminToolsDrawer: React.FC<Props> = ({
@@ -40,6 +50,11 @@ export const AdminToolsDrawer: React.FC<Props> = ({
   onCheckLiveUpdate,
   isCheckingUpdate = false,
   activeHubName,
+  onOpenTrashRecovery,
+  onOpenCloudBackups,
+  onOpenProfitLoss,
+  onOpenAttendance,
+  onOpenChangeSecurityPin,
 }) => {
   if (!isOpen) return null;
 
@@ -136,6 +151,114 @@ export const AdminToolsDrawer: React.FC<Props> = ({
             <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition shrink-0" />
           </button>
 
+          {/* Tool 2.1: Automated Cloud Backups */}
+          {onOpenCloudBackups && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenCloudBackups();
+              }}
+              className="w-full text-left p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-sky-500/40 transition group flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-lg bg-sky-500/15 text-sky-400 group-hover:scale-105 transition shrink-0">
+                  <Cloud className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-xs text-white group-hover:text-sky-300 transition truncate">
+                    क्लाउड बैकअप इतिहास
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate">
+                    डेली ऑटो-स्नैपशॉट व 1-क्लिक रीस्टोर
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition shrink-0" />
+            </button>
+          )}
+
+          {/* Tool 2.2: Trash Recovery (Zero Data Loss) */}
+          {onOpenTrashRecovery && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenTrashRecovery();
+              }}
+              className="w-full text-left p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-rose-500/40 transition group flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-lg bg-rose-500/15 text-rose-400 group-hover:scale-105 transition shrink-0">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-xs text-white group-hover:text-rose-300 transition truncate">
+                    रीसायकल बिन व डेटा रिकवरी
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate">
+                    गलती से हटाया गया डेटा 1-क्लिक में वापस लाएं
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition shrink-0" />
+            </button>
+          )}
+
+          {/* Tool 2.3: Daily Profit & Loss Summary */}
+          {onOpenProfitLoss && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenProfitLoss();
+              }}
+              className="w-full text-left p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-teal-500/40 transition group flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-lg bg-teal-500/15 text-teal-400 group-hover:scale-105 transition shrink-0">
+                  <TrendingUp className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-xs text-white group-hover:text-teal-300 transition truncate">
+                    हब दैनिक लाभ-हानि रिपोर्ट
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate">
+                    कंपनी रेवेन्यू, पेआउट और खर्च घटाकर शुद्ध मुनाफा
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition shrink-0" />
+            </button>
+          )}
+
+          {/* Tool 2.4: Rider Attendance & Bag Allocation */}
+          {onOpenAttendance && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenAttendance();
+              }}
+              className="w-full text-left p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-blue-500/40 transition group flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-lg bg-blue-500/15 text-blue-400 group-hover:scale-105 transition shrink-0">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-xs text-white group-hover:text-blue-300 transition truncate">
+                    राइडर दैनिक हाजिरी व बैग
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate">
+                    उपस्थिति ट्रैकिंग व बैग/रूट नंबर आवंटन
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition shrink-0" />
+            </button>
+          )}
+
           {/* Tool 3: Sync from Old App URL */}
           <button
             type="button"
@@ -185,6 +308,33 @@ export const AdminToolsDrawer: React.FC<Props> = ({
             </div>
             <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition shrink-0" />
           </button>
+
+          {/* Tool 4.1: Master Security PIN */}
+          {onOpenChangeSecurityPin && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenChangeSecurityPin();
+              }}
+              className="w-full text-left p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-indigo-500/40 transition group flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-lg bg-indigo-500/15 text-indigo-400 group-hover:scale-105 transition shrink-0">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-xs text-white group-hover:text-indigo-300 transition truncate">
+                    मास्टर सुरक्षा पिन बदलें (Change PIN)
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate">
+                    खाता रीसेट, डिलीट व बैकअप रीस्टोर सुरक्षा पिन
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition shrink-0" />
+            </button>
+          )}
 
           {/* Tool 5: Share App Links Portal */}
           <button

@@ -10,6 +10,7 @@ interface ProfileSettingsModalProps {
   onOpenSubscription?: () => void;
   hubName?: string;
   isVerifiedHub?: boolean;
+  onOpenChangeSecurityPin?: () => void;
 }
 
 export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
@@ -19,6 +20,7 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
   onOpenSubscription,
   hubName,
   isVerifiedHub,
+  onOpenChangeSecurityPin,
 }) => {
   if (!isOpen) return null;
 
@@ -31,6 +33,7 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
           onOpenSubscription={onOpenSubscription}
           hubName={hubName}
           isVerifiedHub={isVerifiedHub}
+          onOpenChangeSecurityPin={onOpenChangeSecurityPin}
         />
       </div>
     </div>

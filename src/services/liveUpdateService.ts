@@ -15,7 +15,7 @@ import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { APP_VERSION } from '../utils/version';
 
-export const CURRENT_LOCAL_BUILD_TIME = 1793594213019;
+export const CURRENT_LOCAL_BUILD_TIME = 1793872908066;
 export const CURRENT_LOCAL_VERSION = APP_VERSION;
 
 type UpdateListener = (available: boolean, details?: { version?: string; releaseNotes?: string }) => void;
@@ -315,7 +315,7 @@ export async function syncLatestManifestToFirestore(): Promise<void> {
       version: APP_VERSION,
       buildTime: CURRENT_LOCAL_BUILD_TIME,
       buildDate: new Date().toISOString().split('T')[0],
-      releaseNotes: '1-Touch Instant Biometric Fingerprint Unlock, Android App Lock, Real-Time Payout & Automatic Version Sync',
+      releaseNotes: 'v1.0.30 - Zero Data Loss Protection, 1-Click Recycle Bin (कचरा पेटी), Daily Auto Cloud Snapshots, Daily Hub P&L (लाभ-हानि), Rider Attendance (हाजिरी), and Master Security PIN',
       updatedAt: new Date().toISOString(),
     };
     await setDoc(doc(db, 'app_updates', 'latest'), updateData, { merge: true });

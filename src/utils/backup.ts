@@ -1,4 +1,4 @@
-import { Rider, DeliveryEntry, SettlementRecord } from '../types';
+import { Rider, DeliveryEntry, SettlementRecord, DailyCodSheetData, CodAuditLog } from '../types';
 import { getTodayDateString } from './formatters';
 
 interface BackupData {
@@ -7,6 +7,8 @@ interface BackupData {
   entries: DeliveryEntry[];
   settlements: SettlementRecord[];
   settings?: any;
+  codSheets?: DailyCodSheetData[];
+  codAuditLogs?: CodAuditLog[];
 }
 
 /**
@@ -18,15 +20,36 @@ export function downloadJsonBackup({
   entries,
   settlements,
   settings,
+  codSheets,
+  codAuditLogs,
 }: BackupData): void {
   const totalParcels = entries.reduce((sum, e) => sum + (e.parcels || 0), 0);
   const totalEarnings = entries.reduce((sum, e) => sum + (e.totalEarnings || 0), 0);
   const unpaidCount = entries.filter((e) => e.status === 'Unpaid').length;
   const paidCount = entries.filter((e) => e.status === 'Paid').length;
 
+  const validCodSheets = Array.isArray(codSheets) ? codSheets : [];
+  const validAuditLogs = Array.isArray(codAuditLogs) ? codAuditLogs : [];
+
+  let totalCodCollections = 0;
+  let totalCashDeposits = 0;
+  let totalOnlineDeposits = 0;
+  let totalShortageAmount = 0;
+
+  validCodSheets.forEach((sheet) => {
+    (sheet.entries || []).forEach((e) => {
+      totalCodCollections += Number(e.totalCod) || 0;
+      totalCashDeposits += Number(e.cashDeposit) || 0;
+      totalOnlineDeposits += Number(e.onlineDeposit) || 0;
+      const deposit = (Number(e.cashDeposit) || 0) + (Number(e.onlineDeposit) || 0);
+      const short = (Number(e.totalCod) || 0) - deposit;
+      if (short > 0) totalShortageAmount += short;
+    });
+  });
+
   const backupPayload = {
     appName: 'Courier Rider Payout & Delivery Manager',
-    version: '1.0',
+    version: '2.0',
     exportedAt: new Date().toISOString(),
     userEmail: userEmail || 'Local Guest User',
     summary: {
@@ -37,10 +60,18 @@ export function downloadJsonBackup({
       unpaidEntriesCount: unpaidCount,
       paidEntriesCount: paidCount,
       totalSettlements: settlements.length,
+      totalCodSheets: validCodSheets.length,
+      totalCodAmount: totalCodCollections,
+      totalCodCashDeposited: totalCashDeposits,
+      totalCodOnlineDeposited: totalOnlineDeposits,
+      totalCodShortage: totalShortageAmount,
+      totalCodAuditLogs: validAuditLogs.length,
     },
     riders,
     deliveries: entries,
     settlements,
+    codSheets: validCodSheets,
+    codAuditLogs: validAuditLogs,
     settings: settings || { defaultBaseRate: 13, defaultIncentiveRate: 2, incentivesEnabled: true },
   };
 
@@ -69,6 +100,8 @@ export interface ParsedBackupResult {
   summary?: any;
   userEmail?: string;
   settings?: any;
+  codSheets?: DailyCodSheetData[];
+  codAuditLogs?: CodAuditLog[];
 }
 
 function safeParseJsonString(val: any): any {
@@ -480,6 +513,9 @@ export function parseBackupContent(content: string | any): ParsedBackupResult {
   }
 
   let rawSettings: any = null;
+  let rawCodSheets: DailyCodSheetData[] = [];
+  let rawCodAuditLogs: CodAuditLog[] = [];
+
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
     rawSettings =
       parsed.settings ||
@@ -487,6 +523,22 @@ export function parseBackupContent(content: string | any): ParsedBackupResult {
       parsed.userRateConfig ||
       parsed.config ||
       (parsed.data && typeof parsed.data === 'object' ? (parsed.data.settings || parsed.data.rateConfig) : null);
+
+    if (Array.isArray(parsed.codSheets)) {
+      rawCodSheets = parsed.codSheets;
+    } else if (Array.isArray(parsed.daily_cod_sheets)) {
+      rawCodSheets = parsed.daily_cod_sheets;
+    } else if (Array.isArray(parsed.cod_sheets)) {
+      rawCodSheets = parsed.cod_sheets;
+    }
+
+    if (Array.isArray(parsed.codAuditLogs)) {
+      rawCodAuditLogs = parsed.codAuditLogs;
+    } else if (Array.isArray(parsed.cod_audit_logs)) {
+      rawCodAuditLogs = parsed.cod_audit_logs;
+    } else if (Array.isArray(parsed.auditLogs)) {
+      rawCodAuditLogs = parsed.auditLogs;
+    }
   }
 
   return {
@@ -496,6 +548,8 @@ export function parseBackupContent(content: string | any): ParsedBackupResult {
     summary: parsed.summary,
     userEmail: parsed.userEmail,
     settings: rawSettings,
+    codSheets: rawCodSheets,
+    codAuditLogs: rawCodAuditLogs,
   };
 }
 

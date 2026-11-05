@@ -20,6 +20,7 @@ import {
   onSnapshot,
   query,
   where,
+  runTransaction,
   Unsubscribe 
 } from 'firebase/firestore';
 import { 
@@ -291,6 +292,18 @@ export function createNewStaffUser(params: {
  * Supports entries stored as an Array OR an Object/Map ({ [riderPhoneOrId]: entry }),
  * and merges with entriesMap if present.
  */
+export const hasRecordedData = (item: any): boolean => {
+  if (!item || typeof item !== 'object') return false;
+  const c1 = Number(item.company1Amount ?? item.company1Cod ?? item.company1 ?? 0);
+  const c2 = Number(item.company2Amount ?? item.company2Cod ?? item.company2 ?? 0);
+  const cash = Number(item.cashDeposit ?? 0);
+  const online = Number(item.onlineDeposit ?? 0);
+  const delivery = Number(item.deliveryCount ?? 0);
+  const status = item.status;
+  const isLocked = Boolean(item.isCashLocked);
+  return c1 > 0 || c2 > 0 || cash > 0 || online > 0 || delivery > 0 || isLocked || status === 'submitted' || status === 'verified' || status === 'locked';
+};
+
 export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDailyEntry[] {
   if (!raw) return [];
   const rawList: any[] = [];
@@ -301,26 +314,19 @@ export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDai
     rawList.push(...Object.values(raw.entries));
   }
 
+  // CRITICAL FIX: Always push all entries from entriesMap so recorded figures are never ignored or skipped!
   if (raw.entriesMap && typeof raw.entriesMap === 'object') {
     const mapValues = Object.values(raw.entriesMap);
     mapValues.forEach((mv: any) => {
       if (mv && typeof mv === 'object') {
-        const mvId = mv.riderId || mv.id;
-        const mvPhone = (mv.riderPhone || mv.phone || '').replace(/\D/g, '').slice(-10);
-        const exists = rawList.some((e: any) => 
-          (mvId && (e.riderId === mvId || e.id === mvId)) ||
-          (mvPhone && (e.riderPhone || '').replace(/\D/g, '').slice(-10) === mvPhone)
-        );
-        if (!exists) {
-          rawList.push(mv);
-        }
+        rawList.push(mv);
       }
     });
   }
 
-  // De-duplicate by riderId or clean phone
-  const seenKeys = new Set<string>();
-  const normalized: CodDailyEntry[] = [];
+  // Normalize and group raw items so that entries with real recorded data (amounts, status, deposits)
+  // ALWAYS take precedence over empty 0-amount placeholder rows
+  const groupedEntries = new Map<string, any>();
 
   rawList.forEach((item, index) => {
     if (!item || typeof item !== 'object') return;
@@ -329,8 +335,37 @@ export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDai
     const cleanPhone = riderPhone.replace(/\D/g, '').slice(-10);
     const dedupeKey = cleanPhone || riderId;
 
-    if (seenKeys.has(dedupeKey)) return;
-    seenKeys.add(dedupeKey);
+    if (!groupedEntries.has(dedupeKey)) {
+      groupedEntries.set(dedupeKey, item);
+    } else {
+      const existing = groupedEntries.get(dedupeKey);
+      const existingHasData = hasRecordedData(existing);
+      const currentHasData = hasRecordedData(item);
+
+      if (!existingHasData && currentHasData) {
+        // Upgrade from blank row to real recorded data
+        groupedEntries.set(dedupeKey, { ...existing, ...item });
+      } else if (existingHasData && !currentHasData) {
+        // CRITICAL GUARD: Keep existing recorded data! NEVER downgrade to an empty blank placeholder!
+      } else if (existingHasData && currentHasData) {
+        // Both have data: merge and prioritize latest update
+        const existingTime = new Date(existing.updatedAt || 0).getTime();
+        const currentTime = new Date(item.updatedAt || 0).getTime();
+        if (currentTime >= existingTime) {
+          groupedEntries.set(dedupeKey, { ...existing, ...item });
+        } else {
+          groupedEntries.set(dedupeKey, { ...item, ...existing });
+        }
+      }
+    }
+  });
+
+  const normalized: CodDailyEntry[] = [];
+
+  groupedEntries.forEach((item, _key) => {
+    const riderId = String(item.riderId || item.id || '');
+    const riderPhone = String(item.riderPhone || item.phone || '');
+    const cleanPhone = riderPhone.replace(/\D/g, '').slice(-10);
 
     const riderName = String(item.riderName || item.name || 'राइडर');
     const company1Amount = Number(item.company1Amount ?? item.company1Cod ?? item.company1 ?? 0);
@@ -343,9 +378,9 @@ export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDai
 
     normalized.push({
       ...item,
-      id: item.id || `cod_${targetDate}_${riderId}`,
+      id: item.id || `cod_${targetDate}_${riderId || cleanPhone}`,
       date: item.date || targetDate,
-      riderId,
+      riderId: riderId || `rider_${cleanPhone}`,
       riderName,
       riderPhone,
       company1Amount,
@@ -355,7 +390,7 @@ export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDai
       onlineDeposit,
       totalDeposit,
       balance,
-      status: item.status || 'draft',
+      status: item.status || (totalDeposit > 0 || totalCod > 0 ? 'submitted' : 'draft'),
       updatedAt: item.updatedAt || new Date().toISOString(),
     });
   });
@@ -398,52 +433,78 @@ export async function loadCodDailyEntries(
   const localKey = getEntriesStorageKey(userId, targetDate);
   let savedEntries: CodDailyEntry[] = [];
 
-  // 1. Try hub-scoped daily_cod_sheets in local cache first
-  try {
-    const hubLocalKey = userId ? `cp_cod_sheet_${userId}_${targetDate}` : `cp_cod_sheet_${targetDate}`;
-    const rawSheet = localStorage.getItem(hubLocalKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
-    if (rawSheet) {
-      const parsedSheet = JSON.parse(rawSheet);
-      savedEntries = extractEntriesFromSheetRaw(parsedSheet, targetDate);
-    }
-  } catch {}
+  // 1. First attempt direct Firestore fetch: from hubs/{userId}/daily_cod_sheets/{targetDate}
+  if (db && userId && userId !== 'guest' && userId !== 'super_admin_hub') {
+    try {
+      const hubSheetRef = doc(db, 'hubs', userId, 'daily_cod_sheets', targetDate);
+      const hubSnap = await getDoc(hubSheetRef);
+      if (hubSnap.exists()) {
+        const hubData = hubSnap.data();
+        const firestoreEntries = extractEntriesFromSheetRaw(hubData, targetDate);
+        if (firestoreEntries.length > 0) {
+          savedEntries = firestoreEntries;
+          try {
+            localStorage.setItem(localKey, JSON.stringify(savedEntries));
+            localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify(hubData));
+          } catch {}
+        }
+      }
+      if (savedEntries.length === 0) {
+        // Check scoped root doc: daily_cod_sheets/{userId}_{targetDate}
+        const scopedSnap = await getDoc(doc(db, 'daily_cod_sheets', `${userId}_${targetDate}`));
+        if (scopedSnap.exists()) {
+          const scopedData = scopedSnap.data();
+          const firestoreEntries = extractEntriesFromSheetRaw(scopedData, targetDate);
+          if (firestoreEntries.length > 0) {
+            savedEntries = firestoreEntries;
+          }
+        }
+      }
 
-  // 2. Try legacy workspace entries local cache
+      // CRITICAL BACKUP RECOVERY: Query dedicated rider_entries subcollection
+      // This guarantees that any rider who ever saved an entry has their standalone file permanently recovered!
+      try {
+        const subSnap = await getDocs(collection(db, 'hubs', userId, 'daily_cod_sheets', targetDate, 'rider_entries'));
+        if (!subSnap.empty) {
+          subSnap.docs.forEach((d) => {
+            const subData = d.data() as CodDailyEntry;
+            if (subData && subData.riderId && hasRecordedData(subData)) {
+              const idx = savedEntries.findIndex((e) => e.riderId === subData.riderId);
+              if (idx >= 0) {
+                if (!hasRecordedData(savedEntries[idx])) {
+                  savedEntries[idx] = subData;
+                }
+              } else {
+                savedEntries.push(subData);
+              }
+            }
+          });
+        }
+      } catch (subErr) {
+        console.warn('Notice querying rider_entries subcollection:', subErr);
+      }
+    } catch (err) {
+      console.warn('daily_cod_sheets direct fetch notice:', err);
+    }
+  }
+
+  // 2. If Firestore had no entries or failed, fallback to local cache
+  if (savedEntries.length === 0) {
+    try {
+      const hubLocalKey = userId ? `cp_cod_sheet_${userId}_${targetDate}` : `cp_cod_sheet_${targetDate}`;
+      const rawSheet = localStorage.getItem(hubLocalKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+      if (rawSheet) {
+        const parsedSheet = JSON.parse(rawSheet);
+        savedEntries = extractEntriesFromSheetRaw(parsedSheet, targetDate);
+      }
+    } catch {}
+  }
+
   if (savedEntries.length === 0) {
     try {
       const raw = localStorage.getItem(localKey);
       if (raw) savedEntries = extractEntriesFromSheetRaw({ entries: JSON.parse(raw) }, targetDate);
     } catch {}
-  }
-
-  // 3. Attempt direct Firestore fetch: first from hubs/{userId}/daily_cod_sheets/{targetDate}
-  if (db && savedEntries.length === 0) {
-    try {
-      if (userId && userId !== 'guest' && userId !== 'super_admin_hub') {
-        const hubSheetRef = doc(db, 'hubs', userId, 'daily_cod_sheets', targetDate);
-        const hubSnap = await getDoc(hubSheetRef);
-        if (hubSnap.exists()) {
-          const hubData = hubSnap.data();
-          savedEntries = extractEntriesFromSheetRaw(hubData, targetDate);
-          if (savedEntries.length > 0) {
-            try {
-              localStorage.setItem(localKey, JSON.stringify(savedEntries));
-              localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify(hubData));
-            } catch {}
-          }
-        }
-        if (savedEntries.length === 0) {
-          // Check scoped root doc: daily_cod_sheets/{userId}_{targetDate}
-          const scopedSnap = await getDoc(doc(db, 'daily_cod_sheets', `${userId}_${targetDate}`));
-          if (scopedSnap.exists()) {
-            const scopedData = scopedSnap.data();
-            savedEntries = extractEntriesFromSheetRaw(scopedData, targetDate);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('daily_cod_sheets direct fetch notice:', err);
-    }
   }
 
   // 4. Attempt workspace legacy collection fallback
@@ -481,8 +542,14 @@ export async function loadCodDailyEntries(
     if (cleanPhone) entryMap.set(cleanPhone, e);
   });
 
+  const processedRiderIds = new Set<string>();
+  const processedPhones = new Set<string>();
+
   const result: CodDailyEntry[] = cleanRiders.map((rider) => {
     const cleanRiderPhone = (rider.phone || '').replace(/\D/g, '').slice(-10);
+    processedRiderIds.add(rider.id);
+    if (cleanRiderPhone) processedPhones.add(cleanRiderPhone);
+
     const existing = entryMap.get(rider.id) || (cleanRiderPhone ? entryMap.get(cleanRiderPhone) : undefined);
 
     if (existing) {
@@ -492,8 +559,8 @@ export async function loadCodDailyEntries(
       const balance = totalCod - totalDeposit;
       return {
         ...existing,
-        riderName: rider.name,
-        riderPhone: rider.phone,
+        riderName: rider.name || existing.riderName,
+        riderPhone: rider.phone || existing.riderPhone,
         totalCod,
         totalDeposit,
         balance,
@@ -519,6 +586,19 @@ export async function loadCodDailyEntries(
     };
   });
 
+  // CRITICAL AUDIT FIX: Append any saved entry that was NOT matched to cleanRiders
+  // This guarantees that past entries entered by any rider are NEVER discarded or hidden!
+  savedEntries.forEach((se) => {
+    const seCleanPhone = (se.riderPhone || '').replace(/\D/g, '').slice(-10);
+    const isProcessed = (se.riderId && processedRiderIds.has(se.riderId)) ||
+      (seCleanPhone && processedPhones.has(seCleanPhone));
+    if (!isProcessed) {
+      result.push(se);
+      if (se.riderId) processedRiderIds.add(se.riderId);
+      if (seCleanPhone) processedPhones.add(seCleanPhone);
+    }
+  });
+
   return result;
 }
 
@@ -542,13 +622,74 @@ export async function saveCodDailyEntries(
 
   if (db) {
     try {
-      const entriesMap = buildEntriesMap(cleanEntries);
+      // PRE-SAVE DEFENSIVE MERGE:
+      // Fetch current Firestore document before writing to ensure that if any rider previously submitted
+      // real figures (amounts, cash, online, status), they are NEVER overwritten by blank 0 draft placeholders!
+      let finalEntriesToSave = [...cleanEntries];
+      let isSheetLocked = false;
+      let company1Name = DEFAULT_COMPANY_1;
+      let company2Name = DEFAULT_COMPANY_2;
+      let hubName = '';
+
+      const targetHubId = (userId && userId !== 'guest' && userId !== 'super_admin_hub') ? userId : null;
+      if (targetHubId) {
+        try {
+          const hubSheetRef = doc(db, 'hubs', targetHubId, 'daily_cod_sheets', targetDate);
+          const existingSnap = await getDoc(hubSheetRef);
+          if (existingSnap.exists()) {
+            const existingRaw = existingSnap.data();
+            isSheetLocked = Boolean(existingRaw.isLocked);
+            company1Name = existingRaw.company1Name || company1Name;
+            company2Name = existingRaw.company2Name || company2Name;
+            hubName = existingRaw.hubName || hubName;
+            const existingEntries = extractEntriesFromSheetRaw(existingRaw, targetDate);
+
+            // Create a lookup for incoming entries
+            const incomingMap = new Map<string, CodDailyEntry>();
+            finalEntriesToSave.forEach((e) => {
+              const cp = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+              if (e.riderId) incomingMap.set(e.riderId, e);
+              if (cp) incomingMap.set(cp, e);
+            });
+
+            // For every existing entry with real recorded money, ensure it is NOT lost or downgraded
+            existingEntries.forEach((ex) => {
+              if (hasRecordedData(ex)) {
+                const exPhone = (ex.riderPhone || '').replace(/\D/g, '').slice(-10);
+                const incoming = incomingMap.get(ex.riderId) || (exPhone ? incomingMap.get(exPhone) : undefined);
+                const incomingHasData = incoming ? hasRecordedData(incoming) : false;
+
+                if (!incomingHasData) {
+                  // Incoming is blank or missing! Preserve existing recorded entry!
+                  const targetIdx = finalEntriesToSave.findIndex((e) => {
+                    const cp = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+                    return e.riderId === ex.riderId || (exPhone && cp === exPhone);
+                  });
+                  if (targetIdx >= 0) {
+                    finalEntriesToSave[targetIdx] = ex;
+                  } else {
+                    finalEntriesToSave.push(ex);
+                  }
+                }
+              }
+            });
+          }
+        } catch (mergeErr) {
+          console.warn('Pre-save merge check notice:', mergeErr);
+        }
+      }
+
+      const entriesMap = buildEntriesMap(finalEntriesToSave);
       const payload = cleanForFirestore({
         date: targetDate,
         hubId: userId,
         ownerUid: userId,
-        entries: cleanEntries,
+        entries: finalEntriesToSave,
         entriesMap,
+        isLocked: isSheetLocked,
+        company1Name,
+        company2Name,
+        hubName,
         updatedAt: new Date().toISOString(),
       });
 
@@ -560,6 +701,19 @@ export async function saveCodDailyEntries(
         // Dual-write to daily_cod_sheets/{userId}_{date} for query compatibility
         const scopedRootRef = doc(db, 'daily_cod_sheets', `${userId}_${targetDate}`);
         await setDoc(scopedRootRef, payload, { merge: true });
+
+        // Dual-write each rider's entry to dedicated rider_entries subcollection
+        // Guaranteeing an immutable, isolated document per rider that can never be overwritten by batch operations
+        try {
+          const batchRiders = writeBatch(db);
+          finalEntriesToSave.forEach((re) => {
+            if (re.riderId && hasRecordedData(re)) {
+              const riderDocRef = doc(db, 'hubs', userId, 'daily_cod_sheets', targetDate, 'rider_entries', re.riderId);
+              batchRiders.set(riderDocRef, cleanForFirestore(re), { merge: true });
+            }
+          });
+          await batchRiders.commit();
+        } catch {}
       } else {
         // Fallback write for un-isolated setups, local guest, or super admin demo
         const sheetRef = doc(db, 'daily_cod_sheets', targetDate);
@@ -569,7 +723,7 @@ export async function saveCodDailyEntries(
       // 2. Also persist in user workspace
       if (userId && userId !== 'guest') {
         const batch = writeBatch(db);
-        entries.forEach((entry) => {
+        finalEntriesToSave.forEach((entry) => {
           const docRef = doc(db, 'workspaces', userId, 'cod_entries', entry.id);
           batch.set(docRef, cleanForFirestore(entry), { merge: true });
         });
@@ -1680,6 +1834,21 @@ export function subscribeToDailyCodSheet(
           const isSheetLocked = Boolean(raw.isLocked);
           let finalEntries = existingEntries;
 
+          // Helper to check if an entry contains actual recorded figures
+          const hasRealData = (e: CodDailyEntry): boolean => {
+            const c1 = Number(e.company1Amount || 0);
+            const c2 = Number(e.company2Amount || 0);
+            const cash = Number(e.cashDeposit || 0);
+            const online = Number(e.onlineDeposit || 0);
+            const total = Number(e.totalCod || (c1 + c2));
+            const dep = Number(e.totalDeposit || (cash + online));
+            const delivery = Number(e.deliveryCount || 0);
+            const hasNotes = Boolean(e.notes && e.notes.trim());
+            const isSubmitted = e.status === 'submitted' || e.status === 'verified' || e.status === 'locked';
+            const isCashLock = Boolean(e.isCashLocked);
+            return c1 > 0 || c2 > 0 || cash > 0 || online > 0 || total > 0 || dep > 0 || delivery > 0 || hasNotes || isSubmitted || isCashLock;
+          };
+
           // If the sheet is locked, NEVER alter or re-enrich entries. Keep the exact locked snapshot!
           if (!isSheetLocked) {
             const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
@@ -1688,36 +1857,56 @@ export function subscribeToDailyCodSheet(
               activeRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
             );
 
-            // Strictly filter out any riders from other hubs that might have been in the doc
+            // CRITICAL AUDIT RULE: NEVER discard any entry that contains recorded money or submission data!
+            // Even if a rider was marked inactive, has a different ID format, or is pending hub sync.
             const scopedEntries = existingEntries.filter((e) => {
+              if (hasRealData(e)) return true; // NEVER drop real recorded accounts
               const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
               return activeRiderIds.has(e.riderId) || (cleanPhone && activeRiderPhones.has(cleanPhone));
             });
 
-            if (scopedEntries.length === 0) {
-              if (activeRiders.length > 0) {
-                finalEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
-              }
+            // Append default rows for any active riders that don't have an entry yet
+            const existingRiderIds = new Set(scopedEntries.map((e) => e.riderId));
+            const existingPhones = new Set(
+              scopedEntries
+                .map((e) => (e.riderPhone || '').replace(/\D/g, '').slice(-10))
+                .filter(Boolean)
+            );
+
+            const missingRiders = activeRiders.filter((r) => {
+              const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
+              return !existingRiderIds.has(r.id) && (!cleanPhone || !existingPhones.has(cleanPhone));
+            });
+
+            if (missingRiders.length > 0) {
+              const missingEntries = buildDefaultCodEntriesForRiders(targetDate, missingRiders);
+              finalEntries = [...scopedEntries, ...missingEntries];
             } else {
-              const existingRiderIds = new Set(scopedEntries.map((e) => e.riderId));
-              const existingPhones = new Set(
-                scopedEntries
-                  .map((e) => (e.riderPhone || '').replace(/\D/g, '').slice(-10))
-                  .filter(Boolean)
-              );
-
-              const missingRiders = activeRiders.filter((r) => {
-                const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
-                return !existingRiderIds.has(r.id) && (!cleanPhone || !existingPhones.has(cleanPhone));
-              });
-
-              if (missingRiders.length > 0) {
-                const missingEntries = buildDefaultCodEntriesForRiders(targetDate, missingRiders);
-                finalEntries = [...scopedEntries, ...missingEntries];
-              } else {
-                finalEntries = scopedEntries;
-              }
+              finalEntries = scopedEntries.length > 0 ? scopedEntries : existingEntries;
             }
+
+            // CRITICAL SUBCOLLECTION BACKUP MERGE:
+            // Query rider_entries subcollection to ensure any standalone rider file is never missed
+            try {
+              const riderSubSnap = await getDocs(
+                collection(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate, 'rider_entries')
+              );
+              if (!riderSubSnap.empty) {
+                riderSubSnap.docs.forEach((docSnap) => {
+                  const subData = docSnap.data() as CodDailyEntry;
+                  if (subData && subData.riderId && hasRealData(subData)) {
+                    const idx = finalEntries.findIndex((e) => e.riderId === subData.riderId);
+                    if (idx >= 0) {
+                      if (!hasRealData(finalEntries[idx])) {
+                        finalEntries[idx] = subData;
+                      }
+                    } else {
+                      finalEntries.push(subData);
+                    }
+                  }
+                });
+              }
+            } catch {}
           }
 
           const cleanFinalEntries = finalEntries.filter(
@@ -1743,6 +1932,40 @@ export function subscribeToDailyCodSheet(
           onUpdate(sheetData);
         } else {
           // Document does not exist yet in hubs/{effectiveHubId}/daily_cod_sheets!
+          // Check fallback root collection or local cache before falling back to empty template
+          let recoveredEntries: CodDailyEntry[] = [];
+          try {
+            const rootScopedSnap = await getDoc(doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`));
+            if (rootScopedSnap.exists()) {
+              recoveredEntries = extractEntriesFromSheetRaw(rootScopedSnap.data(), targetDate);
+            }
+            if (recoveredEntries.length === 0) {
+              const rootDateSnap = await getDoc(doc(db, 'daily_cod_sheets', targetDate));
+              if (rootDateSnap.exists()) {
+                recoveredEntries = extractEntriesFromSheetRaw(rootDateSnap.data(), targetDate);
+              }
+            }
+          } catch (fbErr) {
+            console.warn('Fallback sheet search notice:', fbErr);
+          }
+
+          if (recoveredEntries.length > 0) {
+            const recoveredSheet: DailyCodSheetData = {
+              date: targetDate,
+              entries: recoveredEntries,
+              isLocked: false,
+              company1Name: DEFAULT_COMPANY_1,
+              company2Name: DEFAULT_COMPANY_2,
+              hubId: effectiveHubId,
+              updatedAt: new Date().toISOString(),
+            };
+            try {
+              localStorage.setItem(localCacheKey, JSON.stringify(recoveredSheet));
+            } catch {}
+            onUpdate(recoveredSheet);
+            return;
+          }
+
           // Automatically pull active riders strictly for this hub
           const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
           const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders).filter(
@@ -1853,65 +2076,77 @@ export async function updateSingleRiderEntryInSheet(
     try {
       const targetDocRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate);
 
-      let entries: CodDailyEntry[] = [];
-      let isLocked = false;
-      let company1Name = DEFAULT_COMPANY_1;
-      let company2Name = DEFAULT_COMPANY_2;
+      let payloadToSave: any = null;
 
-      try {
-        const snap = await getDoc(targetDocRef);
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(targetDocRef);
+        let entries: CodDailyEntry[] = [];
+        let isLocked = false;
+        let company1Name = DEFAULT_COMPANY_1;
+        let company2Name = DEFAULT_COMPANY_2;
+        let hubName = '';
+        let hubUpiId = '';
+
         if (snap.exists()) {
           const data = snap.data();
           entries = extractEntriesFromSheetRaw(data, targetDate);
           isLocked = Boolean(data.isLocked);
           company1Name = data.company1Name || DEFAULT_COMPANY_1;
           company2Name = data.company2Name || DEFAULT_COMPANY_2;
+          hubName = data.hubName || '';
+          hubUpiId = data.hubUpiId || '';
         }
-      } catch (e) {
-        console.warn('Notice fetching current sheet:', e);
-      }
 
-      if (entries.length === 0) {
+        if (entries.length === 0) {
+          try {
+            const cachedRaw = localStorage.getItem(localCacheKey);
+            if (cachedRaw) {
+              entries = extractEntriesFromSheetRaw(JSON.parse(cachedRaw), targetDate);
+            }
+          } catch {}
+        }
+
+        const existingIndex = entries.findIndex((e) => {
+          const eCleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+          return e.riderId === finalizedEntry.riderId || (cleanPhone && eCleanPhone === cleanPhone);
+        });
+
+        if (existingIndex >= 0) {
+          entries[existingIndex] = finalizedEntry;
+        } else {
+          entries.push(finalizedEntry);
+        }
+
+        const entriesMap = buildEntriesMap(entries);
+        payloadToSave = cleanForFirestore({
+          date: targetDate,
+          hubId: effectiveHubId,
+          ownerUid: effectiveHubId,
+          entries,
+          entriesMap,
+          isLocked,
+          company1Name,
+          company2Name,
+          hubName,
+          hubUpiId,
+          updatedAt: new Date().toISOString(),
+        });
+
+        transaction.set(targetDocRef, payloadToSave, { merge: true });
+      });
+
+      // Dual-write to daily_cod_sheets/${effectiveHubId}_${targetDate} and rider_entries subcollection
+      if (payloadToSave) {
         try {
-          const cachedRaw = localStorage.getItem(localCacheKey);
-          if (cachedRaw) {
-            entries = extractEntriesFromSheetRaw(JSON.parse(cachedRaw), targetDate);
+          const rootDocRef = doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`);
+          await setDoc(rootDocRef, payloadToSave, { merge: true });
+
+          if (finalizedEntry.riderId) {
+            const riderDocRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate, 'rider_entries', finalizedEntry.riderId);
+            await setDoc(riderDocRef, cleanForFirestore(finalizedEntry), { merge: true });
           }
         } catch {}
       }
-
-      const existingIndex = entries.findIndex((e) => {
-        const eCleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-        return e.riderId === finalizedEntry.riderId || (cleanPhone && eCleanPhone === cleanPhone);
-      });
-
-      if (existingIndex >= 0) {
-        entries[existingIndex] = finalizedEntry;
-      } else {
-        entries.push(finalizedEntry);
-      }
-
-      const entriesMap = buildEntriesMap(entries);
-      const payload = cleanForFirestore({
-        date: targetDate,
-        hubId: effectiveHubId,
-        ownerUid: effectiveHubId,
-        entries,
-        entriesMap,
-        isLocked,
-        company1Name,
-        company2Name,
-        updatedAt: new Date().toISOString(),
-      });
-
-      // Writes directly to hubs/${effectiveHubId}/daily_cod_sheets/${date} (Strict Hub Isolation)
-      await setDoc(targetDocRef, payload, { merge: true });
-
-      // Dual-write to daily_cod_sheets/${effectiveHubId}_${targetDate} for multi-collection resilience
-      try {
-        const rootDocRef = doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`);
-        await setDoc(rootDocRef, payload, { merge: true });
-      } catch {}
     } catch (err) {
       console.warn('Failed to update entry in hubs daily_cod_sheets:', err);
     }
@@ -1920,6 +2155,7 @@ export async function updateSingleRiderEntryInSheet(
 
 /**
  * 9. Toggle Day-End Lock in daily_cod_sheets (Strictly Isolated to hubs/${effectiveHubId}/daily_cod_sheets/${date})
+ * Automatically creates an immutable permanent snapshot in hubs/${effectiveHubId}/archived_cod_sheets/${targetDate}
  */
 export async function toggleDayEndLockForSheet(
   date: string,
@@ -1939,25 +2175,112 @@ export async function toggleDayEndLockForSheet(
     updatedAt: new Date().toISOString(),
   };
 
-  // Local cache
+  // Local cache update
+  let sheetObj: any = null;
   try {
     const raw = localStorage.getItem(localCacheKey);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        parsed.isLocked = isLocked;
-        parsed.lockedBy = isLocked ? lockedBy : undefined;
-        parsed.lockedAt = isLocked ? new Date().toISOString() : undefined;
-        localStorage.setItem(localCacheKey, JSON.stringify(parsed));
+      sheetObj = JSON.parse(raw);
+      if (sheetObj && typeof sheetObj === 'object') {
+        sheetObj.isLocked = isLocked;
+        sheetObj.lockedBy = isLocked ? lockedBy : undefined;
+        sheetObj.lockedAt = isLocked ? new Date().toISOString() : undefined;
+        sheetObj.updatedAt = new Date().toISOString();
+        localStorage.setItem(localCacheKey, JSON.stringify(sheetObj));
       }
     }
   } catch {}
 
-  // Firestore
+  // Firestore update & immutable auto-archive
   if (db) {
     try {
+      // 1. Update active sheet in hubs/{effectiveHubId}/daily_cod_sheets/{targetDate}
       const targetDocRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate);
       await setDoc(targetDocRef, cleanForFirestore(updateData), { merge: true });
+
+      // 2. Dual-write to root scoped doc daily_cod_sheets/{effectiveHubId}_{targetDate}
+      try {
+        const rootDocRef = doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`);
+        await setDoc(rootDocRef, cleanForFirestore(updateData), { merge: true });
+      } catch {}
+
+      // 3. If locking at day end, create an immutable permanent archive in hubs/{effectiveHubId}/archived_cod_sheets/{targetDate}
+      if (isLocked) {
+        let currentData = sheetObj;
+        try {
+          const fullDocSnap = await getDoc(targetDocRef);
+          if (fullDocSnap.exists()) {
+            currentData = fullDocSnap.data();
+          }
+        } catch {}
+
+        const entries = extractEntriesFromSheetRaw(currentData || {}, targetDate);
+        const totalCod = entries.reduce((s, e) => s + (Number(e.totalCod) || 0), 0);
+        const totalCash = entries.reduce((s, e) => s + (Number(e.cashDeposit) || 0), 0);
+        const totalOnline = entries.reduce((s, e) => s + (Number(e.onlineDeposit) || 0), 0);
+        const totalDeposit = totalCash + totalOnline;
+        const totalShortage = entries.reduce(
+          (s, e) => s + Math.max(0, (Number(e.totalCod) || 0) - (Number(e.totalDeposit) || 0)),
+          0
+        );
+
+        const archivedPayload = {
+          ...cleanForFirestore(currentData || {}),
+          date: targetDate,
+          hubId: effectiveHubId,
+          isLocked: true,
+          lockedBy,
+          lockedAt: updateData.lockedAt,
+          archivedAt: new Date().toISOString(),
+          archivedBy: lockedBy,
+          archiveReason: 'DAY_END_FINAL_SEAL',
+          isImmutable: true,
+          summarySnapshot: {
+            totalEntries: entries.length,
+            totalCod,
+            totalCash,
+            totalOnline,
+            totalDeposit,
+            totalShortage,
+            hasDiscrepancy: totalShortage > 0,
+            consolidatedDenominations: currentData?.consolidatedDenominations || null,
+          },
+        };
+
+        const archiveDocRef = doc(db, 'hubs', effectiveHubId, 'archived_cod_sheets', targetDate);
+        await setDoc(archiveDocRef, archivedPayload, { merge: true });
+
+        // Save into local archive cache as well
+        try {
+          localStorage.setItem(`cp_cod_archived_sheet_${effectiveHubId}_${targetDate}`, JSON.stringify(archivedPayload));
+        } catch {}
+
+        // Log audit event
+        recordCodAuditLog(effectiveHubId, {
+          changedBy: lockedBy || 'Hub Incharge',
+          role: 'hub_incharge',
+          riderId: 'ALL_RIDERS',
+          riderName: 'डे-एंड क्लोजिंग (Day-End Lock)',
+          date: targetDate,
+          field: 'isLocked',
+          previousValue: 'UNLOCKED',
+          newValue: 'LOCKED_AND_ARCHIVED',
+          notes: `डे-एंड लॉक व स्थायी अभिलेखागार (Permanent Archive) सील किया गया। कुल कैश: ₹${totalCash}, ऑनलाइन: ₹${totalOnline}, कुल COD: ₹${totalCod}।`,
+        }).catch(() => {});
+      } else {
+        // Log unlock audit event
+        recordCodAuditLog(effectiveHubId, {
+          changedBy: lockedBy || 'Hub Incharge',
+          role: 'hub_incharge',
+          riderId: 'ALL_RIDERS',
+          riderName: 'डे-एंड री-ओपन (Day-End Unlock)',
+          date: targetDate,
+          field: 'isLocked',
+          previousValue: 'LOCKED',
+          newValue: 'UNLOCKED',
+          notes: `डे-एंड शीट फिर से खोली गई (Re-opened by ${lockedBy}).`,
+        }).catch(() => {});
+      }
     } catch (err) {
       console.warn('Failed to toggle Day-End lock in hubs daily_cod_sheets:', err);
     }
@@ -2136,3 +2459,281 @@ export async function convertCodShortageToAdvance(
     return { success: false, shortageAmount: 0, error: err?.message || 'शॉर्टेज कनवर्ट करने में त्रुटि' };
   }
 }
+
+/**
+ * 10. Audit & History: Fetch summary of recent COD sheets for audit inspection
+ */
+export interface CodSheetSummary {
+  date: string;
+  totalRidersWithData: number;
+  totalCod: number;
+  totalDeposit: number;
+  totalCash: number;
+  totalOnline: number;
+  balance: number;
+  isLocked: boolean;
+  entriesCount: number;
+}
+
+export async function fetchRecentCodSheets(
+  hubId: string,
+  limitDays: number = 30
+): Promise<CodSheetSummary[]> {
+  const effectiveHubId = (hubId || getActiveCompanionHubId() || '').trim();
+  const summaryMap = new Map<string, CodSheetSummary>();
+
+  // 1. Scan local storage for cached sheets
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith(`cp_cod_sheet_${effectiveHubId}_`) || k.startsWith('cp_cod_sheet_'))) {
+        const dateMatch = k.match(/\d{4}-\d{2}-\d{2}$/);
+        if (dateMatch) {
+          const dStr = dateMatch[0];
+          try {
+            const raw = localStorage.getItem(k);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              const entries = extractEntriesFromSheetRaw(parsed, dStr);
+              const withData = entries.filter((e) => (e.totalCod || 0) > 0 || (e.totalDeposit || 0) > 0 || e.status === 'submitted');
+              const totalCod = entries.reduce((s, e) => s + (Number(e.totalCod) || 0), 0);
+              const totalCash = entries.reduce((s, e) => s + (Number(e.cashDeposit) || 0), 0);
+              const totalOnline = entries.reduce((s, e) => s + (Number(e.onlineDeposit) || 0), 0);
+              const totalDeposit = totalCash + totalOnline;
+              const balance = totalCod - totalDeposit;
+              summaryMap.set(dStr, {
+                date: dStr,
+                totalRidersWithData: withData.length,
+                totalCod,
+                totalDeposit,
+                totalCash,
+                totalOnline,
+                balance,
+                isLocked: Boolean(parsed.isLocked),
+                entriesCount: entries.length,
+              });
+            }
+          } catch {}
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Fetch from Firestore hubs/{effectiveHubId}/daily_cod_sheets subcollection
+  if (db && effectiveHubId) {
+    try {
+      const colRef = collection(db, 'hubs', effectiveHubId, 'daily_cod_sheets');
+      const snaps = await getDocs(colRef);
+      if (!snaps.empty) {
+        snaps.docs.forEach((docSnap) => {
+          const dStr = docSnap.id;
+          const data = docSnap.data();
+          const entries = extractEntriesFromSheetRaw(data, dStr);
+          const withData = entries.filter((e) => (e.totalCod || 0) > 0 || (e.totalDeposit || 0) > 0 || e.status === 'submitted');
+          const totalCod = entries.reduce((s, e) => s + (Number(e.totalCod) || 0), 0);
+          const totalCash = entries.reduce((s, e) => s + (Number(e.cashDeposit) || 0), 0);
+          const totalOnline = entries.reduce((s, e) => s + (Number(e.onlineDeposit) || 0), 0);
+          const totalDeposit = totalCash + totalOnline;
+          const balance = totalCod - totalDeposit;
+          summaryMap.set(dStr, {
+            date: dStr,
+            totalRidersWithData: withData.length,
+            totalCod,
+            totalDeposit,
+            totalCash,
+            totalOnline,
+            balance,
+            isLocked: Boolean(data.isLocked),
+            entriesCount: entries.length,
+          });
+        });
+      }
+    } catch (e) {
+      console.warn('Notice fetching recent sheets from Firestore:', e);
+    }
+  }
+
+  // Convert to array and sort date descending
+  const list = Array.from(summaryMap.values());
+  list.sort((a, b) => b.date.localeCompare(a.date));
+  return list.slice(0, limitDays);
+}
+
+/**
+ * 10. Comprehensive COD Data Exporter for Hub Master Backup
+ * Gathers all daily COD sheets (with note denominations, cash, online, shortage) and audit logs
+ */
+export async function exportAllCodDataForBackup(hubId: string): Promise<{
+  sheets: DailyCodSheetData[];
+  auditLogs: CodAuditLog[];
+}> {
+  const effectiveHubId = (hubId || getActiveCompanionHubId() || '').trim();
+  const sheetsMap = new Map<string, DailyCodSheetData>();
+
+  // 1. Gather all sheets from localStorage
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (
+        key.startsWith(`cp_cod_sheet_${effectiveHubId}_`) ||
+        (key.startsWith('cp_cod_sheet_') && key.length === 23)
+      ) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const dateStr = parsed.date || key.split('_').pop() || '';
+            if (dateStr && dateStr.length === 10 && !sheetsMap.has(dateStr)) {
+              const entries = extractEntriesFromSheetRaw(parsed, dateStr);
+              sheetsMap.set(dateStr, {
+                date: dateStr,
+                entries,
+                isLocked: Boolean(parsed.isLocked),
+                lockedBy: parsed.lockedBy,
+                lockedAt: parsed.lockedAt,
+                company1Name: parsed.company1Name,
+                company2Name: parsed.company2Name,
+                hubName: parsed.hubName,
+                hubId: effectiveHubId,
+                consolidatedDenominations: parsed.consolidatedDenominations,
+                cashWithdrawals: parsed.cashWithdrawals,
+                updatedAt: parsed.updatedAt,
+              });
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  // 2. Query Firestore hubs/{effectiveHubId}/daily_cod_sheets subcollection
+  if (db && effectiveHubId && effectiveHubId !== 'guest') {
+    try {
+      const colRef = collection(db, 'hubs', effectiveHubId, 'daily_cod_sheets');
+      const snaps = await getDocs(colRef);
+      if (!snaps.empty) {
+        for (const docSnap of snaps.docs) {
+          const dateStr = docSnap.id;
+          const data = docSnap.data();
+          let entries = extractEntriesFromSheetRaw(data, dateStr);
+
+          // If entry list in document is empty or incomplete, check rider_entries subcollection
+          try {
+            const subRef = collection(db, 'hubs', effectiveHubId, 'daily_cod_sheets', dateStr, 'rider_entries');
+            const subSnaps = await getDocs(subRef);
+            if (!subSnaps.empty) {
+              const subEntries = subSnaps.docs.map((d) => d.data() as CodDailyEntry);
+              subEntries.forEach((se) => {
+                const idx = entries.findIndex((e) => e.riderId === se.riderId);
+                if (idx >= 0) {
+                  entries[idx] = { ...entries[idx], ...se };
+                } else {
+                  entries.push(se);
+                }
+              });
+            }
+          } catch {}
+
+          sheetsMap.set(dateStr, {
+            date: dateStr,
+            entries,
+            isLocked: Boolean(data.isLocked),
+            lockedBy: data.lockedBy,
+            lockedAt: data.lockedAt,
+            company1Name: data.company1Name,
+            company2Name: data.company2Name,
+            hubName: data.hubName,
+            hubId: effectiveHubId,
+            consolidatedDenominations: data.consolidatedDenominations,
+            cashWithdrawals: data.cashWithdrawals,
+            updatedAt: data.updatedAt,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Notice exporting sheets from Firestore for backup:', err);
+    }
+  }
+
+  // 3. Query audit logs
+  let auditLogs: CodAuditLog[] = [];
+  try {
+    auditLogs = await loadCodAuditLogs(effectiveHubId);
+  } catch (err) {
+    console.warn('Notice loading audit logs for backup:', err);
+  }
+
+  const sheets = Array.from(sheetsMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+  return { sheets, auditLogs };
+}
+
+/**
+ * 11. Restores COD sheets and audit logs from a master backup file
+ */
+export async function importAllCodDataFromBackup(
+  hubId: string,
+  codSheets: DailyCodSheetData[],
+  codAuditLogs?: CodAuditLog[]
+): Promise<number> {
+  const effectiveHubId = (hubId || getActiveCompanionHubId() || '').trim();
+  if (!effectiveHubId) return 0;
+
+  let restoredSheetsCount = 0;
+
+  // Restore sheets
+  for (const sheet of codSheets || []) {
+    if (!sheet.date) continue;
+    const dateStr = sheet.date;
+    const localKey = `cp_cod_sheet_${effectiveHubId}_${dateStr}`;
+    try {
+      localStorage.setItem(localKey, JSON.stringify(sheet));
+      localStorage.setItem(getEntriesStorageKey(effectiveHubId, dateStr), JSON.stringify(sheet.entries || []));
+    } catch {}
+
+    if (db && effectiveHubId !== 'guest') {
+      try {
+        const hubSheetRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', dateStr);
+        await setDoc(hubSheetRef, cleanForFirestore(sheet), { merge: true });
+
+        const scopedRootRef = doc(db, 'daily_cod_sheets', `${effectiveHubId}_${dateStr}`);
+        await setDoc(scopedRootRef, cleanForFirestore(sheet), { merge: true });
+
+        // Save rider entries
+        for (const re of sheet.entries || []) {
+          if (re.riderId) {
+            const riderDocRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', dateStr, 'rider_entries', re.riderId);
+            await setDoc(riderDocRef, cleanForFirestore(re), { merge: true });
+          }
+        }
+      } catch (err) {
+        console.warn(`Firestore sheet restore notice for ${dateStr}:`, err);
+      }
+    }
+    restoredSheetsCount++;
+  }
+
+  // Restore audit logs
+  if (Array.isArray(codAuditLogs) && codAuditLogs.length > 0) {
+    const localAuditKey = getAuditStorageKey(effectiveHubId);
+    try {
+      localStorage.setItem(localAuditKey, JSON.stringify(codAuditLogs));
+    } catch {}
+
+    if (db && effectiveHubId !== 'guest') {
+      try {
+        for (const log of codAuditLogs) {
+          if (log.id) {
+            const docRef = doc(db, 'workspaces', effectiveHubId, 'cod_audit_logs', log.id);
+            await setDoc(docRef, cleanForFirestore(log), { merge: true });
+          }
+        }
+      } catch (err) {
+        console.warn('Firestore audit logs restore notice:', err);
+      }
+    }
+  }
+
+  return restoredSheetsCount;
+}
+

@@ -72,14 +72,16 @@ service cloud.firestore {
       }
     }
 
-    // Primary database collections for riders, deliveries, and settlements
+    // Primary database collections for riders, deliveries, settlements, and auto-backups (Strict Zero Hard-Delete Policy)
     match /riders/{riderId} {
-      allow read, write: if true; // Public read & sync for rider profile & advances
+      allow read, create, update: if true; // Public read & sync for rider profile & advances
+      allow delete: if false; // Strict Zero-Data-Loss: Hard deletion prohibited
     }
 
     // Public read-only statements/ledgers accessible without login
     match /public_statements/{statementId} {
-      allow read, write: if true; // Public read & sync for rider statement ledgers
+      allow read, create, update: if true;
+      allow delete: if false;
     }
 
     // COD Staff PINs & Access Control for companion mobile web app login (Delivery boys & Hub Staff)
@@ -87,28 +89,40 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // COD Audit Logs for inspection and history recovery
+    match /workspaces/{userId}/cod_audit_logs/{logId} {
+      allow read, create, update: if true;
+      allow delete: if false;
+    }
+
     // Real-time Daily COD Sheets for 0-second companion app synchronization
     match /daily_cod_sheets/{sheetId} {
-      allow read, write: if true;
+      allow read, create, update: if true;
+      allow delete: if false;
       match /{allSubpaths=**} {
-        allow read, write: if true;
+        allow read, create, update: if true;
+        allow delete: if false;
       }
     }
 
-    // Isolated Hub paths for multi-tenant COD sheets and companion sync
+    // Isolated Hub paths for multi-tenant COD sheets, immutable auto-archives, and auto-backups
     match /hubs/{hubId} {
-      allow read, write: if true;
+      allow read, create, update: if true;
+      allow delete: if false;
       match /{allSubpaths=**} {
-        allow read, write: if true;
+        allow read, create, update: if true;
+        allow delete: if false;
       }
     }
 
     match /deliveries/{deliveryId} {
-      allow read, write: if true; // Public read & sync for rider delivery logs
+      allow read, create, update: if true; // Public read & sync for rider delivery logs
+      allow delete: if false; // Financial records cannot be hard deleted
     }
 
     match /settlements/{settlementId} {
-      allow read, write: if true; // Public read & sync for rider payout settlements
+      allow read, create, update: if true; // Public read & sync for rider payout settlements
+      allow delete: if false; // Settlement records cannot be hard deleted
     }
 
     // Collection Group Queries for Public Statements (allows unauthenticated query by riderId)
