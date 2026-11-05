@@ -71,12 +71,31 @@ jobs:
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "Building Release APKs for Version: v$VERSION_NAME (Code: $VERSION_CODE)"
 
-      - name: Ensure Gradle Wrapper Exists
+      - name: Ensure Gradle Wrapper & Variables Exist
         run: |
           mkdir -p android/gradle/wrapper
           if [ ! -f "android/gradle/wrapper/gradle-wrapper.jar" ]; then
             echo "Fetching official gradle-wrapper.jar..."
             curl -sSL -o android/gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.14.3/gradle/wrapper/gradle-wrapper.jar || true
+          fi
+          if [ ! -f "android/variables.gradle" ]; then
+            echo "Generating android/variables.gradle..."
+            cat << 'EOF' > android/variables.gradle
+          ext {
+              minSdkVersion = 24
+              compileSdkVersion = 35
+              targetSdkVersion = 35
+              androidxActivityVersion = '1.9.3'
+              androidxAppCompatVersion = '1.7.0'
+              androidxCoordinatorLayoutVersion = '1.2.0'
+              coreSplashScreenVersion = '1.0.1'
+              androidxFragmentVersion = '1.8.5'
+              junitVersion = '4.13.2'
+              androidxJunitVersion = '1.2.1'
+              androidxEspressoCoreVersion = '3.6.1'
+              cordovaAndroidVersion = '10.1.1'
+          }
+          EOF
           fi
 
       - name: Make Gradlew Executable
