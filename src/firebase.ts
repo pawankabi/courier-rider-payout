@@ -32,6 +32,9 @@ if (typeof window !== 'undefined') {
     .catch(() => {});
 }
 
+// Permanent Single Source of Truth for Firestore Database Instance
+export const UNIFIED_FIRESTORE_DATABASE_ID = 'ai-studio-courierriderpayo-41843168-17ea-4603-a026-a68d04853b7c';
+
 // Use initializeFirestore with experimentalAutoDetectLongPolling & persistentLocalCache
 // to reliably connect through proxies, sandboxed iframes & mobile connections while enabling offline capability
 let firestoreDb: Firestore;
@@ -44,7 +47,7 @@ try {
         tabManager: persistentMultipleTabManager(),
       }),
     },
-    firebaseConfig.firestoreDatabaseId || undefined
+    UNIFIED_FIRESTORE_DATABASE_ID
   );
 } catch {
   try {
@@ -53,12 +56,10 @@ try {
       {
         experimentalAutoDetectLongPolling: true,
       },
-      firebaseConfig.firestoreDatabaseId || undefined
+      UNIFIED_FIRESTORE_DATABASE_ID
     );
   } catch {
-    firestoreDb = firebaseConfig.firestoreDatabaseId
-      ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-      : getFirestore(app);
+    firestoreDb = getFirestore(app, UNIFIED_FIRESTORE_DATABASE_ID);
   }
 }
 

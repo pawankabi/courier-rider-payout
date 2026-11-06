@@ -491,6 +491,8 @@ export interface CodAuditLog {
   field: string;
   previousValue: string | number;
   newValue: string | number;
+  updatedValue?: string | number;
+  editedAt?: string;
   notes?: string;
 }
 

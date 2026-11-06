@@ -288,7 +288,23 @@ export const CodManagementModal: React.FC<Props> = ({
             };
           });
 
-          // Strictly filter out any alien riders from other hubs
+          // CRITICAL FIX: Retain and display any entry from sheetData.entries not in activeTenantRiders (Zero Data Loss)
+          const processedIds = new Set(activeTenantRiders.map((r) => r.id));
+          const processedPhones = new Set(
+            activeTenantRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
+          );
+
+          (sheetData.entries || []).forEach((e) => {
+            const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+            const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
+              (cleanPhone && processedPhones.has(cleanPhone));
+            if (!isProcessed) {
+              merged.push(e);
+              if (e.riderId) processedIds.add(e.riderId);
+              if (cleanPhone) processedPhones.add(cleanPhone);
+            }
+          });
+
           setGridEntries(merged);
         }
       },

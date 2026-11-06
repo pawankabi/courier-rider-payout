@@ -394,30 +394,35 @@ export function initAutonomousSafetySentinel(
     }
   };
 
-  // Run initial cycle immediately in background
-  setTimeout(runSilentCycle, 1500);
+  // Immediate Save architecture: Zero background polling loops.
+  // Auditing happens on-demand and on startup only; every change is saved immediately to Firestore on submit.
+  if (sentinelTimer) {
+    clearInterval(sentinelTimer);
+    sentinelTimer = null;
+  }
 
-  // Periodic heartbeat every 2 minutes (120,000ms)
-  if (sentinelTimer) clearInterval(sentinelTimer);
-  sentinelTimer = setInterval(runSilentCycle, 120000);
-
-  // Resume/Visibility change listener: silent check when user returns
-  const handleVisibility = () => {
-    if (document.visibilityState === 'visible') {
-      runSilentCycle();
+  // Purge any temporary local operational logs older than 2 years (Permanent retention for deliveries & riders)
+  try {
+    const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const snapKey = 'cp_safety_shield_snapshots_v1';
+    const rawSnaps = localStorage.getItem(snapKey);
+    if (rawSnaps) {
+      const parsedSnaps = JSON.parse(rawSnaps);
+      if (Array.isArray(parsedSnaps)) {
+        const retainedSnaps = parsedSnaps.filter((s: any) => {
+          const t = new Date(s.timestamp).getTime();
+          return !isNaN(t) && (now - t) < TWO_YEARS_MS;
+        });
+        localStorage.setItem(snapKey, JSON.stringify(retainedSnaps));
+      }
     }
-  };
-  document.addEventListener('visibilitychange', handleVisibility);
-
-  // Online listener: silent check when device connects to internet
-  const handleOnline = () => {
-    runSilentCycle();
-  };
-  window.addEventListener('online', handleOnline);
+  } catch {}
 
   return () => {
-    if (sentinelTimer) clearInterval(sentinelTimer);
-    document.removeEventListener('visibilitychange', handleVisibility);
-    window.removeEventListener('online', handleOnline);
+    if (sentinelTimer) {
+      clearInterval(sentinelTimer);
+      sentinelTimer = null;
+    }
   };
 }

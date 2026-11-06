@@ -113,7 +113,7 @@ import {
   AnalyticsReportsSkeleton,
   SettlementTabSkeleton,
 } from './components/SkeletonLoaders';
-import { downloadJsonBackup, parseBackupFile } from './utils/backup';
+import { downloadJsonBackup, downloadExcelMasterBackup, parseBackupFile } from './utils/backup';
 import { exportAllCodDataForBackup, importAllCodDataFromBackup } from './services/codService';
 import { initKeepAlive } from './utils/keepAlive';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
@@ -923,6 +923,31 @@ function MainCourierApp() {
         : '';
     setToastMessage({
       text: `मास्टर बैकअप डाउनलोड हुआ: ${entries.length} डिलीवरी, ${riders.length} राइडर्स, ${settlements.length} सेटलमेंट्स${codNotice} आपके डिवाइस में सुरक्षित सेव हो गए।`,
+      type: 'success',
+    });
+  };
+
+  const handleDownloadExcelMasterBackup = async () => {
+    const targetUserId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+    let codExportData = { sheets: [] as any[], auditLogs: [] as any[] };
+    try {
+      codExportData = await exportAllCodDataForBackup(targetUserId);
+    } catch (err) {
+      console.warn('COD backup export note:', err);
+    }
+
+    downloadExcelMasterBackup({
+      userEmail: currentUser?.email,
+      riders,
+      entries,
+      settlements,
+      settings: userRateConfig,
+      codSheets: codExportData.sheets,
+      codAuditLogs: codExportData.auditLogs,
+    });
+
+    setToastMessage({
+      text: `मास्टर एक्सेल (CSV) बैकअप डाउनलोड हुआ: ऑडिट ट्रेल व सभी लेजर रिकॉर्ड्स सुरक्षित सेव हो गए।`,
       type: 'success',
     });
   };
@@ -2518,19 +2543,21 @@ function MainCourierApp() {
   // ONLY display data that belongs to the currently authenticated user (or currently inspected user in Admin mode).
   // Immediately hides and purges any riders or entries created by other external Gmail accounts!
   const dashboardRiders = useMemo(() => {
-    if (!currentUser && !inspectedUser) {
-      return riders.filter((r) => !r.isDeleted && (!r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest'));
+    if (isSuperAdminUser || (!currentUser && !inspectedUser)) {
+      return riders.filter((r) => !r.isDeleted);
     }
 
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
     return riders.filter((rider) => !rider.isDeleted && isEntityOwnedByUser(rider, currentOwnerId, currentOwnerEmail));
-  }, [riders, currentUser, inspectedUser]);
+  }, [riders, currentUser, inspectedUser, isSuperAdminUser]);
 
   // Ensure entries on the main dashboard only belong to visible dashboard riders and user ownership
   const dashboardEntries = useMemo(() => {
-    if (!currentUser && !inspectedUser) return entries.filter((e) => !e.isDeleted);
+    if (isSuperAdminUser || (!currentUser && !inspectedUser)) {
+      return entries.filter((e) => !e.isDeleted);
+    }
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
     const allowedRiderIds = new Set(dashboardRiders.map((r) => r.id));
@@ -2542,11 +2569,13 @@ function MainCourierApp() {
       }
       return isEntityOwnedByUser(e, currentOwnerId, currentOwnerEmail);
     });
-  }, [entries, dashboardRiders, currentUser, inspectedUser]);
+  }, [entries, dashboardRiders, currentUser, inspectedUser, isSuperAdminUser]);
 
   // Ensure settlements on the main dashboard only belong to visible dashboard riders and user ownership
   const dashboardSettlements = useMemo(() => {
-    if (!currentUser && !inspectedUser) return settlements.filter((s) => !s.isDeleted);
+    if (isSuperAdminUser || (!currentUser && !inspectedUser)) {
+      return settlements.filter((s) => !s.isDeleted);
+    }
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
     const allowedRiderIds = new Set(dashboardRiders.map((r) => r.id));
@@ -2558,7 +2587,7 @@ function MainCourierApp() {
       }
       return isEntityOwnedByUser(s, currentOwnerId, currentOwnerEmail);
     });
-  }, [settlements, dashboardRiders, currentUser, inspectedUser]);
+  }, [settlements, dashboardRiders, currentUser, inspectedUser, isSuperAdminUser]);
 
   // Total count of deleted items in Recycle Bin (Zero Data Loss)
   const totalTrashCount = useMemo(() => {
@@ -3291,6 +3320,7 @@ function MainCourierApp() {
                 riders={dashboardRiders}
                 entries={dashboardEntries}
                 onDownloadBackup={isAdmin ? handleDownloadBackup : undefined}
+                onDownloadExcelBackup={isAdmin ? handleDownloadExcelMasterBackup : undefined}
                 userRateConfig={userRateConfig}
                 hubName={activeHubName}
                 isVerifiedHub={isVerifiedHub}

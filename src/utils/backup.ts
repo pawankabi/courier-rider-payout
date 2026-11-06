@@ -93,6 +93,93 @@ export function downloadJsonBackup({
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/**
+ * Generates and downloads a complete Master Excel/CSV backup file containing all
+ * Riders, Deliveries, Settlements, COD Sheets, and Full Audit Logs.
+ */
+export function downloadExcelMasterBackup({
+  userEmail,
+  riders,
+  entries,
+  settlements,
+  codSheets = [],
+  codAuditLogs = [],
+}: BackupData): void {
+  const lines: string[] = [];
+
+  // UTF-8 BOM so Excel opens Hindi/Special chars cleanly
+  lines.push('\uFEFF');
+
+  // 1. MASTER HEADER
+  lines.push('=== COURIER RIDER PAYOUT & DELIVERY MANAGER - COMPLETE MASTER BACKUP ===');
+  lines.push(`Exported At,"${new Date().toLocaleString('en-IN')}"`);
+  lines.push(`User Email,"${userEmail || 'Local User'}"`);
+  lines.push(`Total Riders,${riders.length}`);
+  lines.push(`Total Deliveries,${entries.length}`);
+  lines.push(`Total Settlements,${settlements.length}`);
+  lines.push(`Total COD Sheets,${codSheets.length}`);
+  lines.push(`Total COD Audit Logs,${codAuditLogs.length}`);
+  lines.push('');
+
+  // 2. RIDERS SECTION
+  lines.push('=== RIDERS MASTER LIST ===');
+  lines.push('Rider ID,Name,Phone,Vehicle,Status,Joined Date,Total Advances');
+  riders.forEach((r) => {
+    lines.push(`"${r.id}","${r.name}","${r.phone || ''}","${r.vehicleType || ''}","${r.status || 'active'}","${r.joinedDate || ''}",${r.totalAdvance || 0}`);
+  });
+  lines.push('');
+
+  // 3. DELIVERIES SECTION
+  lines.push('=== DELIVERY ENTRIES ===');
+  lines.push('Entry ID,Date,Rider ID,Parcels,Base Rate,Base Amount,Incentive Rate,Incentive Amount,Total Earnings,Status,Created At');
+  entries.forEach((e) => {
+    lines.push(`"${e.id}","${e.date}","${e.riderId}",${e.parcels || 0},${e.baseRate || 0},${e.baseAmount || 0},${e.incentiveRate || 0},${e.incentiveAmount || 0},${e.totalEarnings || 0},"${e.status}","${e.createdAt || ''}"`);
+  });
+  lines.push('');
+
+  // 4. SETTLEMENTS SECTION
+  lines.push('=== SETTLEMENT RECORDS ===');
+  lines.push('Settlement ID,Start Date,End Date,Paid At,Rider ID,Gross Total,Advance Deducted,Net Paid,Status');
+  settlements.forEach((s) => {
+    lines.push(`"${s.id}","${s.startDate}","${s.endDate}","${s.paidAt || ''}","${s.riderId}",${s.grossTotal || 0},${s.advanceAmount || 0},${s.netTotal || 0},"${s.status}"`);
+  });
+  lines.push('');
+
+  // 5. COD DAILY SHEETS SECTION
+  lines.push('=== DAILY COD SHEETS & RIDER COLLECTIONS ===');
+  lines.push('Date,Rider ID,Rider Name,Company 1 COD,Company 2 COD,Total COD,Cash Deposit,Online Deposit,Total Deposit,Balance,Status,Locked');
+  codSheets.forEach((sheet) => {
+    (sheet.entries || []).forEach((e) => {
+      lines.push(`"${e.date || sheet.date}","${e.riderId}","${e.riderName}",${e.company1Amount || 0},${e.company2Amount || 0},${e.totalCod || 0},${e.cashDeposit || 0},${e.onlineDeposit || 0},${e.totalDeposit || 0},${e.balance || 0},"${e.status || 'draft'}",${Boolean(sheet.isLocked)}`);
+    });
+  });
+  lines.push('');
+
+  // 6. COD AUDIT LOGS SECTION (RE-ENABLED COMPLETE AUDIT TRAIL)
+  lines.push('=== COD AUDIT TRAIL & EDIT HISTORY ===');
+  lines.push('Audit ID,Timestamp,Edited By,Role,Rider ID,Rider Name,Date,Field,Previous Value,Updated Value,Notes');
+  codAuditLogs.forEach((log) => {
+    const prev = String(log.previousValue ?? '').replace(/"/g, '""');
+    const updated = String(log.newValue ?? log.updatedValue ?? '').replace(/"/g, '""');
+    const notes = String(log.notes ?? '').replace(/"/g, '""');
+    lines.push(`"${log.id}","${log.timestamp || log.editedAt || ''}","${log.changedBy}","${log.role}","${log.riderId}","${log.riderName}","${log.date}","${log.field}","${prev}","${updated}","${notes}"`);
+  });
+
+  const csvContent = lines.join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const todayStr = getTodayDateString();
+  const fileName = `courier_master_backup_${todayStr}.csv`;
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', fileName);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export interface ParsedBackupResult {
   riders: Rider[];
   entries: DeliveryEntry[];

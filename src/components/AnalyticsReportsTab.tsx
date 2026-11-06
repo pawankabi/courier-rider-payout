@@ -31,6 +31,7 @@ interface Props {
   riders: Rider[];
   entries: DeliveryEntry[];
   onDownloadBackup?: () => void;
+  onDownloadExcelBackup?: () => void;
   userRateConfig?: UserRateConfig;
   hubName?: string;
   isVerifiedHub?: boolean;
@@ -40,6 +41,7 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
   riders, 
   entries, 
   onDownloadBackup, 
+  onDownloadExcelBackup,
   userRateConfig,
   hubName,
   isVerifiedHub = false 
@@ -217,10 +219,22 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
                 id="download-backup-report-btn"
                 onClick={onDownloadBackup}
                 className="inline-flex items-center justify-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl shadow active:scale-95 transition"
-                title="Download full JSON backup of all riders, deliveries, and settlements"
+                title="Download full JSON master backup of all riders, deliveries, settlements, and audit logs"
               >
                 <Download className="w-4 h-4 text-blue-400" />
-                <span>Download Backup</span>
+                <span>Download Master Backup (JSON)</span>
+              </button>
+            )}
+
+            {onDownloadExcelBackup && (
+              <button
+                id="download-master-excel-backup-btn"
+                onClick={onDownloadExcelBackup}
+                className="inline-flex items-center justify-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-750 border border-emerald-600/40 text-emerald-300 text-xs font-bold rounded-xl shadow active:scale-95 transition"
+                title="Download complete Master Excel/CSV backup including full audit trail"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <span>Download Master Backup (Excel)</span>
               </button>
             )}
 

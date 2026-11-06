@@ -741,6 +741,23 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         }
       }
 
+      // CRITICAL FIX: Retain and display any entry from sheetData.entries not in hubRiders (e.g. past dates like Nov 4)
+      const processedIds = new Set(merged.map((m) => m.riderId));
+      const processedPhones = new Set(
+        merged.map((m) => (m.riderPhone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
+      );
+
+      (sheetData.entries || []).forEach((e) => {
+        const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+        const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
+          (cleanPhone && processedPhones.has(cleanPhone));
+        if (!isProcessed) {
+          merged.push(e);
+          if (e.riderId) processedIds.add(e.riderId);
+          if (cleanPhone) processedPhones.add(cleanPhone);
+        }
+      });
+
       // Hub-Wide Daily Entry Feed: Logged-in rider can view daily entry list of ALL active riders in the hub for that date.
       // Peer entries are strictly read-only (enforced via canEditRow & canVerifyField).
       // The logged-in rider's own entry is sorted to the very top for effortless editing.

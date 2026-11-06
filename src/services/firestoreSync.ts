@@ -97,6 +97,11 @@ export function isEntityOwnedByUser(
   const targetUid = userUid.trim();
   const targetEmail = (userEmail || '').trim().toLowerCase();
 
+  // Master Super Admin has full ownership & visibility across all hub workspaces
+  if (targetEmail === SUPER_ADMIN_EMAIL.toLowerCase() || isSuperAdmin(targetUid)) {
+    return true;
+  }
+
   // 1. Strict Negative Check: Purge all external Gmail accounts
   if (entity.createdByEmail) {
     const email = entity.createdByEmail.trim().toLowerCase();
@@ -1844,9 +1849,7 @@ export function subscribeToUserData(
       ridersMap.clear();
       snapshot.forEach((docSnap) => {
         const r = docSnap.data() as Rider;
-        // Purge check: if this document in userId's workspace is tagged with an external Gmail account or other UID
         if (!isEntityOwnedByUser(r, userId, effectiveEmail)) {
-          deleteDoc(docSnap.ref).catch(() => {});
           return;
         }
         ridersMap.set(docSnap.id, r);
@@ -1881,7 +1884,6 @@ export function subscribeToUserData(
       snapshot.forEach((docSnap) => {
         const e = docSnap.data() as DeliveryEntry;
         if (!isEntityOwnedByUser(e, userId, effectiveEmail)) {
-          deleteDoc(docSnap.ref).catch(() => {});
           return;
         }
         deliveriesMap.set(docSnap.id, e);
@@ -1901,7 +1903,6 @@ export function subscribeToUserData(
       snapshot.forEach((docSnap) => {
         const s = docSnap.data() as SettlementRecord;
         if (!isEntityOwnedByUser(s, userId, effectiveEmail)) {
-          deleteDoc(docSnap.ref).catch(() => {});
           return;
         }
         settlementsMap.set(docSnap.id, s);
