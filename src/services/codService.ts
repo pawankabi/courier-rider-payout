@@ -525,19 +525,55 @@ export async function loadCodDailyEntries(
         } catch {}
       }
 
-      // 1c. Check scoped root doc: daily_cod_sheets/{userId}_{targetDate}
-      if (savedEntries.filter(hasRecordedData).length === 0) {
-        try {
-          const scopedSnap = await getDoc(doc(db, 'daily_cod_sheets', `${effectiveUserId}_${targetDate}`));
-          if (scopedSnap.exists()) {
-            const scopedData = scopedSnap.data();
-            const firestoreEntries = extractEntriesFromSheetRaw(scopedData, targetDate);
-            if (firestoreEntries.length > 0) {
+      // 1c. Defensively merge scoped root doc: daily_cod_sheets/{userId}_{targetDate}
+      try {
+        const scopedSnap = await getDoc(doc(db, 'daily_cod_sheets', `${effectiveUserId}_${targetDate}`));
+        if (scopedSnap.exists()) {
+          const scopedData = scopedSnap.data();
+          const firestoreEntries = extractEntriesFromSheetRaw(scopedData, targetDate);
+          if (firestoreEntries.length > 0) {
+            if (savedEntries.length === 0) {
               savedEntries = firestoreEntries;
+            } else {
+              // Merge non-zero values (cash, online, notes, company amounts) from scoped doc
+              const mergedMap = new Map<string, CodDailyEntry>();
+              savedEntries.forEach((e) => {
+                const cp = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+                mergedMap.set(cp || e.riderId, e);
+              });
+              firestoreEntries.forEach((se) => {
+                const cp = (se.riderPhone || '').replace(/\D/g, '').slice(-10);
+                const key = cp || se.riderId;
+                if (!mergedMap.has(key)) {
+                  mergedMap.set(key, se);
+                } else {
+                  const ex = mergedMap.get(key)!;
+                  const c1 = Number(ex.company1Amount || se.company1Amount || 0);
+                  const c2 = Number(ex.company2Amount || se.company2Amount || 0);
+                  const cash = Number(ex.cashDeposit || se.cashDeposit || 0);
+                  const online = Number(ex.onlineDeposit || se.onlineDeposit || 0);
+                  const totalCod = c1 + c2;
+                  const totalDeposit = cash + online;
+                  const balance = totalCod - totalDeposit;
+                  mergedMap.set(key, {
+                    ...ex,
+                    ...se,
+                    company1Amount: c1,
+                    company2Amount: c2,
+                    totalCod,
+                    cashDeposit: cash,
+                    onlineDeposit: online,
+                    totalDeposit,
+                    balance,
+                    cashDenomination: ex.cashDenomination || se.cashDenomination,
+                  });
+                }
+              });
+              savedEntries = Array.from(mergedMap.values());
             }
           }
-        } catch {}
-      }
+        }
+      } catch {}
 
       // 1d. Check super_admin_hub doc: hubs/super_admin_hub/daily_cod_sheets/{targetDate}
       if (savedEntries.filter(hasRecordedData).length === 0 && effectiveUserId !== 'super_admin_hub') {
