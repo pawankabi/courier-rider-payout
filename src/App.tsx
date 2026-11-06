@@ -491,7 +491,7 @@ function MainCourierApp() {
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
 
-  useEffect(() => {
+  /*useEffect(() => {
     const cleanup = initAutonomousSafetySentinel(
       () => ridersRef.current,
       () => settlementsRef.current,
@@ -501,7 +501,7 @@ function MainCourierApp() {
       }
     );
     return cleanup;
-  }, []);
+  }, []);*/
 
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
     setLegalPoliciesInitialTab(tab);
