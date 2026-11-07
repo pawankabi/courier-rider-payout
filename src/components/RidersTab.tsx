@@ -58,6 +58,7 @@ import {
   calculateActiveIncentiveTotal
 } from '../utils/payoutCalculations';
 import { calculateRiderFinancialState } from '../utils/masterAccountingEngine';
+import { loadQuickStatsSummary } from '../utils/storage';
 import { FestivalBannerCard } from './FestivalBannerCard';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
 import { BulkDateRangeSmsModal } from './BulkDateRangeSmsModal';
@@ -798,17 +799,18 @@ export const RidersTab: React.FC<Props> = ({
     }
   };
 
-  // Global counts for filter badges
+  // Global counts for filter badges with 0.0s cold-start pre-cache fallback
+  const cachedSummary = loadQuickStatsSummary();
   const totalUnpaidDeliveries = entries.filter((e) => e.status === 'Unpaid');
-  const totalUnpaidAmount = totalUnpaidDeliveries.reduce(
-    (sum, e) => sum + e.totalEarnings,
+  const liveUnpaidAmount = totalUnpaidDeliveries.reduce(
+    (sum, e) => sum + (Number(e.totalEarnings) || 0),
     0
   );
-  const totalUnpaidParcels = totalUnpaidDeliveries.reduce(
-    (sum, e) => sum + e.parcels,
+  const liveUnpaidParcels = totalUnpaidDeliveries.reduce(
+    (sum, e) => sum + (Number(e.parcels) || 0),
     0
   );
-  const totalAdvanceAmount = riders.reduce(
+  const liveAdvanceAmount = riders.reduce(
     (sum, r) => {
       const adv = calculateActiveAdvanceTotal(r.advances, settlements, r.id);
       const inc = calculateActiveIncentiveTotal(r.incentives, settlements, r.id);
@@ -816,6 +818,17 @@ export const RidersTab: React.FC<Props> = ({
     },
     0
   );
+
+  // If entries are still hydrating on launch, immediately render cached figures in 0ms!
+  const totalUnpaidAmount = entries.length > 0 || !cachedSummary 
+    ? liveUnpaidAmount 
+    : cachedSummary.totalUnpaidAmount;
+  const totalUnpaidParcels = entries.length > 0 || !cachedSummary 
+    ? liveUnpaidParcels 
+    : cachedSummary.todayParcels;
+  const totalAdvanceAmount = riders.length > 0 || !cachedSummary 
+    ? liveAdvanceAmount 
+    : cachedSummary.totalAdvanceAmount;
 
   const ridersWithUnpaid = riders.filter((r) => {
     const stats = getRiderStats(r.id);

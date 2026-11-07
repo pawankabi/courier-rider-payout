@@ -95,7 +95,9 @@ import {
   saveSettingsToStorage,
   loadSettingsFromStorage,
   hasUserCachedData,
-  purgeLegacyMockStorage
+  purgeLegacyMockStorage,
+  loadQuickStatsSummary,
+  saveQuickStatsSummary
 } from './utils/storage';
 import {
   calculateActiveAdvanceTotal,
@@ -1471,47 +1473,45 @@ function MainCourierApp() {
             setIsDataLoading(true);
           }
 
-          if (isCurrentPro) {
-            migrateLocalStorageToFirestore(user.uid).catch((migErr) => {
-              console.error('Migration error:', migErr);
-            });
+          // Universal Zero-Loss Cloud Sync & Auto-Restoration:
+          // Every authenticated user automatically connects to Firestore.
+          // If the app was deleted and re-installed, this immediately pulls all historical records down into phone storage!
+          migrateLocalStorageToFirestore(user.uid).catch((migErr) => {
+            console.error('Migration error:', migErr);
+          });
 
-            unsubscribeFirestore = subscribeToUserData(
-              user.uid,
-              {
-                onRiders: (newRiders) => {
-                  const userRiders = newRiders.filter((r) => isEntityOwnedByUser(r, user.uid, user.email));
-                  setRiders(userRiders);
-                  saveRidersToStorage(userRiders, user.uid);
-                  setSyncStatus('synced');
-                  setIsDataLoading(false);
-                },
-                onDeliveries: (newDeliveries) => {
-                  const userDeliveries = newDeliveries.filter((d) => isEntityOwnedByUser(d, user.uid, user.email));
-                  setEntries(userDeliveries);
-                  saveDeliveriesToStorage(userDeliveries, user.uid);
-                  setSyncStatus('synced');
-                  setIsDataLoading(false);
-                },
-                onSettlements: (newSettlements) => {
-                  const userSettlements = newSettlements.filter((s) => isEntityOwnedByUser(s, user.uid, user.email));
-                  setSettlements(userSettlements);
-                  saveSettlementsToStorage(userSettlements, user.uid);
-                  setSyncStatus('synced');
-                  setIsDataLoading(false);
-                },
-                onError: (err) => {
-                  console.error('Firestore sync error:', err);
-                  setSyncStatus('offline');
-                  setIsDataLoading(false);
-                },
+          unsubscribeFirestore = subscribeToUserData(
+            user.uid,
+            {
+              onRiders: (newRiders) => {
+                const userRiders = newRiders.filter((r) => isEntityOwnedByUser(r, user.uid, user.email));
+                setRiders(userRiders);
+                saveRidersToStorage(userRiders, user.uid);
+                setSyncStatus('synced');
+                setIsDataLoading(false);
               },
-              user.email
-            );
-          } else {
-            setSyncStatus('local');
-            setIsDataLoading(false);
-          }
+              onDeliveries: (newDeliveries) => {
+                const userDeliveries = newDeliveries.filter((d) => isEntityOwnedByUser(d, user.uid, user.email));
+                setEntries(userDeliveries);
+                saveDeliveriesToStorage(userDeliveries, user.uid);
+                setSyncStatus('synced');
+                setIsDataLoading(false);
+              },
+              onSettlements: (newSettlements) => {
+                const userSettlements = newSettlements.filter((s) => isEntityOwnedByUser(s, user.uid, user.email));
+                setSettlements(userSettlements);
+                saveSettlementsToStorage(userSettlements, user.uid);
+                setSyncStatus('synced');
+                setIsDataLoading(false);
+              },
+              onError: (err) => {
+                console.error('Firestore sync error:', err);
+                setSyncStatus('offline');
+                setIsDataLoading(false);
+              },
+            },
+            user.email
+          );
         }).catch((err) => {
           console.error('Error in syncUserProfile background task:', err);
           setIsDataLoading(false);
@@ -1692,7 +1692,7 @@ function MainCourierApp() {
     const updated = [newEntry, ...entries];
     updateEntries(updated);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await saveDeliveryToFirestore(targetUid, newEntry, currentOwnerEmail);
@@ -1705,21 +1705,38 @@ function MainCourierApp() {
     }
   };
 
-  // Update Delivery Entry
+  // Update Delivery Entry with Immutable Audit Trail
   const handleUpdateEntry = async (updatedEntry: DeliveryEntry) => {
     const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+    const existingEntry = entries.find((e) => e.id === updatedEntry.id);
+    
+    // Log previous & updated values into audit trail
+    const auditRecord = {
+      editedAt: new Date().toISOString(),
+      previousParcels: existingEntry ? existingEntry.parcels : undefined,
+      updatedParcels: updatedEntry.parcels,
+      previousEarnings: existingEntry ? existingEntry.totalEarnings : undefined,
+      updatedEarnings: updatedEntry.totalEarnings,
+      editedBy: currentOwnerEmail || currentOwnerId,
+      note: 'Modified via Delivery Entry form',
+    };
+
     const entryWithOwnership: DeliveryEntry = {
       ...updatedEntry,
       createdBy: updatedEntry.createdBy || currentOwnerId,
       createdByEmail: updatedEntry.createdByEmail || currentOwnerEmail,
       workspaceId: updatedEntry.workspaceId || currentOwnerId,
       userId: updatedEntry.userId || currentOwnerId,
+      auditTrail: [
+        ...(existingEntry?.auditTrail || []),
+        auditRecord,
+      ],
     };
     const updated = entries.map((e) => (e.id === updatedEntry.id ? entryWithOwnership : e));
     updateEntries(updated);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await saveDeliveryToFirestore(targetUid, entryWithOwnership, currentOwnerEmail);
@@ -1738,7 +1755,7 @@ function MainCourierApp() {
       const updated = entries.map((e) => (e.id === id ? { ...e, isDeleted: true, deletedAt: new Date().toISOString() } : e));
       updateEntries(updated);
 
-      if (isProUser && targetUid) {
+      if (targetUid) {
         setSyncStatus('syncing');
         try {
           await deleteDeliveryFromFirestore(targetUid, id);
@@ -1761,7 +1778,7 @@ function MainCourierApp() {
     const updated = entries.map((e) => (e.id === id ? { ...e, isDeleted: false, deletedAt: undefined } : e));
     updateEntries(updated);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await restoreDeliveryInFirestore(targetUid, id);
@@ -1796,7 +1813,7 @@ function MainCourierApp() {
     const updated = [...riders, newRider];
     updateRiders(updated);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await saveRiderToFirestore(targetUid, newRider, currentOwnerEmail);
@@ -1817,7 +1834,7 @@ function MainCourierApp() {
     }));
     updateRiders(indexedRiders);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await updateRidersOrderInFirestore(targetUid, indexedRiders);
@@ -1852,7 +1869,7 @@ function MainCourierApp() {
     );
     updateEntries(updatedEntries);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await saveRiderToFirestore(targetUid, riderWithOwnership, currentOwnerEmail);
@@ -1877,7 +1894,7 @@ function MainCourierApp() {
       );
       updateRiders(updated);
 
-      if (isProUser && targetUid) {
+      if (targetUid) {
         setSyncStatus('syncing');
         try {
           await deleteRiderFromFirestore(targetUid, id);
@@ -1902,7 +1919,7 @@ function MainCourierApp() {
     );
     updateRiders(updated);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await restoreRiderInFirestore(targetUid, id);
@@ -1940,7 +1957,7 @@ function MainCourierApp() {
     const updatedRiders = riders.map((r) => (r.id === riderId ? updatedRider : r));
     updateRiders(updatedRiders);
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       try {
         await restoreAdvanceInFirestore(targetUid, advanceId);
         await saveRiderToFirestore(targetUid, updatedRider);
@@ -2081,7 +2098,7 @@ function MainCourierApp() {
         const updatedRiders = riders.map((r) => (r.id === targetRider.id ? updatedRider : r));
         setRiders(updatedRiders);
         saveRidersToStorage(updatedRiders, targetUid);
-        if (isProUser && targetUid) {
+        if (targetUid) {
           saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch(() => {});
         }
 
@@ -2110,7 +2127,7 @@ function MainCourierApp() {
       }
     }
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       setSyncStatus('syncing');
       try {
         await batchUpdateDeliveriesAndSettlement(targetUid, changedEntries, newSettlement, currentOwnerEmail);
@@ -2152,7 +2169,7 @@ function MainCourierApp() {
       }
     }
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       try {
         await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
       } catch (err) {
@@ -2201,7 +2218,7 @@ function MainCourierApp() {
         console.warn('Error deleting advance from Firestore:', err);
       }
 
-      if (isProUser && targetUid) {
+      if (targetUid) {
         try {
           await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
         } catch (err) {
@@ -2305,7 +2322,7 @@ function MainCourierApp() {
         createdBy: currentOwnerEmail,
       });
 
-      if (isProUser && targetUid) {
+      if (targetUid) {
         await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
       }
     } catch (err) {
@@ -2380,7 +2397,7 @@ function MainCourierApp() {
       console.warn('Error deleting incentive document from Firestore:', err);
     }
 
-    if (isProUser && targetUid) {
+    if (targetUid) {
       try {
         await saveRiderToFirestore(targetUid, updatedRider, currentUser?.email || '');
       } catch (err) {
@@ -2444,7 +2461,7 @@ function MainCourierApp() {
       // Delete docs and reset in Firestore
       try {
         await resetRiderAccountInFirestore(targetUid || '', riderId);
-        if (isProUser && targetUid) {
+        if (targetUid) {
           await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
         }
       } catch (err) {
@@ -2623,22 +2640,56 @@ function MainCourierApp() {
 
   const dashboardAdvances = advances;
 
+  // 0.0s Instant Cold-Start Cache: Load last known financial totals immediately
+  const initialCachedStats = useMemo(() => loadQuickStatsSummary(targetUid), [targetUid]);
+
   // Today stats for quick header badge
   const todayDate = getTodayDateString();
   const todayEntries = dashboardEntries.filter((e) => e.date === todayDate);
-  const todayParcels = todayEntries.reduce((sum, e) => sum + e.parcels, 0);
-  const todayEarnings = todayEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
-  const unpaidCount = dashboardEntries.filter((e) => e.status === 'Unpaid').length;
-  const totalUnpaidAmount = useMemo(() => {
+  const calculatedTodayParcels = todayEntries.reduce((sum, e) => sum + (e.parcels || 0), 0);
+  const calculatedTodayEarnings = todayEntries.reduce((sum, e) => sum + (e.totalEarnings || 0), 0);
+  const calculatedUnpaidCount = dashboardEntries.filter((e) => e.status === 'Unpaid').length;
+  const calculatedTotalUnpaidAmount = useMemo(() => {
     return dashboardEntries
       .filter((e) => e.status === 'Unpaid')
       .reduce((sum, e) => sum + (e.totalEarnings || 0), 0);
   }, [dashboardEntries]);
-  const totalAdvanceAmount = useMemo(() => {
+  const calculatedTotalAdvanceAmount = useMemo(() => {
     return dashboardRiders.reduce((sum, r) => {
       return sum + calculateRiderFinancialState(r.advances, r.incentives, dashboardSettlements, r.id).netAdvance;
     }, 0);
   }, [dashboardRiders, dashboardSettlements]);
+
+  // Instant fallback: If dashboard data is still hydrating on launch, render last confirmed figures in 0ms!
+  const totalUnpaidAmount = dashboardEntries.length > 0 || !initialCachedStats 
+    ? calculatedTotalUnpaidAmount 
+    : initialCachedStats.totalUnpaidAmount;
+  const totalAdvanceAmount = dashboardRiders.length > 0 || !initialCachedStats 
+    ? calculatedTotalAdvanceAmount 
+    : initialCachedStats.totalAdvanceAmount;
+  const todayParcels = dashboardEntries.length > 0 || !initialCachedStats 
+    ? calculatedTodayParcels 
+    : initialCachedStats.todayParcels;
+  const todayEarnings = dashboardEntries.length > 0 || !initialCachedStats 
+    ? calculatedTodayEarnings 
+    : initialCachedStats.todayEarnings;
+  const unpaidCount = dashboardEntries.length > 0 || !initialCachedStats 
+    ? calculatedUnpaidCount 
+    : initialCachedStats.unpaidCount;
+
+  // Persist quick stats whenever dashboard figures settle
+  useEffect(() => {
+    if (dashboardEntries.length > 0 || dashboardRiders.length > 0) {
+      saveQuickStatsSummary({
+        totalUnpaidAmount: calculatedTotalUnpaidAmount,
+        totalAdvanceAmount: calculatedTotalAdvanceAmount,
+        todayEarnings: calculatedTodayEarnings,
+        todayParcels: calculatedTodayParcels,
+        unpaidCount: calculatedUnpaidCount,
+        lastUpdated: Date.now(),
+      }, targetUid);
+    }
+  }, [calculatedTotalUnpaidAmount, calculatedTotalAdvanceAmount, calculatedTodayEarnings, calculatedTodayParcels, calculatedUnpaidCount, targetUid, dashboardEntries.length, dashboardRiders.length]);
 
   if (!isInitialized) {
     return (

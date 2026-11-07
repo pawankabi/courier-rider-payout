@@ -464,3 +464,49 @@ export function isFestivalGreetingSentWithin24Hours(
   const hoursRemaining = Math.max(1, Math.ceil(msLeft / (60 * 60 * 1000)));
   return { isSent: true, sentAt: record.sentAt, hoursRemaining };
 }
+
+// -------------------------------------------------------------
+// 0.0s Instant Cold-Start Quick Stats Cache ("कुल अनपेड" व "कुल बकाया राशि")
+// -------------------------------------------------------------
+export interface QuickStatsSummary {
+  totalUnpaidAmount: number;
+  totalAdvanceAmount: number;
+  todayEarnings: number;
+  todayParcels: number;
+  unpaidCount: number;
+  lastUpdated: number;
+}
+
+export function saveQuickStatsSummary(summary: QuickStatsSummary, userId?: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const uid = userId || getCachedAuthUserId() || 'guest';
+    const payload = JSON.stringify({ ...summary, lastUpdated: Date.now() });
+    localStorage.setItem(`cp_stats_summary_${uid}`, payload);
+    localStorage.setItem('cp_stats_summary_latest', payload);
+  } catch (err) {
+    console.warn('Notice saving quick stats summary:', err);
+  }
+}
+
+export function loadQuickStatsSummary(userId?: string): QuickStatsSummary | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const uid = userId || getCachedAuthUserId() || 'guest';
+    const raw = localStorage.getItem(`cp_stats_summary_${uid}`) || localStorage.getItem('cp_stats_summary_latest');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      totalUnpaidAmount: Number(parsed.totalUnpaidAmount) || 0,
+      totalAdvanceAmount: Number(parsed.totalAdvanceAmount) || 0,
+      todayEarnings: Number(parsed.todayEarnings) || 0,
+      todayParcels: Number(parsed.todayParcels) || 0,
+      unpaidCount: Number(parsed.unpaidCount) || 0,
+      lastUpdated: Number(parsed.lastUpdated) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+

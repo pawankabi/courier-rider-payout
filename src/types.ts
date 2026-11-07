@@ -144,6 +144,15 @@ export interface DeliveryEntry {
   deletedAt?: string;
   deletedBy?: string;
   deleteReason?: string;
+  auditTrail?: Array<{
+    editedAt: string;
+    previousParcels?: number;
+    updatedParcels?: number;
+    previousEarnings?: number;
+    updatedEarnings?: number;
+    editedBy?: string;
+    note?: string;
+  }>;
 }
 
 export interface SettlementRecord {
