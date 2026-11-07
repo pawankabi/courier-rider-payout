@@ -820,15 +820,15 @@ export const RidersTab: React.FC<Props> = ({
   );
 
   // If entries are still hydrating on launch, immediately render cached figures in 0ms!
-  const totalUnpaidAmount = entries.length > 0 || !cachedSummary 
+  const totalUnpaidAmount = (entries.length > 0)
     ? liveUnpaidAmount 
-    : cachedSummary.totalUnpaidAmount;
-  const totalUnpaidParcels = entries.length > 0 || !cachedSummary 
+    : (cachedSummary?.totalUnpaidAmount || 0);
+  const totalUnpaidParcels = (entries.length > 0)
     ? liveUnpaidParcels 
-    : cachedSummary.todayParcels;
-  const totalAdvanceAmount = riders.length > 0 || !cachedSummary 
+    : (cachedSummary?.todayParcels || 0);
+  const totalAdvanceAmount = (riders.length > 0)
     ? liveAdvanceAmount 
-    : cachedSummary.totalAdvanceAmount;
+    : (cachedSummary?.totalAdvanceAmount || 0);
 
   const ridersWithUnpaid = riders.filter((r) => {
     const stats = getRiderStats(r.id);

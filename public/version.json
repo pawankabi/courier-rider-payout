@@ -1,8 +1,8 @@
 {
-  "version": "1.0.30",
-  "versionCode": 30,
-  "buildTime": 1793872908066,
-  "buildDate": "2026-11-05",
-  "releaseNotes": "v1.0.30 - Zero Data Loss Protection, 1-Click Recycle Bin (कचरा पेटी), Daily Auto Cloud Snapshots, Daily Hub P&L (लाभ-हानि), Rider Attendance (हाजिरी), and Master Security PIN",
-  "updatedAt": "2026-11-05T10:01:48.066Z"
+  "version": "1.0.39",
+  "versionCode": 39,
+  "buildTime": 1794048084396,
+  "buildDate": "2026-11-07",
+  "releaseNotes": "Auto-Sync Version 1.0.39 - Modern Adaptive Icons, Real-time Payout & Fast OTA Update",
+  "updatedAt": "2026-11-07T10:41:24.398Z"
 }

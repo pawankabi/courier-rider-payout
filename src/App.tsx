@@ -2661,25 +2661,27 @@ function MainCourierApp() {
   }, [dashboardRiders, dashboardSettlements]);
 
   // Instant fallback: If dashboard data is still hydrating on launch, render last confirmed figures in 0ms!
-  const totalUnpaidAmount = dashboardEntries.length > 0 || !initialCachedStats 
+  const totalUnpaidAmount = (dashboardEntries.length > 0)
     ? calculatedTotalUnpaidAmount 
-    : initialCachedStats.totalUnpaidAmount;
-  const totalAdvanceAmount = dashboardRiders.length > 0 || !initialCachedStats 
+    : (initialCachedStats?.totalUnpaidAmount || 0);
+  const totalAdvanceAmount = (dashboardRiders.length > 0)
     ? calculatedTotalAdvanceAmount 
-    : initialCachedStats.totalAdvanceAmount;
-  const todayParcels = dashboardEntries.length > 0 || !initialCachedStats 
+    : (initialCachedStats?.totalAdvanceAmount || 0);
+  const todayParcels = (dashboardEntries.length > 0)
     ? calculatedTodayParcels 
-    : initialCachedStats.todayParcels;
-  const todayEarnings = dashboardEntries.length > 0 || !initialCachedStats 
+    : (initialCachedStats?.todayParcels || 0);
+  const todayEarnings = (dashboardEntries.length > 0)
     ? calculatedTodayEarnings 
-    : initialCachedStats.todayEarnings;
-  const unpaidCount = dashboardEntries.length > 0 || !initialCachedStats 
+    : (initialCachedStats?.todayEarnings || 0);
+  const unpaidCount = (dashboardEntries.length > 0)
     ? calculatedUnpaidCount 
-    : initialCachedStats.unpaidCount;
+    : (initialCachedStats?.unpaidCount || 0);
 
-  // Persist quick stats whenever dashboard figures settle
+  // Persist quick stats whenever dashboard figures settle with real records
   useEffect(() => {
-    if (dashboardEntries.length > 0 || dashboardRiders.length > 0) {
+    // CRITICAL GUARD: Only overwrite cache if dashboardEntries has actually loaded real records.
+    // Never wipe out a confirmed cached unpaid amount with 0 during initial cold boot!
+    if (dashboardEntries.length > 0) {
       saveQuickStatsSummary({
         totalUnpaidAmount: calculatedTotalUnpaidAmount,
         totalAdvanceAmount: calculatedTotalAdvanceAmount,
@@ -2689,7 +2691,7 @@ function MainCourierApp() {
         lastUpdated: Date.now(),
       }, targetUid);
     }
-  }, [calculatedTotalUnpaidAmount, calculatedTotalAdvanceAmount, calculatedTodayEarnings, calculatedTodayParcels, calculatedUnpaidCount, targetUid, dashboardEntries.length, dashboardRiders.length]);
+  }, [calculatedTotalUnpaidAmount, calculatedTotalAdvanceAmount, calculatedTodayEarnings, calculatedTodayParcels, calculatedUnpaidCount, targetUid, dashboardEntries.length]);
 
   if (!isInitialized) {
     return (

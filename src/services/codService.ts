@@ -72,36 +72,42 @@ export function mergeCodEntriesNonDestructively(
   incomingEntries: CodDailyEntry[]
 ): CodDailyEntry[] {
   const mergedMap = new Map<string, CodDailyEntry>();
-  const phoneToKeyMap = new Map<string, string>();
+  const aliasToKeyMap = new Map<string, string>();
+
+  const registerAlias = (key: string, alias: string) => {
+    if (alias && key) aliasToKeyMap.set(alias, key);
+  };
+
+  const resolveKey = (entry: CodDailyEntry, fallbackPrefix: string): string => {
+    const idKey = entry.riderId ? String(entry.riderId).trim() : '';
+    const cleanPhone = (entry.riderPhone || '').replace(/\D/g, '').slice(-10);
+    const cleanName = (entry.riderName || '').trim().toLowerCase();
+
+    if (idKey && aliasToKeyMap.has(idKey)) return aliasToKeyMap.get(idKey)!;
+    if (cleanPhone && aliasToKeyMap.has(`phone_${cleanPhone}`)) return aliasToKeyMap.get(`phone_${cleanPhone}`)!;
+    if (cleanName && cleanName !== 'राइडर' && aliasToKeyMap.has(`name_${cleanName}`)) return aliasToKeyMap.get(`name_${cleanName}`)!;
+
+    const newKey = idKey || (cleanPhone ? `phone_${cleanPhone}` : `${fallbackPrefix}_${Math.random()}`);
+    if (idKey) registerAlias(newKey, idKey);
+    if (cleanPhone) registerAlias(newKey, `phone_${cleanPhone}`);
+    if (cleanName && cleanName !== 'राइडर') registerAlias(newKey, `name_${cleanName}`);
+    return newKey;
+  };
 
   // 1. Index base existing entries
-  (existingEntries || []).forEach((entry) => {
+  (existingEntries || []).forEach((entry, idx) => {
     if (!entry) return;
-    const cleanPhone = (entry.riderPhone || '').replace(/\D/g, '').slice(-10);
-    const key = entry.riderId ? String(entry.riderId).trim() : (cleanPhone ? `phone_${cleanPhone}` : '');
-    if (key) {
-      mergedMap.set(key, entry);
-      if (cleanPhone) phoneToKeyMap.set(cleanPhone, key);
-    }
+    const key = resolveKey(entry, `exist_${idx}`);
+    mergedMap.set(key, entry);
   });
 
   // 2. Safely merge incoming entries with zero loss
-  (incomingEntries || []).forEach((incoming) => {
+  (incomingEntries || []).forEach((incoming, idx) => {
     if (!incoming) return;
-    const cleanPhone = (incoming.riderPhone || '').replace(/\D/g, '').slice(-10);
-    const idKey = incoming.riderId ? String(incoming.riderId).trim() : '';
+    const matchedKey = resolveKey(incoming, `inc_${idx}`);
 
-    let matchedKey: string | null = null;
-    if (idKey && mergedMap.has(idKey)) {
-      matchedKey = idKey;
-    } else if (cleanPhone && phoneToKeyMap.has(cleanPhone)) {
-      matchedKey = phoneToKeyMap.get(cleanPhone)!;
-    }
-
-    if (!matchedKey) {
-      const newKey = idKey || (cleanPhone ? `phone_${cleanPhone}` : `rider_${Date.now()}_${Math.random()}`);
-      mergedMap.set(newKey, incoming);
-      if (cleanPhone) phoneToKeyMap.set(cleanPhone, newKey);
+    if (!mergedMap.has(matchedKey)) {
+      mergedMap.set(matchedKey, incoming);
       return;
     }
 
@@ -118,15 +124,60 @@ export function mergeCodEntriesNonDestructively(
       const existingTime = new Date(existing.updatedAt || 0).getTime();
       const baseObj = incomingTime >= existingTime ? { ...existing, ...incoming } : { ...incoming, ...existing };
 
-      baseObj.company1Amount = Number(incoming.company1Amount) || Number(existing.company1Amount) || 0;
-      baseObj.company2Amount = Number(incoming.company2Amount) || Number(existing.company2Amount) || 0;
-      baseObj.cashDeposit = Number(incoming.cashDeposit) || Number(existing.cashDeposit) || 0;
-      baseObj.onlineDeposit = Number(incoming.onlineDeposit) || Number(existing.onlineDeposit) || 0;
-      baseObj.deliveryCount = Number(incoming.deliveryCount) || Number(existing.deliveryCount) || 0;
-      baseObj.cashDenomination = incoming.cashDenomination && Number(incoming.cashDenomination.total || 0) > 0
+      // DEFENSIVE ZERO-DATA-LOSS FINANCIAL SHIELD:
+      // A positive figure from EITHER copy is permanently preserved and NEVER overwritten by 0!
+      const inC1 = Number(incoming.company1Amount) || 0;
+      const exC1 = Number(existing.company1Amount) || 0;
+      baseObj.company1Amount = inC1 > 0 ? inC1 : exC1;
+
+      const inC2 = Number(incoming.company2Amount) || 0;
+      const exC2 = Number(existing.company2Amount) || 0;
+      baseObj.company2Amount = inC2 > 0 ? inC2 : exC2;
+
+      const inCash = Number(incoming.cashDeposit) || 0;
+      const exCash = Number(existing.cashDeposit) || 0;
+      baseObj.cashDeposit = inCash > 0 ? inCash : exCash;
+
+      const inOnline = Number(incoming.onlineDeposit) || 0;
+      const exOnline = Number(existing.onlineDeposit) || 0;
+      baseObj.onlineDeposit = inOnline > 0 ? inOnline : exOnline;
+
+      const inDels = Number(incoming.deliveryCount) || 0;
+      const exDels = Number(existing.deliveryCount) || 0;
+      baseObj.deliveryCount = inDels > 0 ? inDels : exDels;
+
+      baseObj.cashDenomination = (incoming.cashDenomination && Number(incoming.cashDenomination.total || 0) > 0)
         ? incoming.cashDenomination
         : existing.cashDenomination;
-      baseObj.notes = (incoming.notes && incoming.notes.trim()) ? incoming.notes : existing.notes;
+
+      if (incoming.companyAmounts || existing.companyAmounts) {
+        baseObj.companyAmounts = {
+          ...(existing.companyAmounts || {}),
+          ...(incoming.companyAmounts || {}),
+        };
+      }
+
+      baseObj.notes = (incoming.notes && incoming.notes.trim()) ? incoming.notes : (existing.notes || '');
+
+      // Verification checks: Retain verified tick if either side verified it
+      baseObj.company1Verified = Boolean(incoming.company1Verified || existing.company1Verified);
+      baseObj.company2Verified = Boolean(incoming.company2Verified || existing.company2Verified);
+      baseObj.cashVerified = Boolean(incoming.cashVerified || existing.cashVerified);
+      baseObj.onlineVerified = Boolean(incoming.onlineVerified || existing.onlineVerified);
+
+      baseObj.company1VerifiedBy = incoming.company1VerifiedBy || existing.company1VerifiedBy;
+      baseObj.company2VerifiedBy = incoming.company2VerifiedBy || existing.company2VerifiedBy;
+      baseObj.cashVerifiedBy = incoming.cashVerifiedBy || existing.cashVerifiedBy;
+      baseObj.onlineVerifiedBy = incoming.onlineVerifiedBy || existing.onlineVerifiedBy;
+
+      // Status escalation: locked > verified > submitted > draft
+      const statuses = [existing.status, incoming.status];
+      if (statuses.includes('locked')) baseObj.status = 'locked';
+      else if (statuses.includes('verified')) baseObj.status = 'verified';
+      else if (statuses.includes('submitted')) baseObj.status = 'submitted';
+
+      baseObj.isCashLocked = Boolean(incoming.isCashLocked || existing.isCashLocked);
+
       baseObj.totalCod = (Number(baseObj.company1Amount) || 0) + (Number(baseObj.company2Amount) || 0);
       baseObj.totalDeposit = (Number(baseObj.cashDeposit) || 0) + (Number(baseObj.onlineDeposit) || 0);
       baseObj.balance = baseObj.totalCod - baseObj.totalDeposit;
@@ -439,17 +490,36 @@ export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDai
   // Normalize and group raw items so that entries with real recorded data (amounts, status, deposits, notes)
   // ALWAYS take precedence over empty 0-amount placeholder rows
   const groupedEntries = new Map<string, any>();
+  const aliasToKey = new Map<string, string>();
 
   rawList.forEach((item, index) => {
     if (!item || typeof item !== 'object') return;
-    const riderId = String(item.riderId || item.id || `rider_${index}`);
+    const rawRiderId = item.riderId || item.id;
+    const riderId = rawRiderId ? String(rawRiderId).trim() : '';
     const riderPhone = String(item.riderPhone || item.phone || '');
     const cleanPhone = riderPhone.replace(/\D/g, '').slice(-10);
-    const dedupeKey = cleanPhone || riderId;
+    const cleanName = String(item.riderName || item.name || '').trim().toLowerCase();
 
-    if (!groupedEntries.has(dedupeKey)) {
+    let dedupeKey: string | null = null;
+    if (riderId && aliasToKey.has(riderId)) {
+      dedupeKey = aliasToKey.get(riderId)!;
+    } else if (cleanPhone && aliasToKey.has(`phone_${cleanPhone}`)) {
+      dedupeKey = aliasToKey.get(`phone_${cleanPhone}`)!;
+    } else if (cleanName && cleanName !== 'राइडर' && aliasToKey.has(`name_${cleanName}`)) {
+      dedupeKey = aliasToKey.get(`name_${cleanName}`)!;
+    }
+
+    if (!dedupeKey) {
+      dedupeKey = riderId || (cleanPhone ? `phone_${cleanPhone}` : `rider_${index}_${Math.random()}`);
+      if (riderId) aliasToKey.set(riderId, dedupeKey);
+      if (cleanPhone) aliasToKey.set(`phone_${cleanPhone}`, dedupeKey);
+      if (cleanName && cleanName !== 'राइडर') aliasToKey.set(`name_${cleanName}`, dedupeKey);
       groupedEntries.set(dedupeKey, item);
     } else {
+      if (riderId) aliasToKey.set(riderId, dedupeKey);
+      if (cleanPhone) aliasToKey.set(`phone_${cleanPhone}`, dedupeKey);
+      if (cleanName && cleanName !== 'राइडर') aliasToKey.set(`name_${cleanName}`, dedupeKey);
+
       const existing = groupedEntries.get(dedupeKey);
       const existingHasData = hasRecordedData(existing);
       const currentHasData = hasRecordedData(item);
@@ -462,24 +532,44 @@ export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDai
       } else {
         // Both have data or attributes: defensively merge to never lose non-zero money or notes
         const merged = { ...existing, ...item };
-        if (Number(merged.company1Amount ?? 0) === 0 && Number(existing.company1Amount ?? 0) > 0) {
-          merged.company1Amount = existing.company1Amount;
-        }
-        if (Number(merged.company2Amount ?? 0) === 0 && Number(existing.company2Amount ?? 0) > 0) {
-          merged.company2Amount = existing.company2Amount;
-        }
-        if (Number(merged.cashDeposit ?? 0) === 0 && Number(existing.cashDeposit ?? 0) > 0) {
-          merged.cashDeposit = existing.cashDeposit;
-        }
-        if (Number(merged.onlineDeposit ?? 0) === 0 && Number(existing.onlineDeposit ?? 0) > 0) {
-          merged.onlineDeposit = existing.onlineDeposit;
-        }
+        const c1A = Number(item.company1Amount ?? 0);
+        const c1B = Number(existing.company1Amount ?? 0);
+        merged.company1Amount = c1A > 0 ? c1A : c1B;
+
+        const c2A = Number(item.company2Amount ?? 0);
+        const c2B = Number(existing.company2Amount ?? 0);
+        merged.company2Amount = c2A > 0 ? c2A : c2B;
+
+        const cashA = Number(item.cashDeposit ?? 0);
+        const cashB = Number(existing.cashDeposit ?? 0);
+        merged.cashDeposit = cashA > 0 ? cashA : cashB;
+
+        const onlineA = Number(item.onlineDeposit ?? 0);
+        const onlineB = Number(existing.onlineDeposit ?? 0);
+        merged.onlineDeposit = onlineA > 0 ? onlineA : onlineB;
+
+        const delA = Number(item.deliveryCount ?? 0);
+        const delB = Number(existing.deliveryCount ?? 0);
+        merged.deliveryCount = delA > 0 ? delA : delB;
+
         if (!merged.cashDenomination && existing.cashDenomination) {
           merged.cashDenomination = existing.cashDenomination;
         }
         if (!merged.companyAmounts && existing.companyAmounts) {
           merged.companyAmounts = existing.companyAmounts;
         }
+
+        merged.company1Verified = Boolean(item.company1Verified || existing.company1Verified);
+        merged.company2Verified = Boolean(item.company2Verified || existing.company2Verified);
+        merged.cashVerified = Boolean(item.cashVerified || existing.cashVerified);
+        merged.onlineVerified = Boolean(item.onlineVerified || existing.onlineVerified);
+
+        const stList = [existing.status, item.status];
+        if (stList.includes('locked')) merged.status = 'locked';
+        else if (stList.includes('verified')) merged.status = 'verified';
+        else if (stList.includes('submitted')) merged.status = 'submitted';
+
+        merged.isCashLocked = Boolean(item.isCashLocked || existing.isCashLocked);
         groupedEntries.set(dedupeKey, merged);
       }
     }

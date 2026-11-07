@@ -64,7 +64,8 @@ import {
   updateSingleRiderEntryInSheet,
   toggleDayEndLockForSheet,
   normalizePhoneNumber,
-  resolveHubIdFromPhone
+  resolveHubIdFromPhone,
+  mergeCodEntriesNonDestructively
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
 import { purgeLegacyMockStorage } from '../utils/storage';
@@ -667,16 +668,57 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     if (!currentHubId) return [];
 
     const entryMap = new Map<string, CodDailyEntry>();
-    (sheetData.entries || []).forEach((e) => {
-      if (e.riderId) entryMap.set(e.riderId, e);
+    const aliasToKey = new Map<string, string>();
+
+    const safeIndexEntry = (e: CodDailyEntry) => {
+      if (!e) return;
+      const rId = e.riderId ? String(e.riderId).trim() : '';
       const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-      if (cleanPhone) entryMap.set(cleanPhone, e);
-    });
+      const cleanName = (e.riderName || '').trim().toLowerCase();
+
+      let targetKey: string | null = null;
+      if (rId && aliasToKey.has(rId)) targetKey = aliasToKey.get(rId)!;
+      else if (cleanPhone && aliasToKey.has(`phone_${cleanPhone}`)) targetKey = aliasToKey.get(`phone_${cleanPhone}`)!;
+      else if (cleanName && cleanName !== 'राइडर' && aliasToKey.has(`name_${cleanName}`)) targetKey = aliasToKey.get(`name_${cleanName}`)!;
+
+      if (!targetKey) {
+        targetKey = rId || (cleanPhone ? `phone_${cleanPhone}` : `entry_${Math.random()}`);
+        if (rId) aliasToKey.set(rId, targetKey);
+        if (cleanPhone) aliasToKey.set(`phone_${cleanPhone}`, targetKey);
+        if (cleanName && cleanName !== 'राइडर') aliasToKey.set(`name_${cleanName}`, targetKey);
+        entryMap.set(targetKey, e);
+      } else {
+        if (rId) aliasToKey.set(rId, targetKey);
+        if (cleanPhone) aliasToKey.set(`phone_${cleanPhone}`, targetKey);
+        if (cleanName && cleanName !== 'राइडर') aliasToKey.set(`name_${cleanName}`, targetKey);
+        const existing = entryMap.get(targetKey)!;
+        const [merged] = mergeCodEntriesNonDestructively([existing], [e]);
+        entryMap.set(targetKey, merged);
+      }
+    };
+
+    (sheetData.entries || []).forEach(safeIndexEntry);
+
+    const lookupEntry = (riderId?: string, riderPhone?: string, riderName?: string): CodDailyEntry | undefined => {
+      const rId = riderId ? String(riderId).trim() : '';
+      const cleanPhone = (riderPhone || '').replace(/\D/g, '').slice(-10);
+      const cleanName = (riderName || '').trim().toLowerCase();
+
+      let key: string | null = null;
+      if (rId && aliasToKey.has(rId)) key = aliasToKey.get(rId)!;
+      else if (cleanPhone && aliasToKey.has(`phone_${cleanPhone}`)) key = aliasToKey.get(`phone_${cleanPhone}`)!;
+      else if (cleanName && cleanName !== 'राइडर' && aliasToKey.has(`name_${cleanName}`)) key = aliasToKey.get(`name_${cleanName}`)!;
+
+      if (key && entryMap.has(key)) return entryMap.get(key);
+      if (rId && entryMap.has(rId)) return entryMap.get(rId);
+      if (cleanPhone && entryMap.has(`phone_${cleanPhone}`)) return entryMap.get(`phone_${cleanPhone}`);
+      return undefined;
+    };
 
     if (hubRiders.length > 0) {
       const merged: CodDailyEntry[] = hubRiders.map((r) => {
         const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
-        const ex = entryMap.get(r.id) || (cleanPhone ? entryMap.get(cleanPhone) : undefined);
+        const ex = lookupEntry(r.id, r.phone, r.name);
         if (ex) {
           const totalCod = (Number(ex.company1Amount) || 0) + (Number(ex.company2Amount) || 0);
           const totalDeposit = (Number(ex.cashDeposit) || 0) + (Number(ex.onlineDeposit) || 0);
@@ -717,7 +759,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           (m) => m.riderId === myId || ((m.riderPhone || '').replace(/\D/g, '').slice(-10) === cleanUserPhone && cleanUserPhone)
         );
         if (!exists) {
-          const ex = entryMap.get(myId) || (cleanUserPhone ? entryMap.get(cleanUserPhone) : undefined);
+          const ex = lookupEntry(myId, authUser.phone, authUser.name);
           if (ex) {
             merged.unshift(ex);
           } else {
