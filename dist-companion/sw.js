@@ -96,7 +96,7 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "revision": "6f90c8b47b7b5089dfffc7737da86e62"
   }, {
     "url": "index.html",
-    "revision": "89377035a77ddd0792a9594da4daf87c"
+    "revision": "319e1c9742f1b56c51c06913f02ece53"
   }, {
     "url": "icon.svg",
     "revision": "71ec083ef2733f3feaf10cff3875f9ce"
@@ -107,16 +107,16 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "admin-logo.svg",
     "revision": "71ec083ef2733f3feaf10cff3875f9ce"
   }, {
-    "url": "assets/web-z4silIDU.js",
+    "url": "assets/web-DMOwxZ7i.js",
     "revision": null
   }, {
-    "url": "assets/web-DxWDMLkY.js",
+    "url": "assets/web-C-XkvbR8.js",
     "revision": null
   }, {
-    "url": "assets/web-DpjBAf0D.js",
+    "url": "assets/web-Bmg6cUBP.js",
     "revision": null
   }, {
-    "url": "assets/web-CpnfD6n6.js",
+    "url": "assets/web-B8lhb1ZK.js",
     "revision": null
   }, {
     "url": "assets/vendor-react-jrF7e2F0.js",
@@ -131,19 +131,19 @@ define(['./workbox-0f6cd090'], (function (workbox) { 'use strict';
     "url": "assets/purify.es-DedTAGkB.js",
     "revision": null
   }, {
-    "url": "assets/native-Dw6UR4U6.js",
+    "url": "assets/native-e33A5ZrC.js",
     "revision": null
   }, {
     "url": "assets/index.es-CsLtj_j5.js",
     "revision": null
   }, {
+    "url": "assets/index-Dyv9ZNIW.js",
+    "revision": null
+  }, {
     "url": "assets/index-C522tPPP.css",
     "revision": null
   }, {
-    "url": "assets/index-BKQS2eMT.js",
-    "revision": null
-  }, {
-    "url": "assets/base-DufA-pDS.js",
+    "url": "assets/base-D4gPVTma.js",
     "revision": null
   }, {
     "url": "admin-logo.svg",

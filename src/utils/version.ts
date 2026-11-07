@@ -2,7 +2,7 @@
  * Centralized Application Version Management & GitHub Release Auto-Discovery
  */
 
-export const APP_VERSION = '1.0.39';
+export const APP_VERSION = '1.0.44';
 export const DEFAULT_GITHUB_REPO = 'pawankabi/courier-rider-payout';
 
 function parseSemver(v: string): number[] {

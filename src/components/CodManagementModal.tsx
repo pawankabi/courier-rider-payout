@@ -744,8 +744,8 @@ export const CodManagementModal: React.FC<Props> = ({
       return {
         ...row,
         isCashLocked: nextVal,
-        cashLockedAt: nextVal ? new Date().toISOString() : undefined,
-        cashLockedBy: nextVal ? activeUser.name : undefined,
+        cashLockedAt: nextVal ? new Date().toISOString() : '',
+        cashLockedBy: nextVal ? activeUser.name : '',
         updatedAt: new Date().toISOString(),
         updatedBy: activeUser.name,
       };

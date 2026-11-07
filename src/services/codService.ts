@@ -159,24 +159,49 @@ export function mergeCodEntriesNonDestructively(
 
       baseObj.notes = (incoming.notes && incoming.notes.trim()) ? incoming.notes : (existing.notes || '');
 
-      // Verification checks: Retain verified tick if either side verified it
-      baseObj.company1Verified = Boolean(incoming.company1Verified || existing.company1Verified);
-      baseObj.company2Verified = Boolean(incoming.company2Verified || existing.company2Verified);
-      baseObj.cashVerified = Boolean(incoming.cashVerified || existing.cashVerified);
-      baseObj.onlineVerified = Boolean(incoming.onlineVerified || existing.onlineVerified);
+      // Verification checks & Cash Lock status:
+      // Honor explicit user intent (lock vs unlock, verify vs unverify) based on the latest action timestamp!
+      if (incomingTime >= existingTime) {
+        if (incoming.company1Verified !== undefined) baseObj.company1Verified = Boolean(incoming.company1Verified);
+        if (incoming.company2Verified !== undefined) baseObj.company2Verified = Boolean(incoming.company2Verified);
+        if (incoming.cashVerified !== undefined) baseObj.cashVerified = Boolean(incoming.cashVerified);
+        if (incoming.onlineVerified !== undefined) baseObj.onlineVerified = Boolean(incoming.onlineVerified);
 
-      baseObj.company1VerifiedBy = incoming.company1VerifiedBy || existing.company1VerifiedBy;
-      baseObj.company2VerifiedBy = incoming.company2VerifiedBy || existing.company2VerifiedBy;
-      baseObj.cashVerifiedBy = incoming.cashVerifiedBy || existing.cashVerifiedBy;
-      baseObj.onlineVerifiedBy = incoming.onlineVerifiedBy || existing.onlineVerifiedBy;
+        baseObj.company1VerifiedBy = incoming.company1Verified ? incoming.company1VerifiedBy : (incoming.company1Verified === false ? undefined : existing.company1VerifiedBy);
+        baseObj.company2VerifiedBy = incoming.company2Verified ? incoming.company2VerifiedBy : (incoming.company2Verified === false ? undefined : existing.company2VerifiedBy);
+        baseObj.cashVerifiedBy = incoming.cashVerified ? incoming.cashVerifiedBy : (incoming.cashVerified === false ? undefined : existing.cashVerifiedBy);
+        baseObj.onlineVerifiedBy = incoming.onlineVerified ? incoming.onlineVerifiedBy : (incoming.onlineVerified === false ? undefined : existing.onlineVerifiedBy);
 
-      // Status escalation: locked > verified > submitted > draft
-      const statuses = [existing.status, incoming.status];
-      if (statuses.includes('locked')) baseObj.status = 'locked';
-      else if (statuses.includes('verified')) baseObj.status = 'verified';
-      else if (statuses.includes('submitted')) baseObj.status = 'submitted';
+        if (incoming.isCashLocked !== undefined) {
+          baseObj.isCashLocked = Boolean(incoming.isCashLocked);
+          baseObj.cashLockedAt = incoming.isCashLocked ? (incoming.cashLockedAt || new Date().toISOString()) : undefined;
+          baseObj.cashLockedBy = incoming.isCashLocked ? (incoming.cashLockedBy || '') : undefined;
+        } else {
+          baseObj.isCashLocked = Boolean(existing.isCashLocked);
+          baseObj.cashLockedAt = existing.cashLockedAt;
+          baseObj.cashLockedBy = existing.cashLockedBy;
+        }
+      } else {
+        if (existing.company1Verified !== undefined) baseObj.company1Verified = Boolean(existing.company1Verified);
+        if (existing.company2Verified !== undefined) baseObj.company2Verified = Boolean(existing.company2Verified);
+        if (existing.cashVerified !== undefined) baseObj.cashVerified = Boolean(existing.cashVerified);
+        if (existing.onlineVerified !== undefined) baseObj.onlineVerified = Boolean(existing.onlineVerified);
 
-      baseObj.isCashLocked = Boolean(incoming.isCashLocked || existing.isCashLocked);
+        baseObj.company1VerifiedBy = existing.company1Verified ? existing.company1VerifiedBy : (existing.company1Verified === false ? undefined : incoming.company1VerifiedBy);
+        baseObj.company2VerifiedBy = existing.company2Verified ? existing.company2VerifiedBy : (existing.company2Verified === false ? undefined : incoming.company2VerifiedBy);
+        baseObj.cashVerifiedBy = existing.cashVerified ? existing.cashVerifiedBy : (existing.cashVerified === false ? undefined : incoming.cashVerifiedBy);
+        baseObj.onlineVerifiedBy = existing.onlineVerified ? existing.onlineVerifiedBy : (existing.onlineVerified === false ? undefined : incoming.onlineVerifiedBy);
+
+        if (existing.isCashLocked !== undefined) {
+          baseObj.isCashLocked = Boolean(existing.isCashLocked);
+          baseObj.cashLockedAt = existing.cashLockedAt;
+          baseObj.cashLockedBy = existing.cashLockedBy;
+        } else {
+          baseObj.isCashLocked = Boolean(incoming.isCashLocked);
+          baseObj.cashLockedAt = incoming.cashLockedAt;
+          baseObj.cashLockedBy = incoming.cashLockedBy;
+        }
+      }
 
       baseObj.totalCod = (Number(baseObj.company1Amount) || 0) + (Number(baseObj.company2Amount) || 0);
       baseObj.totalDeposit = (Number(baseObj.cashDeposit) || 0) + (Number(baseObj.onlineDeposit) || 0);
@@ -559,17 +584,32 @@ export function extractEntriesFromSheetRaw(raw: any, targetDate: string): CodDai
           merged.companyAmounts = existing.companyAmounts;
         }
 
-        merged.company1Verified = Boolean(item.company1Verified || existing.company1Verified);
-        merged.company2Verified = Boolean(item.company2Verified || existing.company2Verified);
-        merged.cashVerified = Boolean(item.cashVerified || existing.cashVerified);
-        merged.onlineVerified = Boolean(item.onlineVerified || existing.onlineVerified);
+        const itemTime = new Date(item.updatedAt || 0).getTime();
+        const existTime = new Date(existing.updatedAt || 0).getTime();
 
-        const stList = [existing.status, item.status];
-        if (stList.includes('locked')) merged.status = 'locked';
-        else if (stList.includes('verified')) merged.status = 'verified';
-        else if (stList.includes('submitted')) merged.status = 'submitted';
+        if (itemTime >= existTime) {
+          if (item.company1Verified !== undefined) merged.company1Verified = Boolean(item.company1Verified);
+          if (item.company2Verified !== undefined) merged.company2Verified = Boolean(item.company2Verified);
+          if (item.cashVerified !== undefined) merged.cashVerified = Boolean(item.cashVerified);
+          if (item.onlineVerified !== undefined) merged.onlineVerified = Boolean(item.onlineVerified);
 
-        merged.isCashLocked = Boolean(item.isCashLocked || existing.isCashLocked);
+          if (item.isCashLocked !== undefined) {
+            merged.isCashLocked = Boolean(item.isCashLocked);
+            merged.cashLockedAt = item.isCashLocked ? (item.cashLockedAt || new Date().toISOString()) : undefined;
+            merged.cashLockedBy = item.isCashLocked ? (item.cashLockedBy || '') : undefined;
+          }
+        } else {
+          if (existing.company1Verified !== undefined) merged.company1Verified = Boolean(existing.company1Verified);
+          if (existing.company2Verified !== undefined) merged.company2Verified = Boolean(existing.company2Verified);
+          if (existing.cashVerified !== undefined) merged.cashVerified = Boolean(existing.cashVerified);
+          if (existing.onlineVerified !== undefined) merged.onlineVerified = Boolean(existing.onlineVerified);
+
+          if (existing.isCashLocked !== undefined) {
+            merged.isCashLocked = Boolean(existing.isCashLocked);
+            merged.cashLockedAt = existing.isCashLocked ? (existing.cashLockedAt || new Date().toISOString()) : undefined;
+            merged.cashLockedBy = existing.isCashLocked ? (existing.cashLockedBy || '') : undefined;
+          }
+        }
         groupedEntries.set(dedupeKey, merged);
       }
     }

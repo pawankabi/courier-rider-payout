@@ -1128,16 +1128,15 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       showToast('⚠️ केवल हब एडमिन या अधिकृत स्टाफ़ ही कैश लॉक/अनलॉक कर सकते हैं।', 'error');
       return;
     }
-    if (!authUser) return;
-
+    const performerName = authUser?.name || 'Hub Incharge';
     const nextLocked = !Boolean(row.isCashLocked);
     const updated: CodDailyEntry = {
       ...row,
       isCashLocked: nextLocked,
-      cashLockedAt: nextLocked ? new Date().toISOString() : undefined,
-      cashLockedBy: nextLocked ? authUser.name : undefined,
+      cashLockedAt: nextLocked ? new Date().toISOString() : '',
+      cashLockedBy: nextLocked ? performerName : '',
       updatedAt: new Date().toISOString(),
-      updatedBy: authUser.name,
+      updatedBy: performerName,
     };
 
     // 1. Optimistic local UI update
@@ -1172,8 +1171,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     // 2. Direct Firestore update
     try {
       await updateSingleRiderEntryInSheet(selectedDate, updated, {
-        name: authUser.name,
-        role: authUser.role,
+        name: authUser?.name || 'Hub Incharge',
+        role: (authUser?.role as any) || 'owner',
       }, currentHubId);
     } catch (err) {
       console.error('Failed to update cash lock in Firestore:', err);
