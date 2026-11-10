@@ -988,10 +988,13 @@ export async function saveCodDailyEntries(
     (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
   );
   try {
+    // Dual phone memory backup: Array entries key and full sheet key
     localStorage.setItem(localKey, JSON.stringify(cleanEntries));
-    localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(cleanEntries));
+    localStorage.setItem(`cod_entries_${targetDate}`, JSON.stringify(cleanEntries));
+    localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify({ date: targetDate, entries: cleanEntries }));
     if (userId) {
-      localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify(cleanEntries));
+      localStorage.setItem(`cod_entries_${userId}_${targetDate}`, JSON.stringify(cleanEntries));
+      localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify({ date: targetDate, entries: cleanEntries }));
     }
   } catch {}
 
@@ -2074,6 +2077,43 @@ export function buildDefaultCodEntriesForRiders(
 }
 
 /**
+ * Instant 0.0-Second Synchronous Retrieval of Daily COD Sheet from Local Phone Memory
+ * Used to immediately populate the screen without any flicker or bleed when switching to ANY date.
+ */
+export function getCachedDailyCodSheetSync(date: string, hubId?: string): DailyCodSheetData | null {
+  const targetDate = date || getTodayDateString();
+  const effectiveHubId = (hubId && typeof hubId === 'string' && hubId.trim())
+    ? hubId.trim()
+    : (getActiveCompanionHubId() || DEFAULT_PRIMARY_HUB_ID);
+  const localCacheKey = `cp_cod_sheet_${effectiveHubId}_${targetDate}`;
+
+  try {
+    const raw = localStorage.getItem(localCacheKey) ||
+                localStorage.getItem(`cp_cod_sheet_${targetDate}`) ||
+                localStorage.getItem(`cod_entries_${effectiveHubId}_${targetDate}`) ||
+                localStorage.getItem(`cod_entries_${targetDate}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const parsedEntries = extractEntriesFromSheetRaw(parsed, targetDate);
+      if (parsedEntries.length > 0 || (parsed && typeof parsed === 'object' && parsed.date === targetDate)) {
+        return {
+          date: targetDate,
+          entries: parsedEntries,
+          isLocked: Boolean(parsed.isLocked),
+          company1Name: parsed.company1Name || DEFAULT_COMPANY_1,
+          company2Name: parsed.company2Name || DEFAULT_COMPANY_2,
+          hubId: effectiveHubId,
+          hubName: parsed.hubName,
+          hubUpiId: parsed.hubUpiId || '',
+          updatedAt: parsed.updatedAt || new Date().toISOString(),
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
  * 7. Real-Time Zero-Second Listener for Today's Active COD Sheet (hubs/{hubId}/daily_cod_sheets)
  * Synchronizes immediately on every edit or verification
  * Strictly isolated per Hub to avoid cross-hub sheet overwrites
@@ -2093,8 +2133,31 @@ export function subscribeToDailyCodSheet(
 
   const localCacheKey = `cp_cod_sheet_${effectiveHubId}_${targetDate}`;
 
+  let activeSheetInMemory: DailyCodSheetData = {
+    date: targetDate,
+    entries: [],
+    isLocked: false,
+    company1Name: DEFAULT_COMPANY_1,
+    company2Name: DEFAULT_COMPANY_2,
+    hubId: effectiveHubId,
+  };
+
+  // Pre-seed activeSheetInMemory from local cache if present
+  try {
+    const initialCache = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+    if (initialCache) {
+      const parsed = JSON.parse(initialCache);
+      activeSheetInMemory = {
+        ...activeSheetInMemory,
+        ...parsed,
+        entries: extractEntriesFromSheetRaw(parsed, targetDate),
+      };
+    }
+  } catch {}
+
   // Helper to ensure empty entries list is populated with active riders (UNLOCKED sheets only)
   const enrichWithActiveRiders = async (baseData: DailyCodSheetData) => {
+    activeSheetInMemory = { ...baseData, hubId: effectiveHubId };
     // If the sheet is already locked, it is an immutable historical snapshot. Never alter or inject riders!
     if (baseData.isLocked) {
       onUpdate({ ...baseData, hubId: effectiveHubId });
@@ -2110,8 +2173,10 @@ export function subscribeToDailyCodSheet(
           entries: defaultEntries,
           hubId: effectiveHubId,
         };
+        activeSheetInMemory = enriched;
         try {
           localStorage.setItem(localCacheKey, JSON.stringify(enriched));
+          localStorage.setItem(`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(defaultEntries));
         } catch {}
         onUpdate(enriched);
         return;
@@ -2120,36 +2185,35 @@ export function subscribeToDailyCodSheet(
     onUpdate({ ...baseData, hubId: effectiveHubId });
   };
 
-  // Instant Cache-First load in 0.0s
-  try {
-    const cachedRaw = localStorage.getItem(localCacheKey);
-    if (cachedRaw) {
-      const cached = JSON.parse(cachedRaw);
-      const parsedEntries = extractEntriesFromSheetRaw(cached, targetDate);
-      enrichWithActiveRiders({
-        date: targetDate,
-        entries: parsedEntries,
-        isLocked: Boolean(cached.isLocked),
-        company1Name: cached.company1Name || DEFAULT_COMPANY_1,
-        company2Name: cached.company2Name || DEFAULT_COMPANY_2,
-        hubId: effectiveHubId,
-      });
-    } else {
-      getAllActiveRidersForCod(effectiveHubId).then((riders) => {
-        if (riders.length > 0) {
-          const defaultSheet: DailyCodSheetData = {
-            date: targetDate,
-            entries: buildDefaultCodEntriesForRiders(targetDate, riders),
-            isLocked: false,
-            company1Name: DEFAULT_COMPANY_1,
-            company2Name: DEFAULT_COMPANY_2,
-            hubId: effectiveHubId,
-          };
-          onUpdate(defaultSheet);
-        }
-      });
-    }
-  } catch {}
+  // Instant 0.0s Synchronous Cache-First load for ANY date
+  const syncCached = getCachedDailyCodSheetSync(targetDate, effectiveHubId);
+  if (syncCached) {
+    enrichWithActiveRiders(syncCached);
+  } else {
+    // Immediately isolate screen to targetDate with 0 stale bleed
+    onUpdate({
+      date: targetDate,
+      entries: [],
+      isLocked: targetDate < getTodayDateString(),
+      company1Name: DEFAULT_COMPANY_1,
+      company2Name: DEFAULT_COMPANY_2,
+      hubId: effectiveHubId,
+    });
+    getAllActiveRidersForCod(effectiveHubId).then((riders) => {
+      if (riders.length > 0 && activeSheetInMemory.entries.length === 0) {
+        const defaultSheet: DailyCodSheetData = {
+          date: targetDate,
+          entries: buildDefaultCodEntriesForRiders(targetDate, riders),
+          isLocked: targetDate < getTodayDateString(),
+          company1Name: DEFAULT_COMPANY_1,
+          company2Name: DEFAULT_COMPANY_2,
+          hubId: effectiveHubId,
+        };
+        activeSheetInMemory = defaultSheet;
+        onUpdate(defaultSheet);
+      }
+    });
+  }
 
   if (!db) {
     return () => {};
@@ -2160,18 +2224,9 @@ export function subscribeToDailyCodSheet(
     const docRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate);
     const subColRef = collection(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate, 'rider_entries');
 
-    let activeSheetInMemory: DailyCodSheetData = {
-      date: targetDate,
-      entries: [],
-      isLocked: false,
-      company1Name: DEFAULT_COMPANY_1,
-      company2Name: DEFAULT_COMPANY_2,
-      hubId: effectiveHubId,
-    };
-
     // Pre-seed activeSheetInMemory from local cache if present
     try {
-      const initialCache = localStorage.getItem(localCacheKey);
+      const initialCache = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
       if (initialCache) {
         const parsed = JSON.parse(initialCache);
         activeSheetInMemory = {
@@ -2185,11 +2240,43 @@ export function subscribeToDailyCodSheet(
     const pushLatestSheetUpdate = (updatedSheet: DailyCodSheetData) => {
       activeSheetInMemory = updatedSheet;
       try {
+        // Dual Backup in phone memory: full sheet and dedicated entries array
         localStorage.setItem(localCacheKey, JSON.stringify(updatedSheet));
         localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(updatedSheet));
+        if (updatedSheet.entries && updatedSheet.entries.length > 0) {
+          localStorage.setItem(`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(updatedSheet.entries));
+          localStorage.setItem(`cod_entries_${targetDate}`, JSON.stringify(updatedSheet.entries));
+        }
       } catch {}
       onUpdate(updatedSheet);
     };
+
+    // Concurrent direct Firestore getDoc trigger for instant 0s warm-up on Android WebView
+    getDoc(docRef).then(async (snap) => {
+      if (snap.exists()) {
+        const raw = snap.data();
+        const docEntries = extractEntriesFromSheetRaw(raw, targetDate);
+        if (docEntries.length > 0) {
+          const cleanDocEntries = docEntries.filter(
+            (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
+          );
+          const sheetData: DailyCodSheetData = {
+            date: targetDate,
+            entries: cleanDocEntries,
+            isLocked: Boolean(raw.isLocked),
+            lockedBy: raw.lockedBy,
+            lockedAt: raw.lockedAt,
+            company1Name: raw.company1Name || DEFAULT_COMPANY_1,
+            company2Name: raw.company2Name || DEFAULT_COMPANY_2,
+            hubName: raw.hubName,
+            hubId: effectiveHubId,
+            hubUpiId: raw.hubUpiId || '',
+            updatedAt: raw.updatedAt || new Date().toISOString(),
+          };
+          pushLatestSheetUpdate(sheetData);
+        }
+      }
+    }).catch(() => {});
 
     // 1. Primary Sheet Document Listener
     const unsubDoc = onSnapshot(
@@ -2432,6 +2519,9 @@ export async function updateSingleRiderEntryInSheet(
     };
     localStorage.setItem(localCacheKey, JSON.stringify(updatedSheet));
     localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(updatedSheet));
+    // DUAL BACKUP in phone memory: dedicated entries array for resilient 0s retrieval
+    localStorage.setItem(`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(currentEntries));
+    localStorage.setItem(`cod_entries_${targetDate}`, JSON.stringify(currentEntries));
   } catch {}
 
   // 2. Audit Trail Log: Record edit history with previousValue, updatedValue, editedAt

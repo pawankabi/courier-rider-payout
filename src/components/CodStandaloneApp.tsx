@@ -68,7 +68,8 @@ import {
   exportCodGridToCSV,
   subscribeToDailyCodSheet,
   fetchCodRiders,
-  mergeCodEntriesNonDestructively
+  mergeCodEntriesNonDestructively,
+  getCachedDailyCodSheetSync
 } from '../services/codService';
 import { 
   isEntityOwnedByUser, 
@@ -162,6 +163,21 @@ export const CodStandaloneApp: React.FC<Props> = ({
 
   // Selected Date for COD Grid (defaults to Today)
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
+
+  // Unified 0-second Date Switcher with instant phone memory cache retrieval
+  const handleDateChange = (newDate: string) => {
+    if (!newDate) return;
+    const cleanDate = newDate.trim();
+    if (cleanDate === selectedDate) return;
+    setSelectedDate(cleanDate);
+    // Instant 0.0s retrieval from phone memory:
+    const syncCached = getCachedDailyCodSheetSync(cleanDate, userId);
+    if (syncCached && syncCached.entries && syncCached.entries.length > 0) {
+      setGridEntries(syncCached.entries);
+    } else {
+      setGridEntries([]);
+    }
+  };
 
   // Settings state (Company names, feature flag, lock rules)
   const [settings, setSettings] = useState<CodSettings>({
@@ -310,6 +326,14 @@ export const CodStandaloneApp: React.FC<Props> = ({
     setEditRowForm(null);
     setOwnerTemporaryUnlock(false);
 
+    // Instant synchronous cache retrieval from phone memory for 0.0s switch:
+    const syncCached = getCachedDailyCodSheetSync(selectedDate, userId);
+    if (syncCached && syncCached.entries && syncCached.entries.length > 0) {
+      setGridEntries(syncCached.entries);
+    } else {
+      setGridEntries([]);
+    }
+
     // Initial cache-first load
     loadCodDailyEntries(userId, selectedDate, activeTenantRiders).then((entries) => {
       if (mounted) {
@@ -322,6 +346,8 @@ export const CodStandaloneApp: React.FC<Props> = ({
       selectedDate,
       (sheetData) => {
         if (!mounted) return;
+        // Strictly ignore snapshot if it belongs to another date:
+        if (sheetData.date && sheetData.date !== selectedDate) return;
         if (sheetData && Array.isArray(sheetData.entries) && sheetData.entries.length > 0) {
           // Reconcile entries strictly with active tenant riders list
           const entryMap = new Map<string, CodDailyEntry>();
@@ -1941,7 +1967,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <button
                     type="button"
-                    onClick={() => setSelectedDate(getTodayDateString())}
+                    onClick={() => handleDateChange(getTodayDateString())}
                     className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
                       selectedDate === getTodayDateString()
                         ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-400/50'
@@ -1953,7 +1979,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
 
                   <button
                     type="button"
-                    onClick={() => setSelectedDate(getDaysAgoDateString(1))}
+                    onClick={() => handleDateChange(getDaysAgoDateString(1))}
                     className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
                       selectedDate === getDaysAgoDateString(1)
                         ? 'bg-amber-600 text-white shadow-md ring-2 ring-amber-400/50 font-black'
@@ -1966,7 +1992,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
 
                   <button
                     type="button"
-                    onClick={() => setSelectedDate(getDaysAgoDateString(2))}
+                    onClick={() => handleDateChange(getDaysAgoDateString(2))}
                     className={`px-2.5 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer ${
                       selectedDate === getDaysAgoDateString(2)
                         ? 'bg-blue-600 text-white shadow-md'
@@ -1980,7 +2006,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                     <input
                       type="date"
                       value={selectedDate}
-                      onChange={(e) => setSelectedDate(e.target.value)}
+                      onChange={(e) => handleDateChange(e.target.value)}
                       className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 font-medium cursor-pointer"
                     />
                   </div>

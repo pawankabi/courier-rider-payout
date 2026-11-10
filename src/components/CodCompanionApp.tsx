@@ -65,7 +65,8 @@ import {
   toggleDayEndLockForSheet,
   normalizePhoneNumber,
   resolveHubIdFromPhone,
-  mergeCodEntriesNonDestructively
+  mergeCodEntriesNonDestructively,
+  getCachedDailyCodSheetSync
 } from '../services/codService';
 import { getTodayDateString, formatINR } from '../utils/formatters';
 import { purgeLegacyMockStorage } from '../utils/storage';
@@ -225,15 +226,43 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const isToday = selectedDate === todayStr;
   const isPastDate = selectedDate < todayStr;
 
-  // Real-time Sheet Data
-  const [sheetData, setSheetData] = useState<DailyCodSheetData>({
-    date: selectedDate,
-    entries: [],
-    isLocked: false,
-    company1Name: 'Valmo COD',
-    company2Name: 'Xpressbees COD',
-    hubId: currentHubId,
+  // Real-time Sheet Data with Instant Phone Memory Sync
+  const [sheetData, setSheetData] = useState<DailyCodSheetData>(() => {
+    const today = getTodayDateString();
+    const initialSync = getCachedDailyCodSheetSync(today, currentHubId);
+    if (initialSync) return initialSync;
+    return {
+      date: today,
+      entries: [],
+      isLocked: false,
+      company1Name: 'Valmo COD',
+      company2Name: 'Xpressbees COD',
+      hubId: currentHubId,
+    };
   });
+
+  // Unified 0-second Date Switcher with instant synchronous phone memory cache retrieval
+  const handleDateChange = (newDate: string) => {
+    if (!newDate) return;
+    const cleanDate = newDate.trim();
+    if (cleanDate === selectedDate) return;
+    setSelectedDate(cleanDate);
+    // Instant 0.0s retrieval from phone memory:
+    const syncCached = getCachedDailyCodSheetSync(cleanDate, currentHubId);
+    if (syncCached) {
+      setSheetData(syncCached);
+    } else {
+      // Isolate screen immediately to target clean state so today's figures NEVER bleed into other dates
+      setSheetData({
+        date: cleanDate,
+        entries: [],
+        isLocked: cleanDate < todayStr,
+        company1Name: sheetData.company1Name || 'Valmo COD',
+        company2Name: sheetData.company2Name || 'Xpressbees COD',
+        hubId: currentHubId,
+      });
+    }
+  };
   const [isRealtimeConnected, setIsRealtimeConnected] = useState<boolean>(true);
   const [lastSyncTime, setLastSyncTime] = useState<string>('0s पहले');
   const [searchQuery, setSearchQuery] = useState('');
@@ -667,11 +696,19 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const displayEntries: CodDailyEntry[] = useMemo(() => {
     if (!currentHubId) return [];
 
+    // CRITICAL SECURITY GUARD: Verify that sheetData.date strictly matches selectedDate!
+    // If sheetData is from a different date, do NOT use stale entries from another date!
+    const isSheetDateMatching = sheetData.date === selectedDate;
+    const rawSheetEntries = isSheetDateMatching ? (sheetData.entries || []) : [];
+
     const entryMap = new Map<string, CodDailyEntry>();
     const aliasToKey = new Map<string, string>();
 
     const safeIndexEntry = (e: CodDailyEntry) => {
       if (!e) return;
+      // Strictest Date Guard: Entry date must match selectedDate
+      if (e.date && e.date !== selectedDate) return;
+
       const rId = e.riderId ? String(e.riderId).trim() : '';
       const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
       const cleanName = (e.riderName || '').trim().toLowerCase();
@@ -697,7 +734,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       }
     };
 
-    (sheetData.entries || []).forEach(safeIndexEntry);
+    rawSheetEntries.forEach(safeIndexEntry);
 
     const lookupEntry = (riderId?: string, riderPhone?: string, riderName?: string): CodDailyEntry | undefined => {
       const rId = riderId ? String(riderId).trim() : '';
@@ -719,12 +756,13 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       const merged: CodDailyEntry[] = hubRiders.map((r) => {
         const cleanPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
         const ex = lookupEntry(r.id, r.phone, r.name);
-        if (ex) {
+        if (ex && (!ex.date || ex.date === selectedDate)) {
           const totalCod = (Number(ex.company1Amount) || 0) + (Number(ex.company2Amount) || 0);
           const totalDeposit = (Number(ex.cashDeposit) || 0) + (Number(ex.onlineDeposit) || 0);
           const balance = totalCod - totalDeposit;
           return {
             ...ex,
+            date: selectedDate,
             riderId: r.id,
             riderName: r.name,
             riderPhone: r.phone,
@@ -760,8 +798,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         );
         if (!exists) {
           const ex = lookupEntry(myId, authUser.phone, authUser.name);
-          if (ex) {
-            merged.unshift(ex);
+          if (ex && (!ex.date || ex.date === selectedDate)) {
+            merged.unshift({
+              ...ex,
+              date: selectedDate,
+            });
           } else {
             merged.unshift({
               id: `cod_${selectedDate}_${myId}`,
@@ -783,13 +824,14 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         }
       }
 
-      // CRITICAL FIX: Retain and display any entry from sheetData.entries not in hubRiders (e.g. past dates like Nov 4)
+      // CRITICAL FIX: Retain and display any entry from rawSheetEntries not in hubRiders (e.g. past dates)
       const processedIds = new Set(merged.map((m) => m.riderId));
       const processedPhones = new Set(
         merged.map((m) => (m.riderPhone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
       );
 
-      (sheetData.entries || []).forEach((e) => {
+      rawSheetEntries.forEach((e) => {
+        if (e.date && e.date !== selectedDate) return;
         const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
         const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
           (cleanPhone && processedPhones.has(cleanPhone));
@@ -816,10 +858,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       return merged;
     }
 
-    // Fallback if hubRiders is loading: Return all hub entries for selected date, prioritizing own entry
-    if (sheetData.entries && sheetData.entries.length > 0) {
+    // Fallback if hubRiders is loading: Return all hub entries strictly for selected date, prioritizing own entry
+    if (rawSheetEntries && rawSheetEntries.length > 0) {
+      const validEntries = rawSheetEntries.filter((e) => !e.date || e.date === selectedDate);
       if (isRider && authUser) {
-        return [...sheetData.entries].sort((a, b) => {
+        return [...validEntries].sort((a, b) => {
           const aIsMe = isMatchingRiderRow(a);
           const bIsMe = isMatchingRiderRow(b);
           if (aIsMe && !bIsMe) return -1;
@@ -827,11 +870,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           return a.riderName.localeCompare(b.riderName);
         });
       }
-      return sheetData.entries;
+      return validEntries;
     }
 
     return [];
-  }, [currentHubId, hubRiders, sheetData.entries, selectedDate, isRider, authUser]);
+  }, [currentHubId, hubRiders, sheetData.date, sheetData.entries, selectedDate, isRider, authUser]);
 
   const myRiderRow = useMemo(() => {
     if (!isRider) return null;
@@ -1045,11 +1088,21 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       } else {
         nextEntries = [...entries, updated];
       }
-      return {
+      const updatedSheet: DailyCodSheetData = {
         ...prev,
         entries: nextEntries,
         updatedAt: new Date().toISOString(),
       };
+      // Dual Backup in Phone Memory:
+      try {
+        if (currentHubId) {
+          localStorage.setItem(`cp_cod_sheet_${currentHubId}_${selectedDate}`, JSON.stringify(updatedSheet));
+          localStorage.setItem(`cod_entries_${currentHubId}_${selectedDate}`, JSON.stringify(nextEntries));
+        }
+        localStorage.setItem(`cp_cod_sheet_${selectedDate}`, JSON.stringify(updatedSheet));
+        localStorage.setItem(`cod_entries_${selectedDate}`, JSON.stringify(nextEntries));
+      } catch {}
+      return updatedSheet;
     });
 
     // Close modal immediately with zero lag
@@ -1439,7 +1492,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     const y = cur.getFullYear();
     const m = String(cur.getMonth() + 1).padStart(2, '0');
     const d = String(cur.getDate()).padStart(2, '0');
-    setSelectedDate(`${y}-${m}-${d}`);
+    handleDateChange(`${y}-${m}-${d}`);
   };
 
   // =========================================================================
@@ -2305,13 +2358,13 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               <input
                 type="date"
                 value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                onChange={(e) => handleDateChange(e.target.value)}
                 className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
               {!isToday && (
                 <button
                   type="button"
-                  onClick={() => setSelectedDate(todayStr)}
+                  onClick={() => handleDateChange(todayStr)}
                   className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs rounded font-semibold transition cursor-pointer"
                 >
                   आज (Today)
