@@ -2,8 +2,25 @@
  * Centralized Application Version Management & GitHub Release Auto-Discovery
  */
 
-export const APP_VERSION = '1.0.52';
+import { App } from '@capacitor/app';
+import { isNativeAndroid } from '../services/nativeSms';
+
+export const APP_VERSION = '1.0.55';
 export const DEFAULT_GITHUB_REPO = 'pawankabi/courier-rider-payout';
+
+let nativeAppVersionCache: string | null = null;
+
+// Eagerly resolve native Android version from Android OS PackageManager
+if (typeof window !== 'undefined' && isNativeAndroid()) {
+  App.getInfo().then((info) => {
+    if (info && info.version) {
+      nativeAppVersionCache = info.version;
+      try {
+        localStorage.setItem('cp_native_android_version', info.version);
+      } catch {}
+    }
+  }).catch(() => {});
+}
 
 function parseSemver(v: string): number[] {
   return (v || '').replace(/^v/i, '').split('.').map((p) => parseInt(p, 10) || 0);
@@ -22,11 +39,25 @@ function isHigherVersion(v1: string, v2: string): boolean {
 }
 
 /**
- * Automatically queries GitHub Releases API to discover the latest published version tag.
- * Falls back to localStorage cache if valid and higher than APP_VERSION, otherwise APP_VERSION.
+ * Automatically queries GitHub Releases API or Native Android OS to discover the active version.
  */
 export async function fetchLatestReleaseVersion(): Promise<string> {
   if (typeof window === 'undefined') return APP_VERSION;
+
+  // On Native Android, the Android OS package manager is the source of truth
+  if (isNativeAndroid()) {
+    try {
+      const info = await App.getInfo();
+      if (info && info.version) {
+        nativeAppVersionCache = info.version;
+        localStorage.setItem('cp_native_android_version', info.version);
+        return info.version;
+      }
+    } catch {}
+    const stored = localStorage.getItem('cp_native_android_version');
+    if (stored) return stored;
+    return APP_VERSION;
+  }
 
   try {
     const cached = localStorage.getItem('cp_latest_github_version');
@@ -67,6 +98,12 @@ export async function fetchLatestReleaseVersion(): Promise<string> {
 export function getCachedReleaseVersion(): string {
   if (typeof window === 'undefined') return APP_VERSION;
   try {
+    if (isNativeAndroid()) {
+      if (nativeAppVersionCache) return nativeAppVersionCache;
+      const nativeStored = localStorage.getItem('cp_native_android_version');
+      if (nativeStored) return nativeStored;
+      return APP_VERSION;
+    }
     const cached = localStorage.getItem('cp_latest_github_version');
     if (cached && isHigherVersion(cached, APP_VERSION)) {
       return cached;

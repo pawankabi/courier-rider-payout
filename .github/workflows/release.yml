@@ -59,12 +59,17 @@ jobs:
       - name: Setup Keystore
         run: |
           mkdir -p android/app/keystore
-          if [ ! -f android/app/keystore/release.keystore ]; then
+          if [ -f android/app/keystore/release.keystore.base64 ]; then
+            echo "Restoring permanent release.keystore from repository base64..."
+            base64 -d android/app/keystore/release.keystore.base64 > android/app/keystore/release.keystore
+          elif [ ! -f android/app/keystore/release.keystore ]; then
+            echo "Warning: permanent keystore not found, generating fallback..."
             keytool -genkey -v -keystore android/app/keystore/release.keystore \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=CourierPayout,O=CourierPayout,C=IN"
           fi
+          ls -lh android/app/keystore/release.keystore
 
       - name: Extract Version Info
         id: get_version

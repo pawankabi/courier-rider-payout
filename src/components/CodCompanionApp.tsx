@@ -79,6 +79,7 @@ import {
   syncPublicRiderStatement,
 } from '../services/firestoreSync';
 import { liveUpdateService, CURRENT_LOCAL_VERSION } from '../services/liveUpdateService';
+import { getCachedReleaseVersion, fetchLatestReleaseVersion } from '../utils/version';
 import { launchUpiPayment, generateUpiQrCodeDataUrl } from '../services/upiLauncher';
 
 interface CodCompanionAppProps {
@@ -333,6 +334,14 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   };
 
   // Hybrid Live Cloud Sync & OTA State
+  const [activeAppVersion, setActiveAppVersion] = useState<string>(() => getCachedReleaseVersion());
+
+  useEffect(() => {
+    fetchLatestReleaseVersion().then((ver) => {
+      if (ver) setActiveAppVersion(ver);
+    });
+  }, []);
+
   const [isLiveUpdateAvailable, setIsLiveUpdateAvailable] = useState<boolean>(() => liveUpdateService.isUpdateAvailable());
   const [updateDetails, setUpdateDetails] = useState<{ version?: string; releaseNotes?: string }>({});
   const [isSyncingLiveCloud, setIsSyncingLiveCloud] = useState<boolean>(false);
@@ -355,7 +364,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
           liveUpdateService.applyUpdate();
         }, 800);
       } else {
-        showToast(`✅ आप पहले से नवीनतम क्लाउड वर्शन v${CURRENT_LOCAL_VERSION} पर हैं! (लाइव सिंक 0s)`, 'success');
+        showToast(`✅ आप पहले से नवीनतम क्लाउड वर्शन v${activeAppVersion} पर हैं! (लाइव सिंक 0s)`, 'success');
       }
     } catch {
       showToast('क्लाउड सर्वर से संपर्क नहीं हो सका। कृपया इंटरनेट जांचें।', 'error');
@@ -1586,7 +1595,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
               </span>
-              <span className="text-xs font-bold leading-tight">🚀 नया लाइव क्लाउड अपडेट उपलब्ध है ({updateDetails.version || `v${CURRENT_LOCAL_VERSION}`})</span>
+              <span className="text-xs font-bold leading-tight">🚀 नया लाइव क्लाउड अपडेट उपलब्ध है ({updateDetails.version || `v${activeAppVersion}`})</span>
             </div>
             <button
               type="button"
@@ -1799,7 +1808,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             <div className="mt-4 pt-3 border-t border-slate-200/80 flex items-center justify-between text-[11px] text-slate-500">
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>हाइब्रिड क्लाउड सिंक: <b className="text-emerald-700">v{CURRENT_LOCAL_VERSION}</b></span>
+                <span>हाइब्रिड क्लाउड सिंक: <b className="text-emerald-700">v{activeAppVersion}</b></span>
               </div>
               <button
                 type="button"
@@ -2035,7 +2044,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[11px] text-slate-400">
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
-                    <span>हाइब्रिड क्लाउड सिंक: <b className="text-cyan-300">v{CURRENT_LOCAL_VERSION}</b></span>
+                    <span>हाइब्रिड क्लाउड सिंक: <b className="text-cyan-300">v{activeAppVersion}</b></span>
                   </div>
                   <button
                     type="button"
@@ -2168,7 +2177,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
             </span>
-            <span className="font-bold">🚀 नया लाइव क्लाउड अपडेट उपलब्ध है ({updateDetails.version || `v${CURRENT_LOCAL_VERSION}`})</span>
+            <span className="font-bold">🚀 नया लाइव क्लाउड अपडेट उपलब्ध है ({updateDetails.version || `v${activeAppVersion}`})</span>
             <span className="hidden md:inline text-emerald-100 text-xs">
               • बिना APK डाउनलोड किए लाइव सिंक करें
             </span>
