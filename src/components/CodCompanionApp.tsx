@@ -74,7 +74,8 @@ import {
   buildDeterministicSurplusIncId,
   enqueuePendingCodLedgerTransfer,
   getPendingCodLedgerTransfers,
-  removePendingCodLedgerTransfer
+  removePendingCodLedgerTransfer,
+  withTransientAckTimeout
 } from '../services/codService';
 import { getTodayDateString, getDaysAgoDateString, formatINR } from '../utils/formatters';
 import { purgeLegacyMockStorage } from '../utils/storage';
@@ -85,6 +86,7 @@ import {
   writeIncentiveEntryToFirestore,
   saveRiderToFirestore,
   syncPublicRiderStatement,
+  isTransientNetworkError,
 } from '../services/firestoreSync';
 import { liveUpdateService, CURRENT_LOCAL_VERSION } from '../services/liveUpdateService';
 import { getCachedReleaseVersion, fetchLatestReleaseVersion } from '../utils/version';
@@ -278,6 +280,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const [lastSyncTime, setLastSyncTime] = useState<string>('0s पहले');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const isCompanionFlushingRef = useRef<boolean>(false);
+  const hubRidersRef = useRef<Rider[]>(hubRiders);
+  hubRidersRef.current = hubRiders;
 
   // Rider Row Edit Modal State
   const [editingEntry, setEditingEntry] = useState<CodDailyEntry | null>(null);
@@ -431,75 +436,147 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     };
   }, [selectedDate, authUser, authenticatedHubId]);
 
-  // Auto-flush queued Shortage/Surplus transfers when internet reconnects or app mounts
+  // Auto-flush queued Shortage/Surplus transfers when internet reconnects, app mounts, or every 10s heartbeat
   useEffect(() => {
     if (!authenticatedHubId || !authUser) return;
 
     const flushPendingQueue = async () => {
+      if (isCompanionFlushingRef.current) return;
       if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
       const pending = getPendingCodLedgerTransfers(authenticatedHubId);
       if (pending.length === 0) return;
 
-      if (auth && !auth.currentUser) {
-        await signInAnonymously(auth).catch(() => {});
-      }
+      isCompanionFlushingRef.current = true;
+      try {
+        for (const item of pending) {
+          try {
+            if (item.kind === 'advance') {
+              await withTransientAckTimeout(
+                writeAdvanceEntryToFirestore(authenticatedHubId, {
+                  id: item.deterministicId,
+                  riderId: item.riderId,
+                  riderName: item.riderName,
+                  riderPhone: item.riderPhone,
+                  amount: item.amount,
+                  remainingAmount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  isSettled: false,
+                  status: 'PENDING',
+                }),
+                7000
+              );
+            } else {
+              await withTransientAckTimeout(
+                writeIncentiveEntryToFirestore(authenticatedHubId, {
+                  id: item.deterministicId,
+                  riderId: item.riderId,
+                  riderName: item.riderName,
+                  riderPhone: item.riderPhone,
+                  amount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  source: 'surplus',
+                  createdBy: item.createdBy,
+                }),
+                7000
+              );
+            }
 
-      for (const item of pending) {
-        try {
-          if (item.kind === 'advance') {
-            await writeAdvanceEntryToFirestore(authenticatedHubId, {
-              id: item.deterministicId,
-              riderId: item.riderId,
-              riderName: item.riderName,
-              riderPhone: item.riderPhone,
-              amount: item.amount,
-              remainingAmount: item.amount,
-              date: item.date,
-              reason: item.reason,
-              isSettled: false,
-              status: 'PENDING',
+            // Mark sync lock on sheet only AFTER Firestore write succeeded
+            const cleanItemPhone = (item.riderPhone || '').replace(/\D/g, '').slice(-10);
+            const cached = getCachedDailyCodSheetSync(item.date, authenticatedHubId);
+            const targetRow = cached?.entries?.find((e) => {
+              if (e.riderId === item.riderId) return true;
+              const rowPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+              return Boolean(cleanItemPhone && rowPhone && cleanItemPhone === rowPhone);
             });
-          } else {
-            await writeIncentiveEntryToFirestore(authenticatedHubId, {
-              id: item.deterministicId,
-              riderId: item.riderId,
-              riderName: item.riderName,
-              riderPhone: item.riderPhone,
-              amount: item.amount,
-              date: item.date,
-              reason: item.reason,
-              source: 'surplus',
-              createdBy: item.createdBy,
-            });
-          }
+            if (targetRow) {
+              const patched: CodDailyEntry = {
+                ...targetRow,
+                [item.syncProp]: true,
+                [item.idProp]: item.deterministicId,
+                updatedAt: new Date().toISOString(),
+              };
+              await updateSingleRiderEntryInSheet(
+                item.date,
+                patched,
+                { name: item.createdBy || authUser.name, role: authUser.role },
+                authenticatedHubId
+              );
+              if (item.date === selectedDate) {
+                setSheetData((prev) => ({
+                  ...prev,
+                  entries: (prev.entries || []).map((e) => (e.riderId === targetRow.riderId ? { ...e, ...patched } : e)),
+                }));
+              }
+            }
 
-          // Mark sync lock on sheet only AFTER Firestore write succeeded
-          const cached = getCachedDailyCodSheetSync(item.date, authenticatedHubId);
-          const targetRow = cached?.entries?.find((e) => e.riderId === item.riderId);
-          if (targetRow) {
-            const patched: CodDailyEntry = {
-              ...targetRow,
-              [item.syncProp]: true,
-              [item.idProp]: item.deterministicId,
-              updatedAt: new Date().toISOString(),
-            };
-            await updateSingleRiderEntryInSheet(
-              item.date,
-              patched,
-              { name: item.createdBy || authUser.name, role: authUser.role },
-              authenticatedHubId
-            );
-            if (item.date === selectedDate) {
-              setSheetData((prev) => ({
-                ...prev,
-                entries: (prev.entries || []).map((e) => (e.riderId === item.riderId ? { ...e, ...patched } : e)),
-              }));
+            const matchedRider = hubRidersRef.current.find((r) => {
+              if (r.id === item.riderId) return true;
+              const rPhone = (r.phone || '').replace(/\D/g, '').slice(-10);
+              return Boolean(cleanItemPhone && rPhone && cleanItemPhone === rPhone);
+            });
+            if (matchedRider) {
+              if (item.kind === 'advance') {
+                const prevAdv = Number(matchedRider.totalAdvance) || 0;
+                const exists = Boolean(matchedRider.advances?.some((a) => a.id === item.deterministicId));
+                const nextTotal = exists ? prevAdv : prevAdv + item.amount;
+                const advItem: RiderAdvanceEntry = {
+                  id: item.deterministicId,
+                  riderId: matchedRider.id,
+                  riderName: matchedRider.name,
+                  riderPhone: matchedRider.phone,
+                  amount: item.amount,
+                  remainingAmount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  runningBalance: nextTotal,
+                  isSettled: false,
+                  isDeducted: false,
+                  status: 'PENDING',
+                  createdAt: item.createdAt || new Date().toISOString(),
+                  createdBy: item.createdBy || authUser.name,
+                };
+                const updatedAdvs = [advItem, ...(matchedRider.advances || []).filter((a) => a.id !== item.deterministicId)];
+                const updatedRider: Rider = { ...matchedRider, totalAdvance: nextTotal, advances: updatedAdvs };
+                saveRiderToFirestore(authenticatedHubId, updatedRider).catch(() => {});
+                syncPublicRiderStatement(updatedRider, updatedAdvs).catch(() => {});
+              } else {
+                const prevInc = Number(matchedRider.totalIncentive) || 0;
+                const exists = Boolean(matchedRider.incentives?.some((i) => i.id === item.deterministicId));
+                const nextTotal = exists ? prevInc : prevInc + item.amount;
+                const incItem: RiderIncentiveEntry = {
+                  id: item.deterministicId,
+                  riderId: matchedRider.id,
+                  riderName: matchedRider.name,
+                  riderPhone: matchedRider.phone,
+                  amount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  source: 'surplus',
+                  createdAt: item.createdAt || new Date().toISOString(),
+                  createdBy: item.createdBy || authUser.name,
+                };
+                const updatedIncs = [incItem, ...(matchedRider.incentives || []).filter((i) => i.id !== item.deterministicId)];
+                const updatedRider: Rider = { ...matchedRider, totalIncentive: nextTotal, incentives: updatedIncs };
+                saveRiderToFirestore(authenticatedHubId, updatedRider).catch(() => {});
+                syncPublicRiderStatement(updatedRider, updatedRider.advances || []).catch(() => {});
+              }
+            }
+
+            removePendingCodLedgerTransfer(authenticatedHubId, item.deterministicId);
+          } catch (err: any) {
+            if (!isTransientNetworkError(err)) {
+              console.error('Queued ledger transfer failed permanently:', err);
+              removePendingCodLedgerTransfer(authenticatedHubId, item.deterministicId);
+            } else {
+              console.warn('Queued ledger transfer retry deferred:', err);
             }
           }
-          removePendingCodLedgerTransfer(authenticatedHubId, item.deterministicId);
-        } catch (err) {
-          console.warn('Queued ledger transfer retry deferred:', err);
         }
+      } finally {
+        isCompanionFlushingRef.current = false;
       }
     };
 
@@ -509,12 +586,31 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       setIsRealtimeConnected(true);
       void flushPendingQueue();
     };
+    const handleFocus = () => {
+      void flushPendingQueue();
+    };
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void flushPendingQueue();
+      }
+    };
+    const retryInterval = setInterval(() => {
+      if (getPendingCodLedgerTransfers(authenticatedHubId).length > 0) {
+        void flushPendingQueue();
+      }
+    }, 10000);
     const handleOffline = () => setIsRealtimeConnected(false);
+
     window.addEventListener('online', handleOnline);
+    window.addEventListener('focus', handleFocus);
     window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
+      clearInterval(retryInterval);
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('focus', handleFocus);
       window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [authenticatedHubId, authUser, selectedDate]);
 
@@ -1527,10 +1623,6 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     // 2. NON-BLOCKING BACKGROUND CLOUD SYNC WITH DETERMINISTIC ID + SAFE LOCK STAMPING
     void (async () => {
       try {
-        if (auth && !auth.currentUser) {
-          await signInAnonymously(auth).catch(() => {});
-        }
-
         await updateSingleRiderEntryInSheet(
           activeDate,
           optimisticEntry,
@@ -1551,19 +1643,22 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
           if (activeHub) {
             try {
-              const savedAdvId = await writeAdvanceEntryToFirestore(activeHub, {
-                id: deterministicAdvId,
-                riderId: effectiveRiderId,
-                riderName: row.riderName,
-                riderPhone: row.riderPhone,
-                amount: shortAmount,
-                remainingAmount: shortAmount,
-                date: activeDate,
-                reason: advReason,
-                runningBalance: totalAdvance,
-                isSettled: false,
-                status: 'PENDING',
-              });
+              const savedAdvId = await withTransientAckTimeout(
+                writeAdvanceEntryToFirestore(activeHub, {
+                  id: deterministicAdvId,
+                  riderId: effectiveRiderId,
+                  riderName: row.riderName,
+                  riderPhone: row.riderPhone,
+                  amount: shortAmount,
+                  remainingAmount: shortAmount,
+                  date: activeDate,
+                  reason: advReason,
+                  runningBalance: totalAdvance,
+                  isSettled: false,
+                  status: 'PENDING',
+                }),
+                6000
+              );
 
               // Stamp sync lock ONLY AFTER Firestore advance write succeeds
               const confirmedEntry: CodDailyEntry = {
@@ -1631,25 +1726,30 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 type: 'advance',
                 statementUrl,
               }).catch((e) => console.warn('COD companion shortage SMS notice:', e));
-            } catch (wErr) {
-              console.warn('Advance Firestore write deferred to auto-retry queue:', wErr);
-              enqueuePendingCodLedgerTransfer({
-                deterministicId: deterministicAdvId,
-                kind: 'advance',
-                hubId: activeHub,
-                date: activeDate,
-                riderId: effectiveRiderId,
-                riderName: row.riderName,
-                riderPhone: row.riderPhone || '',
-                field,
-                amount: shortAmount,
-                reason: advReason,
-                syncProp: String(syncAdvProp),
-                idProp: 'syncedAdvanceId',
-                createdBy: actorName,
-                createdAt: new Date().toISOString(),
-              });
-              showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट आते ही अपने आप जुड़ जाएगी।', 'info');
+            } catch (wErr: any) {
+              if (isTransientNetworkError(wErr)) {
+                console.warn('Advance Firestore write deferred to auto-retry queue:', wErr);
+                enqueuePendingCodLedgerTransfer({
+                  deterministicId: deterministicAdvId,
+                  kind: 'advance',
+                  hubId: activeHub,
+                  date: activeDate,
+                  riderId: effectiveRiderId,
+                  riderName: row.riderName,
+                  riderPhone: row.riderPhone || '',
+                  field,
+                  amount: shortAmount,
+                  reason: advReason,
+                  syncProp: String(syncAdvProp),
+                  idProp: 'syncedAdvanceId',
+                  createdBy: actorName,
+                  createdAt: new Date().toISOString(),
+                });
+                showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट आते ही अपने आप जुड़ जाएगी।', 'info');
+              } else {
+                console.error('Companion advance transfer failed:', wErr);
+                showToast(`❌ एडवांस ट्रांसफर असफल रहा (${wErr?.code || 'error'}): ${wErr?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+              }
             }
           }
         } else if (surplusAmount > 0 && !alreadySyncedIncentive) {
@@ -1659,17 +1759,20 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
           if (activeHub) {
             try {
-              const savedIncId = await writeIncentiveEntryToFirestore(activeHub, {
-                id: deterministicIncId,
-                riderId: effectiveRiderId,
-                riderName: row.riderName,
-                riderPhone: row.riderPhone,
-                amount: surplusAmount,
-                date: activeDate,
-                reason: incReason,
-                source: 'surplus',
-                createdBy: actorName,
-              });
+              const savedIncId = await withTransientAckTimeout(
+                writeIncentiveEntryToFirestore(activeHub, {
+                  id: deterministicIncId,
+                  riderId: effectiveRiderId,
+                  riderName: row.riderName,
+                  riderPhone: row.riderPhone,
+                  amount: surplusAmount,
+                  date: activeDate,
+                  reason: incReason,
+                  source: 'surplus',
+                  createdBy: actorName,
+                }),
+                6000
+              );
 
               // Stamp sync lock ONLY AFTER Firestore incentive write succeeds
               const confirmedEntry: CodDailyEntry = {
@@ -1733,25 +1836,30 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 type: 'general',
                 statementUrl,
               }).catch((e) => console.warn('COD companion surplus SMS notice:', e));
-            } catch (wErr) {
-              console.warn('Surplus Firestore write deferred to auto-retry queue:', wErr);
-              enqueuePendingCodLedgerTransfer({
-                deterministicId: deterministicIncId,
-                kind: 'incentive',
-                hubId: activeHub,
-                date: activeDate,
-                riderId: effectiveRiderId,
-                riderName: row.riderName,
-                riderPhone: row.riderPhone || '',
-                field,
-                amount: surplusAmount,
-                reason: incReason,
-                syncProp: String(syncIncProp),
-                idProp: 'syncedIncentiveId',
-                createdBy: actorName,
-                createdAt: new Date().toISOString(),
-              });
-              showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट आते ही जुड़ जाएगी।', 'info');
+            } catch (wErr: any) {
+              if (isTransientNetworkError(wErr)) {
+                console.warn('Surplus Firestore write deferred to auto-retry queue:', wErr);
+                enqueuePendingCodLedgerTransfer({
+                  deterministicId: deterministicIncId,
+                  kind: 'incentive',
+                  hubId: activeHub,
+                  date: activeDate,
+                  riderId: effectiveRiderId,
+                  riderName: row.riderName,
+                  riderPhone: row.riderPhone || '',
+                  field,
+                  amount: surplusAmount,
+                  reason: incReason,
+                  syncProp: String(syncIncProp),
+                  idProp: 'syncedIncentiveId',
+                  createdBy: actorName,
+                  createdAt: new Date().toISOString(),
+                });
+                showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट आते ही जुड़ जाएगी।', 'info');
+              } else {
+                console.error('Companion incentive transfer failed:', wErr);
+                showToast(`❌ इंसेंटिव ट्रांसफर असफल रहा (${wErr?.code || 'error'}): ${wErr?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+              }
             }
           }
         }

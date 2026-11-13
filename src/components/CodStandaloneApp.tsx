@@ -41,8 +41,7 @@ import {
   Banknote
 } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth';
-import { db, auth } from '../firebase';
+import { db } from '../firebase';
 import { 
   Rider, 
   CodDailyEntry, 
@@ -76,14 +75,17 @@ import {
   buildDeterministicSurplusIncId,
   enqueuePendingCodLedgerTransfer,
   getPendingCodLedgerTransfers,
-  removePendingCodLedgerTransfer
+  removePendingCodLedgerTransfer,
+  withTransientAckTimeout,
+  PendingCodLedgerTransfer
 } from '../services/codService';
 import { 
   isEntityOwnedByUser, 
   writeAdvanceEntryToFirestore, 
   writeIncentiveEntryToFirestore, 
   saveRiderToFirestore, 
-  syncPublicRiderStatement 
+  syncPublicRiderStatement,
+  isTransientNetworkError
 } from '../services/firestoreSync';
 import { 
   formatAdvanceSmsText, 
@@ -211,7 +213,47 @@ export const CodStandaloneApp: React.FC<Props> = ({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const syncingKeysRef = useRef<Set<string>>(new Set());
+  const isFlushingRef = useRef<boolean>(false);
+  const [pendingTransfers, setPendingTransfers] = useState<PendingCodLedgerTransfer[]>(() =>
+    getPendingCodLedgerTransfers(userId)
+  );
+  const [inFlightTransferKeys, setInFlightTransferKeys] = useState<Record<string, boolean>>({});
   const sessionRidersRef = useRef<Record<string, Rider>>({});
+  const activeTenantRidersRef = useRef<Rider[]>(activeTenantRiders);
+  activeTenantRidersRef.current = activeTenantRiders;
+
+  const markTransferInFlight = (flightKey: string, active: boolean) => {
+    setInFlightTransferKeys((prev) => {
+      if (active) {
+        if (prev[flightKey]) return prev;
+        return { ...prev, [flightKey]: true };
+      }
+      if (!prev[flightKey]) return prev;
+      const next = { ...prev };
+      delete next[flightKey];
+      return next;
+    });
+  };
+
+  const isTransferInQueueOrFlight = (
+    row: CodDailyEntry,
+    field: string,
+    kind: 'advance' | 'incentive',
+    dateStr = selectedDate
+  ): boolean => {
+    const cleanPhone = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
+    const flightKey = `${dateStr}_${row.riderId}_${field}_${kind}`;
+    if (inFlightTransferKeys[flightKey]) return true;
+    const matchedRider = resolveTargetRider(row.riderId, row.riderPhone);
+    const effectiveId = matchedRider?.id || row.riderId;
+    if (inFlightTransferKeys[`${dateStr}_${effectiveId}_${field}_${kind}`]) return true;
+    return pendingTransfers.some((t) => {
+      if (t.date !== dateStr || t.field !== field || t.kind !== kind) return false;
+      if (t.riderId === row.riderId || t.riderId === effectiveId) return true;
+      const tPhone = (t.riderPhone || '').replace(/\D/g, '').slice(-10);
+      return Boolean(cleanPhone && tPhone && cleanPhone === tPhone);
+    });
+  };
 
   const resolveTargetRider = (riderId: string, riderPhone?: string): Rider | undefined => {
     if (sessionRidersRef.current[riderId]) return sessionRidersRef.current[riderId];
@@ -331,15 +373,16 @@ export const CodStandaloneApp: React.FC<Props> = ({
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // 1. Initial Load of Settings, Staff, and Today's Grid
+  // 1. Initial Load of Settings, Staff, and Active Date Grid (does NOT re-run on rider ledger updates)
   useEffect(() => {
     let mounted = true;
     const initialize = async () => {
       setIsLoading(true);
       try {
+        const ridersSnapshot = activeTenantRidersRef.current;
         const [loadedSettings, loadedStaff, loadedLogs] = await Promise.all([
           loadCodSettings(userId),
-          loadCodStaffUsers(userId, activeTenantRiders),
+          loadCodStaffUsers(userId, ridersSnapshot),
           loadCodAuditLogs(userId),
         ]);
 
@@ -354,7 +397,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
         }
 
         // Load Grid for Selected Date strictly with active tenant riders
-        const entries = await loadCodDailyEntries(userId, selectedDate, activeTenantRiders);
+        const entries = await loadCodDailyEntries(userId, selectedDate, activeTenantRidersRef.current);
         if (mounted) {
           setGridEntries(entries);
         }
@@ -369,68 +412,116 @@ export const CodStandaloneApp: React.FC<Props> = ({
     return () => {
       mounted = false;
     };
-  }, [userId, activeTenantRiders]);
+  }, [userId]);
 
-  // Auto-flush queued Shortage/Surplus transfers on mount, date change, and internet reconnect
+  // Smooth non-destructive reconciliation when tenant riders metadata changes without interrupting listeners
+  useEffect(() => {
+    if (!activeTenantRiders || activeTenantRiders.length === 0) return;
+    setGridEntries((prev) => {
+      if (!prev || prev.length === 0) return prev;
+      const byId = new Map(activeTenantRiders.map((r) => [r.id, r]));
+      const presentIds = new Set(prev.map((e) => e.riderId));
+      let changed = false;
+      const updated = prev.map((e) => {
+        const matched = byId.get(e.riderId);
+        if (matched && (e.riderName !== matched.name || e.riderPhone !== matched.phone)) {
+          changed = true;
+          return { ...e, riderName: matched.name, riderPhone: matched.phone };
+        }
+        return e;
+      });
+      activeTenantRiders.forEach((r) => {
+        if (!presentIds.has(r.id)) {
+          changed = true;
+          updated.push({
+            id: `cod_${selectedDate}_${r.id}`,
+            date: selectedDate,
+            riderId: r.id,
+            riderName: r.name,
+            riderPhone: r.phone,
+            company1Amount: 0,
+            company2Amount: 0,
+            totalCod: 0,
+            cashDeposit: 0,
+            onlineDeposit: 0,
+            totalDeposit: 0,
+            balance: 0,
+            status: 'draft',
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      });
+      return changed ? updated : prev;
+    });
+  }, [activeTenantRiders, selectedDate]);
+
+  // Reactive sync with background pending transfer queue across components/tabs
+  useEffect(() => {
+    const refreshPending = () => {
+      setPendingTransfers(getPendingCodLedgerTransfers(userId));
+    };
+    refreshPending();
+    window.addEventListener('courier-payout:cod-queue-changed', refreshPending as EventListener);
+    return () => window.removeEventListener('courier-payout:cod-queue-changed', refreshPending as EventListener);
+  }, [userId]);
+
+  // Auto-flush queued Shortage/Surplus transfers on mount, date change, reconnect, focus, and 10s heartbeat
   useEffect(() => {
     const flushPendingQueue = async () => {
+      if (isFlushingRef.current) return;
       if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
       const pending = getPendingCodLedgerTransfers(userId);
       if (pending.length === 0) return;
 
-      if (auth && !auth.currentUser) {
-        await signInAnonymously(auth).catch(() => {});
-      }
+      isFlushingRef.current = true;
+      try {
+        for (const item of pending) {
+          try {
+            if (item.kind === 'advance') {
+              await withTransientAckTimeout(
+                writeAdvanceEntryToFirestore(userId, {
+                  id: item.deterministicId,
+                  riderId: item.riderId,
+                  riderName: item.riderName,
+                  riderPhone: item.riderPhone,
+                  amount: item.amount,
+                  remainingAmount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  isSettled: false,
+                  status: 'PENDING',
+                }),
+                7000
+              );
+            } else {
+              await withTransientAckTimeout(
+                writeIncentiveEntryToFirestore(userId, {
+                  id: item.deterministicId,
+                  riderId: item.riderId,
+                  riderName: item.riderName,
+                  riderPhone: item.riderPhone,
+                  amount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  source: 'surplus',
+                  createdBy: item.createdBy,
+                }),
+                7000
+              );
+            }
 
-      for (const item of pending) {
-        try {
-          if (item.kind === 'advance') {
-            await writeAdvanceEntryToFirestore(userId, {
-              id: item.deterministicId,
-              riderId: item.riderId,
-              riderName: item.riderName,
-              riderPhone: item.riderPhone,
-              amount: item.amount,
-              remainingAmount: item.amount,
-              date: item.date,
-              reason: item.reason,
-              isSettled: false,
-              status: 'PENDING',
-            });
-          } else {
-            await writeIncentiveEntryToFirestore(userId, {
-              id: item.deterministicId,
-              riderId: item.riderId,
-              riderName: item.riderName,
-              riderPhone: item.riderPhone,
-              amount: item.amount,
-              date: item.date,
-              reason: item.reason,
-              source: 'surplus',
-              createdBy: item.createdBy,
-            });
-          }
+            // Mark sync lock ONLY AFTER Firestore ledger write succeeded
+            const cleanItemPhone = (item.riderPhone || '').replace(/\D/g, '').slice(-10);
+            const matchesRow = (e: CodDailyEntry) => {
+              if (e.riderId === item.riderId) return true;
+              const rowPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+              return Boolean(cleanItemPhone && rowPhone && cleanItemPhone === rowPhone);
+            };
 
-          // Mark sync lock ONLY AFTER Firestore ledger write succeeded
-          const cachedSheet = getCachedDailyCodSheetSync(item.date, userId);
-          if (cachedSheet && Array.isArray(cachedSheet.entries)) {
-            const patchedEntries = cachedSheet.entries.map((e) =>
-              e.riderId === item.riderId
-                ? {
-                    ...e,
-                    [item.syncProp]: true,
-                    [item.idProp]: item.deterministicId,
-                    updatedAt: new Date().toISOString(),
-                  }
-                : e
-            );
-            await saveCodDailyEntries(userId, item.date, patchedEntries);
-          }
-
-          if (item.date === selectedDate) {
-            setGridEntries((prev) => {
-              const updated = prev.map((e) =>
-                e.riderId === item.riderId
+            const cachedSheet = getCachedDailyCodSheetSync(item.date, userId);
+            if (cachedSheet && Array.isArray(cachedSheet.entries)) {
+              const patchedEntries = cachedSheet.entries.map((e) =>
+                matchesRow(e)
                   ? {
                       ...e,
                       [item.syncProp]: true,
@@ -439,24 +530,118 @@ export const CodStandaloneApp: React.FC<Props> = ({
                     }
                   : e
               );
-              void saveCodDailyEntries(userId, selectedDate, updated);
-              return updated;
-            });
-          }
+              await saveCodDailyEntries(userId, item.date, patchedEntries);
+            }
 
-          removePendingCodLedgerTransfer(userId, item.deterministicId);
-        } catch (err) {
-          console.warn('Standalone queued ledger transfer retry deferred:', err);
+            if (item.date === selectedDate) {
+              setGridEntries((prev) => {
+                const updated = prev.map((e) =>
+                  matchesRow(e)
+                    ? {
+                        ...e,
+                        [item.syncProp]: true,
+                        [item.idProp]: item.deterministicId,
+                        updatedAt: new Date().toISOString(),
+                      }
+                    : e
+                );
+                void saveCodDailyEntries(userId, selectedDate, updated);
+                return updated;
+              });
+            }
+
+            const targetRider = resolveTargetRider(item.riderId, item.riderPhone);
+            if (targetRider) {
+              if (item.kind === 'advance') {
+                const prevAdv = Number(targetRider.totalAdvance) || 0;
+                const exists = Boolean(targetRider.advances?.some((a) => a.id === item.deterministicId));
+                const nextTotal = exists ? prevAdv : prevAdv + item.amount;
+                const advItem: RiderAdvanceEntry = {
+                  id: item.deterministicId,
+                  riderId: targetRider.id,
+                  riderName: targetRider.name,
+                  riderPhone: targetRider.phone,
+                  amount: item.amount,
+                  remainingAmount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  runningBalance: nextTotal,
+                  isSettled: false,
+                  isDeducted: false,
+                  status: 'PENDING',
+                  createdAt: item.createdAt || new Date().toISOString(),
+                  createdBy: item.createdBy || 'Hub Staff',
+                };
+                const filteredAdvs = (targetRider.advances || []).filter((a) => a.id !== item.deterministicId);
+                void persistUpdatedRiderResilient({
+                  ...targetRider,
+                  totalAdvance: nextTotal,
+                  advances: [advItem, ...filteredAdvs],
+                });
+              } else {
+                const prevInc = Number(targetRider.totalIncentive) || 0;
+                const exists = Boolean(targetRider.incentives?.some((i) => i.id === item.deterministicId));
+                const nextTotal = exists ? prevInc : prevInc + item.amount;
+                const incItem: RiderIncentiveEntry = {
+                  id: item.deterministicId,
+                  riderId: targetRider.id,
+                  riderName: targetRider.name,
+                  riderPhone: targetRider.phone,
+                  amount: item.amount,
+                  date: item.date,
+                  reason: item.reason,
+                  source: 'surplus',
+                  createdAt: item.createdAt || new Date().toISOString(),
+                  createdBy: item.createdBy || 'Hub Staff',
+                };
+                const filteredIncs = (targetRider.incentives || []).filter((i) => i.id !== item.deterministicId);
+                void persistUpdatedRiderResilient({
+                  ...targetRider,
+                  totalIncentive: nextTotal,
+                  incentives: [incItem, ...filteredIncs],
+                });
+              }
+            }
+
+            removePendingCodLedgerTransfer(userId, item.deterministicId);
+          } catch (err: any) {
+            if (!isTransientNetworkError(err)) {
+              console.error('Standalone queued ledger transfer failed permanently:', err);
+              removePendingCodLedgerTransfer(userId, item.deterministicId);
+            } else {
+              console.warn('Standalone queued ledger transfer retry deferred:', err);
+            }
+          }
         }
+      } finally {
+        isFlushingRef.current = false;
       }
     };
 
     void flushPendingQueue();
-    const handleOnline = () => {
+    const handleOnlineOrFocus = () => {
       void flushPendingQueue();
     };
-    window.addEventListener('online', handleOnline);
-    return () => window.removeEventListener('online', handleOnline);
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void flushPendingQueue();
+      }
+    };
+    const retryInterval = setInterval(() => {
+      if (getPendingCodLedgerTransfers(userId).length > 0) {
+        void flushPendingQueue();
+      }
+    }, 10000);
+
+    window.addEventListener('online', handleOnlineOrFocus);
+    window.addEventListener('focus', handleOnlineOrFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      clearInterval(retryInterval);
+      window.removeEventListener('online', handleOnlineOrFocus);
+      window.removeEventListener('focus', handleOnlineOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [userId, selectedDate]);
 
   // 2. Real-Time bi-directional synchronization on daily_cod_sheets/{selectedDate}
@@ -477,7 +662,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
     }
 
     // Initial cache-first load
-    loadCodDailyEntries(userId, selectedDate, activeTenantRiders).then((entries) => {
+    loadCodDailyEntries(userId, selectedDate, activeTenantRidersRef.current).then((entries) => {
       if (mounted) {
         setGridEntries(entries);
       }
@@ -494,6 +679,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
           setSheetWithdrawals(sheetData.cashWithdrawals);
         }
         if (sheetData && Array.isArray(sheetData.entries) && sheetData.entries.length > 0) {
+          const latestRiders = activeTenantRidersRef.current;
           // Reconcile entries strictly with active tenant riders list
           const entryMap = new Map<string, CodDailyEntry>();
           const aliasToKey = new Map<string, string>();
@@ -542,7 +728,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
           };
 
           // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab
-          const merged: CodDailyEntry[] = activeTenantRiders.map((r) => {
+          const merged: CodDailyEntry[] = latestRiders.map((r) => {
             const ex = lookupEntry(r.id, r.phone, r.name);
             if (ex) {
               const totalCod = (Number(ex.company1Amount) || 0) + (Number(ex.company2Amount) || 0);
@@ -575,10 +761,10 @@ export const CodStandaloneApp: React.FC<Props> = ({
             };
           });
 
-          // CRITICAL AUDIT FIX: Append any entry from sheetData.entries that was not matched to activeTenantRiders
-          const processedIds = new Set(activeTenantRiders.map((r) => r.id));
+          // CRITICAL AUDIT FIX: Append any entry from sheetData.entries that was not matched to latestRiders
+          const processedIds = new Set(latestRiders.map((r) => r.id));
           const processedPhones = new Set(
-            activeTenantRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
+            latestRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
           );
 
           (sheetData.entries || []).forEach((e) => {
@@ -607,7 +793,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
         unsubscribe();
       }
     };
-  }, [selectedDate, userId, activeTenantRiders]);
+  }, [selectedDate, userId]);
 
   // Fail-Safe Midnight / Historical Date Check
   const todayDateStr = getTodayDateString();
@@ -1075,11 +1261,19 @@ export const CodStandaloneApp: React.FC<Props> = ({
       return;
     }
 
+    if (isTransferInQueueOrFlight(row, item.field, 'advance')) {
+      showToast('⏳ यह एडवांस एंट्री पहले से सिंक कतार में है — नेटवर्क ठीक होते ही अपने-आप दर्ज हो जाएगी।', 'info');
+      return;
+    }
+
     const lockKey = `sync_field_adv_${selectedDate}_${row.riderId}_${item.field}`;
     if (syncingKeysRef.current.has(lockKey)) return;
     syncingKeysRef.current.add(lockKey);
 
     const activeDate = selectedDate;
+    const flightKey = `${activeDate}_${row.riderId}_${item.field}_advance`;
+    markTransferInFlight(flightKey, true);
+
     const actorName = activeUser.name;
     const actorRole = activeUser.role;
     const shortType = item.sourceType === 'cod' ? 'COD शॉर्टेज' : 'कैश/ऑनलाइन शॉर्टेज';
@@ -1127,23 +1321,22 @@ export const CodStandaloneApp: React.FC<Props> = ({
     // 2. NON-BLOCKING BACKGROUND SYNC + SAFE LOCK STAMPING (Only stamps SyncedToAdvance AFTER Firestore confirms!)
     void (async () => {
       try {
-        if (auth && !auth.currentUser) {
-          await signInAnonymously(auth).catch(() => {});
-        }
-
-        const advId = await writeAdvanceEntryToFirestore(userId, {
-          id: deterministicAdvId,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          amount: shortAmount,
-          remainingAmount: shortAmount,
-          date: activeDate,
-          reason: reasonText,
-          runningBalance: newTotalAdvance,
-          isSettled: false,
-          status: 'PENDING',
-        });
+        const advId = await withTransientAckTimeout(
+          writeAdvanceEntryToFirestore(userId, {
+            id: deterministicAdvId,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            amount: shortAmount,
+            remainingAmount: shortAmount,
+            date: activeDate,
+            reason: reasonText,
+            runningBalance: newTotalAdvance,
+            isSettled: false,
+            status: 'PENDING',
+          }),
+          6000
+        );
 
         removePendingCodLedgerTransfer(userId, deterministicAdvId);
 
@@ -1199,25 +1392,34 @@ export const CodStandaloneApp: React.FC<Props> = ({
 
         showToast(`✅ ₹${shortAmount} ${shortType} सफलतापूर्वक एडवांस खाते में ट्रांसफर कर दिया गया एवं SMS भेजा गया!`, 'success');
       } catch (err: any) {
-        console.warn('Shortage advance Firestore write deferred to auto-retry queue:', err);
-        enqueuePendingCodLedgerTransfer({
-          deterministicId: deterministicAdvId,
-          kind: 'advance',
-          hubId: userId,
-          date: activeDate,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          field: item.field,
-          amount: shortAmount,
-          reason: reasonText,
-          syncProp: String(syncedProp),
-          idProp: 'syncedAdvanceId',
-          createdBy: actorName,
-          createdAt: new Date().toISOString(),
-        });
-        showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        if (isTransientNetworkError(err)) {
+          console.warn('Shortage advance Firestore write deferred to auto-retry queue:', err);
+          enqueuePendingCodLedgerTransfer({
+            deterministicId: deterministicAdvId,
+            kind: 'advance',
+            hubId: userId,
+            date: activeDate,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            field: item.field,
+            amount: shortAmount,
+            reason: reasonText,
+            syncProp: String(syncedProp),
+            idProp: 'syncedAdvanceId',
+            createdBy: actorName,
+            createdAt: new Date().toISOString(),
+          });
+          showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        } else {
+          console.error('Shortage advance transfer failed:', err);
+          if (targetRider) {
+            persistUpdatedRiderLocalOnly(targetRider);
+          }
+          showToast(`❌ एडवांस ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+        }
       } finally {
+        markTransferInFlight(flightKey, false);
         syncingKeysRef.current.delete(lockKey);
       }
     })();
@@ -1246,6 +1448,8 @@ export const CodStandaloneApp: React.FC<Props> = ({
     syncingKeysRef.current.add(lockKey);
 
     const activeDate = selectedDate;
+    const flightKey = `${activeDate}_${riderId}_${field}_incentive`;
+    markTransferInFlight(flightKey, true);
     const entryDate = data.date || activeDate;
     const actorName = activeUser.name;
     const actorRole = activeUser.role;
@@ -1311,21 +1515,20 @@ export const CodStandaloneApp: React.FC<Props> = ({
     // 2. NON-BLOCKING BACKGROUND SYNC + SAFE LOCK STAMPING
     void (async () => {
       try {
-        if (auth && !auth.currentUser) {
-          await signInAnonymously(auth).catch(() => {});
-        }
-
-        const incId = await writeIncentiveEntryToFirestore(userId, {
-          id: deterministicIncId,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          amount: surplusAmt,
-          date: entryDate,
-          reason: reasonText,
-          source: 'surplus',
-          createdBy: actorName,
-        });
+        const incId = await withTransientAckTimeout(
+          writeIncentiveEntryToFirestore(userId, {
+            id: deterministicIncId,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            amount: surplusAmt,
+            date: entryDate,
+            reason: reasonText,
+            source: 'surplus',
+            createdBy: actorName,
+          }),
+          6000
+        );
 
         removePendingCodLedgerTransfer(userId, deterministicIncId);
 
@@ -1381,25 +1584,34 @@ export const CodStandaloneApp: React.FC<Props> = ({
 
         showToast(`🎉 ₹${surplusAmt} सरप्लस सफलतापूर्वक ${riderName} के इंसेंटिव खाते में जोड़ दिया गया एवं SMS भेजा गया!`, 'success');
       } catch (err: any) {
-        console.warn('Surplus incentive Firestore write deferred to auto-retry queue:', err);
-        enqueuePendingCodLedgerTransfer({
-          deterministicId: deterministicIncId,
-          kind: 'incentive',
-          hubId: userId,
-          date: activeDate,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          field,
-          amount: surplusAmt,
-          reason: reasonText,
-          syncProp: String(syncedIncProp),
-          idProp: 'syncedIncentiveId',
-          createdBy: actorName,
-          createdAt: new Date().toISOString(),
-        });
-        showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        if (isTransientNetworkError(err)) {
+          console.warn('Surplus incentive Firestore write deferred to auto-retry queue:', err);
+          enqueuePendingCodLedgerTransfer({
+            deterministicId: deterministicIncId,
+            kind: 'incentive',
+            hubId: userId,
+            date: activeDate,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            field,
+            amount: surplusAmt,
+            reason: reasonText,
+            syncProp: String(syncedIncProp),
+            idProp: 'syncedIncentiveId',
+            createdBy: actorName,
+            createdAt: new Date().toISOString(),
+          });
+          showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        } else {
+          console.error('Surplus incentive transfer failed:', err);
+          if (targetRider) {
+            persistUpdatedRiderLocalOnly(targetRider);
+          }
+          showToast(`❌ इंसेंटिव ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+        }
       } finally {
+        markTransferInFlight(flightKey, false);
         syncingKeysRef.current.delete(lockKey);
       }
     })();
@@ -1414,11 +1626,19 @@ export const CodStandaloneApp: React.FC<Props> = ({
       return;
     }
 
+    if (isTransferInQueueOrFlight(row, 'balance', 'advance')) {
+      showToast('⏳ यह एडवांस एंट्री पहले से सिंक कतार में है — नेटवर्क ठीक होते ही अपने-आप दर्ज हो जाएगी।', 'info');
+      return;
+    }
+
     const lockKey = `diff_adv_${selectedDate}_${row.riderId}`;
     if (syncingKeysRef.current.has(lockKey)) return;
     syncingKeysRef.current.add(lockKey);
 
     const activeDate = selectedDate;
+    const flightKey = `${activeDate}_${row.riderId}_balance_advance`;
+    markTransferInFlight(flightKey, true);
+
     const actorName = activeUser.name;
     const actorRole = activeUser.role;
     const reasonText = `दैनिक COD शॉर्टेज: कम पैसा जमा किया (${activeDate})`;
@@ -1464,23 +1684,22 @@ export const CodStandaloneApp: React.FC<Props> = ({
     // 2. NON-BLOCKING BACKGROUND FIRESTORE SYNC + SAFE LOCK STAMPING
     void (async () => {
       try {
-        if (auth && !auth.currentUser) {
-          await signInAnonymously(auth).catch(() => {});
-        }
-
-        const advId = await writeAdvanceEntryToFirestore(userId, {
-          id: deterministicAdvId,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          amount: safeShort,
-          remainingAmount: safeShort,
-          date: activeDate,
-          reason: reasonText,
-          runningBalance: newTotalAdvance,
-          isSettled: false,
-          status: 'PENDING',
-        });
+        const advId = await withTransientAckTimeout(
+          writeAdvanceEntryToFirestore(userId, {
+            id: deterministicAdvId,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            amount: safeShort,
+            remainingAmount: safeShort,
+            date: activeDate,
+            reason: reasonText,
+            runningBalance: newTotalAdvance,
+            isSettled: false,
+            status: 'PENDING',
+          }),
+          6000
+        );
 
         removePendingCodLedgerTransfer(userId, deterministicAdvId);
 
@@ -1536,25 +1755,34 @@ export const CodStandaloneApp: React.FC<Props> = ({
 
         showToast(`✅ ₹${safeShort} COD शॉर्टेज दिनांक ${formatDateDisplay(activeDate)} एडवांस टैब में जुड़ गया एवं SMS भेजा गया!`, 'success');
       } catch (err: any) {
-        console.warn('Difference advance Firestore write deferred to auto-retry queue:', err);
-        enqueuePendingCodLedgerTransfer({
-          deterministicId: deterministicAdvId,
-          kind: 'advance',
-          hubId: userId,
-          date: activeDate,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          field: 'balance',
-          amount: safeShort,
-          reason: reasonText,
-          syncProp: 'balanceSyncedToAdvance',
-          idProp: 'syncedAdvanceId',
-          createdBy: actorName,
-          createdAt: new Date().toISOString(),
-        });
-        showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        if (isTransientNetworkError(err)) {
+          console.warn('Difference advance Firestore write deferred to auto-retry queue:', err);
+          enqueuePendingCodLedgerTransfer({
+            deterministicId: deterministicAdvId,
+            kind: 'advance',
+            hubId: userId,
+            date: activeDate,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            field: 'balance',
+            amount: safeShort,
+            reason: reasonText,
+            syncProp: 'balanceSyncedToAdvance',
+            idProp: 'syncedAdvanceId',
+            createdBy: actorName,
+            createdAt: new Date().toISOString(),
+          });
+          showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        } else {
+          console.error('Difference advance transfer failed:', err);
+          if (targetRider) {
+            persistUpdatedRiderLocalOnly(targetRider);
+          }
+          showToast(`❌ एडवांस ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+        }
       } finally {
+        markTransferInFlight(flightKey, false);
         syncingKeysRef.current.delete(lockKey);
       }
     })();
@@ -1569,11 +1797,19 @@ export const CodStandaloneApp: React.FC<Props> = ({
       return;
     }
 
+    if (isTransferInQueueOrFlight(row, 'balance', 'incentive')) {
+      showToast('⏳ यह इंसेंटिव एंट्री पहले से सिंक कतार में है — नेटवर्क ठीक होते ही अपने-आप दर्ज हो जाएगी।', 'info');
+      return;
+    }
+
     const lockKey = `diff_inc_${selectedDate}_${row.riderId}`;
     if (syncingKeysRef.current.has(lockKey)) return;
     syncingKeysRef.current.add(lockKey);
 
     const activeDate = selectedDate;
+    const flightKey = `${activeDate}_${row.riderId}_balance_incentive`;
+    markTransferInFlight(flightKey, true);
+
     const actorName = activeUser.name;
     const actorRole = activeUser.role;
     const reasonText = `दैनिक COD अतिरिक्त जमा: Surplus (${activeDate})`;
@@ -1615,21 +1851,20 @@ export const CodStandaloneApp: React.FC<Props> = ({
     // 2. NON-BLOCKING BACKGROUND FIRESTORE SYNC + SAFE LOCK STAMPING
     void (async () => {
       try {
-        if (auth && !auth.currentUser) {
-          await signInAnonymously(auth).catch(() => {});
-        }
-
-        const incId = await writeIncentiveEntryToFirestore(userId, {
-          id: deterministicIncId,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          amount: safeSurplus,
-          date: activeDate,
-          reason: reasonText,
-          source: 'surplus',
-          createdBy: actorName,
-        });
+        const incId = await withTransientAckTimeout(
+          writeIncentiveEntryToFirestore(userId, {
+            id: deterministicIncId,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            amount: safeSurplus,
+            date: activeDate,
+            reason: reasonText,
+            source: 'surplus',
+            createdBy: actorName,
+          }),
+          6000
+        );
 
         removePendingCodLedgerTransfer(userId, deterministicIncId);
 
@@ -1679,25 +1914,34 @@ export const CodStandaloneApp: React.FC<Props> = ({
 
         showToast(`🎉 ₹${safeSurplus} अतिरिक्त राशि दिनांक ${formatDateDisplay(activeDate)} इंसेंटिव खाते में जुड़ गई एवं SMS भेजा गया!`, 'success');
       } catch (err: any) {
-        console.warn('Difference incentive Firestore write deferred to auto-retry queue:', err);
-        enqueuePendingCodLedgerTransfer({
-          deterministicId: deterministicIncId,
-          kind: 'incentive',
-          hubId: userId,
-          date: activeDate,
-          riderId: effectiveRiderId,
-          riderName,
-          riderPhone,
-          field: 'balance',
-          amount: safeSurplus,
-          reason: reasonText,
-          syncProp: 'balanceSyncedToIncentive',
-          idProp: 'syncedIncentiveId',
-          createdBy: actorName,
-          createdAt: new Date().toISOString(),
-        });
-        showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        if (isTransientNetworkError(err)) {
+          console.warn('Difference incentive Firestore write deferred to auto-retry queue:', err);
+          enqueuePendingCodLedgerTransfer({
+            deterministicId: deterministicIncId,
+            kind: 'incentive',
+            hubId: userId,
+            date: activeDate,
+            riderId: effectiveRiderId,
+            riderName,
+            riderPhone,
+            field: 'balance',
+            amount: safeSurplus,
+            reason: reasonText,
+            syncProp: 'balanceSyncedToIncentive',
+            idProp: 'syncedIncentiveId',
+            createdBy: actorName,
+            createdAt: new Date().toISOString(),
+          });
+          showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+        } else {
+          console.error('Difference incentive transfer failed:', err);
+          if (targetRider) {
+            persistUpdatedRiderLocalOnly(targetRider);
+          }
+          showToast(`❌ इंसेंटिव ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+        }
       } finally {
+        markTransferInFlight(flightKey, false);
         syncingKeysRef.current.delete(lockKey);
       }
     })();
@@ -2451,7 +2695,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                     <Clock className="w-4 h-4 text-amber-400 shrink-0" />
                     <span>
                       <strong>कल का हिसाब किताब (Yesterday's Sheet - {formatDateDisplay(selectedDate)}):</strong>{' '}
-                      कुल <strong>{filteredRows.filter(r => (r.totalCod || 0) > 0 || r.status === 'submitted').length}</strong> राइडर्स का पूरा हिसाब दर्ज है।
+                      कुल <strong>{filteredRows.filter(r => (r.totalCod || 0) > 0 || (r.totalDeposit || 0) > 0 || r.status === 'submitted' || r.status === 'verified' || r.status === 'locked').length}</strong> राइडर्स का पूरा हिसाब दर्ज है।
                     </span>
                   </div>
                   <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
@@ -3016,6 +3260,14 @@ export const CodStandaloneApp: React.FC<Props> = ({
                                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                                   <span>✓ एडवांस में दर्ज ({formatINR(computedBalance)})</span>
                                 </span>
+                              ) : isTransferInQueueOrFlight(row, 'balance', 'advance') ? (
+                                <span
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-xs"
+                                  title="एंट्री सुरक्षित कतार में है — नेटवर्क ठीक होते ही अपने-आप पक्की दर्ज हो जाएगी"
+                                >
+                                  <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
+                                  <span>⏳ सिंक कतार में ({formatINR(computedBalance)})</span>
+                                </span>
                               ) : (
                                 <button
                                   type="button"
@@ -3038,6 +3290,14 @@ export const CodStandaloneApp: React.FC<Props> = ({
                                 >
                                   <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                                   <span>✓ इंसेंटिव में दर्ज ({formatINR(Math.abs(computedBalance))})</span>
+                                </span>
+                              ) : isTransferInQueueOrFlight(row, 'balance', 'incentive') ? (
+                                <span
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-xs"
+                                  title="इंसेंटिव एंट्री सुरक्षित कतार में है — नेटवर्क ठीक होते ही अपने-आप पक्की दर्ज हो जाएगी"
+                                >
+                                  <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
+                                  <span>⏳ सिंक कतार में ({formatINR(Math.abs(computedBalance))})</span>
                                 </span>
                               ) : (
                                 <button
@@ -3444,11 +3704,19 @@ export const CodStandaloneApp: React.FC<Props> = ({
                                     -₹{item.shortage} Short
                                   </span>
 
-                                  {/* One-click Advance Sync Button / Synced Badge */}
+                                  {/* One-click Advance Sync Button / Queued Badge / Synced Badge */}
                                   {item.syncedToAdvance ? (
                                     <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                                       <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                       <span>✓ एडवांस खाते में ट्रांसफर्ड</span>
+                                    </span>
+                                  ) : isTransferInQueueOrFlight(row, item.field, 'advance') ? (
+                                    <span
+                                      className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                                      title="सिंक कतार में है — नेटवर्क ठीक होते ही अपने-आप जुड़ जाएगी"
+                                    >
+                                      <Clock className="w-3 h-3 text-amber-400 animate-pulse" />
+                                      <span>⏳ सिंक कतार में (Auto-Sync)</span>
                                     </span>
                                   ) : (
                                     <button

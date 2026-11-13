@@ -3410,6 +3410,47 @@ export function getPendingCodLedgerTransfers(hubId: string): PendingCodLedgerTra
   }
 }
 
+export function withTransientAckTimeout<T>(promise: Promise<T>, timeoutMs = 6000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(
+        Object.assign(new Error('Network response slow (queued safely for auto-retry)'), {
+          code: 'unavailable',
+        })
+      );
+    }, timeoutMs);
+
+    promise.then(
+      (val) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function dispatchCodQueueChanged(hubId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent('courier-payout:cod-queue-changed', {
+        detail: { hubId: (hubId || 'default').trim() },
+      })
+    );
+  } catch {}
+}
+
 export function enqueuePendingCodLedgerTransfer(item: PendingCodLedgerTransfer): void {
   if (typeof window === 'undefined') return;
   try {
@@ -3417,6 +3458,7 @@ export function enqueuePendingCodLedgerTransfer(item: PendingCodLedgerTransfer):
     const filtered = existing.filter((x) => x.deterministicId !== item.deterministicId);
     filtered.push(item);
     trySetLocalStorageItem(getPendingQueueKey(item.hubId), JSON.stringify(filtered.slice(-100)), item.hubId);
+    dispatchCodQueueChanged(item.hubId);
   } catch {}
 }
 
@@ -3426,6 +3468,7 @@ export function removePendingCodLedgerTransfer(hubId: string, deterministicId: s
     const existing = getPendingCodLedgerTransfers(hubId);
     const next = existing.filter((x) => x.deterministicId !== deterministicId);
     trySetLocalStorageItem(getPendingQueueKey(hubId), JSON.stringify(next), hubId);
+    dispatchCodQueueChanged(hubId);
   } catch {}
 }
 

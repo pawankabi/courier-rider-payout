@@ -1600,11 +1600,14 @@ function MainCourierApp() {
   }, [settlements, riders.length]);
 
   // RULE 5: 30-DAY AUTOMATIC TRASH BIN PURGE (Storage Optimization for Firebase & Device)
-  // Runs once per session after cloud hydration finishes; strictly requires valid deletedAt >= 30 days old.
+  // Runs after cloud hydration completes (`syncStatus === 'synced'`) so expired cloud trash records are also auto-purged.
   const trashAutoPurgeDoneRef = useRef<string | null>(null);
   useEffect(() => {
     if (!isInitialized || isDataLoading) return;
     const effectiveUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
+    const isCloudWorkspace = Boolean(effectiveUid);
+    if (isCloudWorkspace && syncStatus !== 'synced') return;
+
     const sessionScopeKey = effectiveUid || 'guest';
     if (trashAutoPurgeDoneRef.current === sessionScopeKey) return;
     if (riders.length === 0 && entries.length === 0) return;
@@ -1674,7 +1677,7 @@ function MainCourierApp() {
     ).catch((err) => {
       console.warn('30-day trash auto-purge background notice:', err);
     });
-  }, [isInitialized, isDataLoading, inspectedUser, currentUser, riders, entries]);
+  }, [isInitialized, isDataLoading, syncStatus, inspectedUser, currentUser, riders, entries]);
 
   // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
   useEffect(() => {

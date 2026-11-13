@@ -303,18 +303,33 @@ class LiveUpdateService {
 }
 
 /**
- * Ensures the latest build manifest is synced to Firestore for zero-latency detection across all mobile apps
+ * Ensures the latest build manifest is synced to Firestore ONLY if local code is newer than cloud
+ * (prevents older APK/cached versions from downgrading newer cloud release metadata).
  */
 export async function syncLatestManifestToFirestore(): Promise<void> {
   try {
+    const latestRef = doc(db, 'app_updates', 'latest');
+    const existingSnap = await getDoc(latestRef);
+    if (existingSnap.exists()) {
+      const existing = existingSnap.data() as Partial<CloudVersionManifest> | undefined;
+      const cloudVersion = String(existing?.version || '');
+      const cloudBuildTime = typeof existing?.buildTime === 'number' ? existing.buildTime : 0;
+      const localIsNewer =
+        isVersionHigher(APP_VERSION, cloudVersion) ||
+        (!isVersionHigher(cloudVersion, APP_VERSION) && CURRENT_LOCAL_BUILD_TIME > cloudBuildTime);
+      if (!localIsNewer) {
+        return;
+      }
+    }
+
     const updateData = {
       version: APP_VERSION,
       buildTime: CURRENT_LOCAL_BUILD_TIME,
       buildDate: getTodayDateString(),
-      releaseNotes: `v${APP_VERSION} - Safe Accounting, Auto-Purge Trash Bin (30 Days), COD Quota Guard & Security Updates`,
+      releaseNotes: `v${APP_VERSION} - Safe Accounting, Auto-Purge Trash Bin (30 Days), COD Ledger Sync & Security Updates`,
       updatedAt: new Date().toISOString(),
     };
-    await setDoc(doc(db, 'app_updates', 'latest'), updateData, { merge: true });
+    await setDoc(latestRef, updateData, { merge: true });
   } catch {}
 }
 

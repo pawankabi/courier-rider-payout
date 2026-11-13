@@ -15,7 +15,7 @@ import {
   limit,
   arrayUnion,
 } from 'firebase/firestore';
-import { User, signInAnonymously } from 'firebase/auth';
+import { User } from 'firebase/auth';
 import { db, auth } from '../firebase';
 export { db };
 import { 
@@ -54,6 +54,38 @@ export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
 export function isSuperAdmin(email?: string | null): boolean {
   if (!email) return false;
   return email.trim().toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+}
+
+export function isTransientNetworkError(err: any): boolean {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return true;
+  }
+  const code = String(err?.code || '').toLowerCase();
+  const msg = String(err?.message || err || '').toLowerCase();
+  if (
+    code === 'permission-denied' ||
+    code === 'unauthenticated' ||
+    code === 'invalid-argument' ||
+    code === 'resource-exhausted' ||
+    code === 'failed-precondition' ||
+    msg.includes('permission') ||
+    msg.includes('insufficient permissions') ||
+    msg.includes('invalid-argument') ||
+    msg.includes('quota')
+  ) {
+    return false;
+  }
+  return (
+    code === 'unavailable' ||
+    code === 'deadline-exceeded' ||
+    code === 'aborted' ||
+    code === 'cancelled' ||
+    msg.includes('offline') ||
+    msg.includes('network') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('timeout') ||
+    msg.includes('unavailable')
+  );
 }
 
 /**
@@ -2372,11 +2404,15 @@ export async function deleteRiderFromFirestore(userId: string, riderId: string):
   try {
     const workspaceRef = doc(db, 'workspaces', userId, 'riders', riderId);
     await setDoc(workspaceRef, softDeletePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Workspace rider soft-delete notice:', err);
+  }
   try {
     const rootRef = doc(db, 'riders', riderId);
     await setDoc(rootRef, softDeletePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Root rider soft-delete notice:', err);
+  }
 }
 
 /**
@@ -2393,11 +2429,15 @@ export async function restoreRiderInFirestore(userId: string, riderId: string): 
   try {
     const workspaceRef = doc(db, 'workspaces', userId, 'riders', riderId);
     await setDoc(workspaceRef, restorePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Workspace rider restore notice:', err);
+  }
   try {
     const rootRef = doc(db, 'riders', riderId);
     await setDoc(rootRef, restorePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Root rider restore notice:', err);
+  }
 }
 
 /**
@@ -2459,11 +2499,15 @@ export async function deleteDeliveryFromFirestore(
   try {
     const workspaceRef = doc(db, 'workspaces', userId, 'entries', entryId);
     await setDoc(workspaceRef, softDeletePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Workspace delivery soft-delete notice:', err);
+  }
   try {
     const rootRef = doc(db, 'deliveries', entryId);
     await setDoc(rootRef, softDeletePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Root delivery soft-delete notice:', err);
+  }
 }
 
 /**
@@ -2481,11 +2525,15 @@ export async function restoreDeliveryInFirestore(
   try {
     const workspaceRef = doc(db, 'workspaces', userId, 'entries', entryId);
     await setDoc(workspaceRef, restorePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Workspace delivery restore notice:', err);
+  }
   try {
     const rootRef = doc(db, 'deliveries', entryId);
     await setDoc(rootRef, restorePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Root delivery restore notice:', err);
+  }
 }
 
 /**
@@ -3339,13 +3387,8 @@ export async function writeAdvanceEntryToFirestore(
   const effectiveUserId = (userId || '').trim();
   const isGuest = !effectiveUserId || effectiveUserId === 'guest';
 
-  if (auth && !auth.currentUser) {
-    try {
-      await signInAnonymously(auth);
-    } catch {}
-  }
-
   const advId = advance.id || `adv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const nowIso = new Date().toISOString();
   const advData = cleanForFirestore({
     id: advId,
     riderId: advance.riderId,
@@ -3360,7 +3403,8 @@ export async function writeAdvanceEntryToFirestore(
     runningBalance: advance.runningBalance || advance.amount,
     workspaceId: effectiveUserId || 'guest',
     userId: effectiveUserId || 'guest',
-    createdAt: new Date().toISOString(),
+    createdAt: nowIso,
+    updatedAt: nowIso,
   });
 
   const rootPromise = setDoc(doc(db, 'advances', advId), advData, { merge: true });
@@ -3369,10 +3413,14 @@ export async function writeAdvanceEntryToFirestore(
     : Promise.resolve();
 
   const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
-  if (!isGuest && wsRes.status === 'rejected') {
-    throw wsRes.reason;
-  }
-  if (isGuest && rootRes.status === 'rejected') {
+  if (!isGuest) {
+    if (wsRes.status === 'rejected') {
+      if (rootRes.status === 'rejected' || Boolean(auth?.currentUser)) {
+        throw wsRes.reason;
+      }
+      console.warn('Workspace advance mirror skipped in companion session:', wsRes.reason);
+    }
+  } else if (rootRes.status === 'rejected') {
     throw rootRes.reason;
   }
 
@@ -3484,13 +3532,8 @@ export async function writeIncentiveEntryToFirestore(
   const effectiveUserId = (userId || '').trim();
   const isGuest = !effectiveUserId || effectiveUserId === 'guest';
 
-  if (auth && !auth.currentUser) {
-    try {
-      await signInAnonymously(auth);
-    } catch {}
-  }
-
   const incId = incentive.id || `inc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const nowIso = new Date().toISOString();
   const incData = cleanForFirestore({
     id: incId,
     riderId: incentive.riderId,
@@ -3503,7 +3546,8 @@ export async function writeIncentiveEntryToFirestore(
     workspaceId: effectiveUserId || 'guest',
     userId: effectiveUserId || 'guest',
     createdBy: incentive.createdBy || '',
-    createdAt: new Date().toISOString(),
+    createdAt: nowIso,
+    updatedAt: nowIso,
   });
 
   const rootPromise = setDoc(doc(db, 'incentives', incId), incData, { merge: true });
@@ -3512,10 +3556,14 @@ export async function writeIncentiveEntryToFirestore(
     : Promise.resolve();
 
   const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
-  if (!isGuest && wsRes.status === 'rejected') {
-    throw wsRes.reason;
-  }
-  if (isGuest && rootRes.status === 'rejected') {
+  if (!isGuest) {
+    if (wsRes.status === 'rejected') {
+      if (rootRes.status === 'rejected' || Boolean(auth?.currentUser)) {
+        throw wsRes.reason;
+      }
+      console.warn('Workspace incentive mirror skipped in companion session:', wsRes.reason);
+    }
+  } else if (rootRes.status === 'rejected') {
     throw rootRes.reason;
   }
 
@@ -3587,7 +3635,9 @@ export async function deleteAdvanceFromFirestore(
 
   try {
     await setDoc(doc(db, 'advances', cleanId), softDeletePayload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('Root advance soft-delete notice:', err);
+  }
   if (cleanId !== advanceId) {
     try {
       await setDoc(doc(db, 'advances', advanceId), softDeletePayload, { merge: true });
@@ -3596,7 +3646,9 @@ export async function deleteAdvanceFromFirestore(
   if (userId) {
     try {
       await setDoc(doc(db, 'workspaces', userId, 'advances', cleanId), softDeletePayload, { merge: true });
-    } catch {}
+    } catch (err) {
+      console.warn('Workspace advance soft-delete notice:', err);
+    }
     if (cleanId !== advanceId) {
       try {
         await setDoc(doc(db, 'workspaces', userId, 'advances', advanceId), softDeletePayload, { merge: true });
@@ -3931,6 +3983,7 @@ export async function permanentlyDeleteAdvanceFromFirestore(
 
   const mirrorOps: Promise<any>[] = [
     deleteDoc(doc(db, 'advances', cleanId)).catch(() => {}),
+    syncPublicRiderStatement(updatedRider, updatedRider.advances || []).catch(() => {}),
   ];
   if (cleanId !== advanceId) {
     mirrorOps.push(deleteDoc(doc(db, 'advances', advanceId)).catch(() => {}));
@@ -4013,6 +4066,7 @@ export async function emptyAllTrashInFirestore(
   if (userId && userId !== 'guest') {
     ridersWithPrunedAdvances.forEach((r) => {
       primaryOps.push(() => saveRiderToFirestore(userId, r, userEmail));
+      mirrorOps.push(syncPublicRiderStatement(r, r.advances || []).catch(() => {}));
     });
   }
 
