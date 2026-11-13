@@ -510,6 +510,22 @@ function MainCourierApp() {
     return cleanup;
   }, []);*/
 
+  // Synchronize riders state immediately when COD sub-app or modal adds shortage/surplus advance/incentive
+  useEffect(() => {
+    const handleRidersUpdated = (e: Event) => {
+      const detail = (e as CustomEvent<{ userId?: string; rider?: Rider }>).detail;
+      if (!detail?.rider) return;
+      setRiders((prev) => {
+        const exists = prev.some((r) => r.id === detail.rider!.id);
+        return exists
+          ? prev.map((r) => (r.id === detail.rider!.id ? detail.rider! : r))
+          : [...prev, detail.rider!];
+      });
+    };
+    window.addEventListener('courier-payout:riders-updated', handleRidersUpdated);
+    return () => window.removeEventListener('courier-payout:riders-updated', handleRidersUpdated);
+  }, []);
+
   const handleOpenLegalPolicies = (tab: PolicyTab = 'about') => {
     setLegalPoliciesInitialTab(tab);
     setIsLegalPoliciesModalOpen(true);
@@ -3048,7 +3064,16 @@ function MainCourierApp() {
   if (isCodStandaloneOpen && isCodAccessEnabled) {
     return (
       <CodStandaloneApp
-        onExit={() => setIsCodStandaloneOpen(false)}
+        onExit={() => {
+          setIsCodStandaloneOpen(false);
+          try {
+            const uid = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
+            const latest = loadRidersFromStorage(uid);
+            if (Array.isArray(latest) && latest.length > 0) {
+              setRiders(latest);
+            }
+          } catch {}
+        }}
         riders={dashboardRiders}
         userId={targetUid || 'guest'}
         isSuperAdmin={isSuperAdminUser}

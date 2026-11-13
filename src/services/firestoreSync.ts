@@ -15,8 +15,8 @@ import {
   limit,
   arrayUnion,
 } from 'firebase/firestore';
-import { User } from 'firebase/auth';
-import { db } from '../firebase';
+import { User, signInAnonymously } from 'firebase/auth';
+import { db, auth } from '../firebase';
 export { db };
 import { 
   Rider, 
@@ -3336,6 +3336,15 @@ export async function writeAdvanceEntryToFirestore(
     runningBalance?: number;
   }
 ): Promise<string> {
+  const effectiveUserId = (userId || '').trim();
+  const isGuest = !effectiveUserId || effectiveUserId === 'guest';
+
+  if (auth && !auth.currentUser) {
+    try {
+      await signInAnonymously(auth);
+    } catch {}
+  }
+
   const advId = advance.id || `adv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const advData = cleanForFirestore({
     id: advId,
@@ -3349,21 +3358,21 @@ export async function writeAdvanceEntryToFirestore(
     date: advance.date,
     reason: advance.reason,
     runningBalance: advance.runningBalance || advance.amount,
-    workspaceId: userId,
-    userId: userId,
+    workspaceId: effectiveUserId || 'guest',
+    userId: effectiveUserId || 'guest',
     createdAt: new Date().toISOString(),
   });
 
   const rootPromise = setDoc(doc(db, 'advances', advId), advData, { merge: true });
-  const wsPromise = userId
-    ? setDoc(doc(db, 'workspaces', userId, 'advances', advId), advData, { merge: true })
+  const wsPromise = !isGuest
+    ? setDoc(doc(db, 'workspaces', effectiveUserId, 'advances', advId), advData, { merge: true })
     : Promise.resolve();
 
   const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
-  if (userId && wsRes.status === 'rejected') {
+  if (!isGuest && wsRes.status === 'rejected') {
     throw wsRes.reason;
   }
-  if (!userId && rootRes.status === 'rejected') {
+  if (isGuest && rootRes.status === 'rejected') {
     throw rootRes.reason;
   }
 
@@ -3472,6 +3481,15 @@ export async function writeIncentiveEntryToFirestore(
     createdBy?: string;
   }
 ): Promise<string> {
+  const effectiveUserId = (userId || '').trim();
+  const isGuest = !effectiveUserId || effectiveUserId === 'guest';
+
+  if (auth && !auth.currentUser) {
+    try {
+      await signInAnonymously(auth);
+    } catch {}
+  }
+
   const incId = incentive.id || `inc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const incData = cleanForFirestore({
     id: incId,
@@ -3482,22 +3500,22 @@ export async function writeIncentiveEntryToFirestore(
     date: incentive.date,
     reason: incentive.reason,
     source: incentive.source || 'manual',
-    workspaceId: userId,
-    userId: userId,
+    workspaceId: effectiveUserId || 'guest',
+    userId: effectiveUserId || 'guest',
     createdBy: incentive.createdBy || '',
     createdAt: new Date().toISOString(),
   });
 
   const rootPromise = setDoc(doc(db, 'incentives', incId), incData, { merge: true });
-  const wsPromise = userId
-    ? setDoc(doc(db, 'workspaces', userId, 'incentives', incId), incData, { merge: true })
+  const wsPromise = !isGuest
+    ? setDoc(doc(db, 'workspaces', effectiveUserId, 'incentives', incId), incData, { merge: true })
     : Promise.resolve();
 
   const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
-  if (userId && wsRes.status === 'rejected') {
+  if (!isGuest && wsRes.status === 'rejected') {
     throw wsRes.reason;
   }
-  if (!userId && rootRes.status === 'rejected') {
+  if (isGuest && rootRes.status === 'rejected') {
     throw rootRes.reason;
   }
 

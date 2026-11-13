@@ -41,7 +41,8 @@ import {
   Banknote
 } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { signInAnonymously } from 'firebase/auth';
+import { db, auth } from '../firebase';
 import { 
   Rider, 
   CodDailyEntry, 
@@ -72,7 +73,10 @@ import {
   mergeCodEntriesNonDestructively,
   getCachedDailyCodSheetSync,
   buildDeterministicShortageAdvId,
-  buildDeterministicSurplusIncId
+  buildDeterministicSurplusIncId,
+  enqueuePendingCodLedgerTransfer,
+  getPendingCodLedgerTransfers,
+  removePendingCodLedgerTransfer
 } from '../services/codService';
 import { 
   isEntityOwnedByUser, 
@@ -222,7 +226,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
     );
   };
 
-  const persistUpdatedRiderResilient = async (updatedRider: Rider) => {
+  const persistUpdatedRiderLocalOnly = (updatedRider: Rider) => {
     sessionRidersRef.current[updatedRider.id] = updatedRider;
     try {
       const currentList = loadRidersFromStorage(userId);
@@ -231,7 +235,12 @@ export const CodStandaloneApp: React.FC<Props> = ({
         ? currentList.map((r) => (r.id === updatedRider.id ? updatedRider : r))
         : [...currentList, updatedRider];
       saveRidersToStorage(nextList, userId);
+      window.dispatchEvent(new CustomEvent('courier-payout:riders-updated', { detail: { userId, rider: updatedRider } }));
     } catch {}
+  };
+
+  const persistUpdatedRiderResilient = async (updatedRider: Rider) => {
+    persistUpdatedRiderLocalOnly(updatedRider);
     if (userId && userId !== 'guest') {
       try {
         await saveRiderToFirestore(userId, updatedRider);
@@ -361,6 +370,94 @@ export const CodStandaloneApp: React.FC<Props> = ({
       mounted = false;
     };
   }, [userId, activeTenantRiders]);
+
+  // Auto-flush queued Shortage/Surplus transfers on mount, date change, and internet reconnect
+  useEffect(() => {
+    const flushPendingQueue = async () => {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      const pending = getPendingCodLedgerTransfers(userId);
+      if (pending.length === 0) return;
+
+      if (auth && !auth.currentUser) {
+        await signInAnonymously(auth).catch(() => {});
+      }
+
+      for (const item of pending) {
+        try {
+          if (item.kind === 'advance') {
+            await writeAdvanceEntryToFirestore(userId, {
+              id: item.deterministicId,
+              riderId: item.riderId,
+              riderName: item.riderName,
+              riderPhone: item.riderPhone,
+              amount: item.amount,
+              remainingAmount: item.amount,
+              date: item.date,
+              reason: item.reason,
+              isSettled: false,
+              status: 'PENDING',
+            });
+          } else {
+            await writeIncentiveEntryToFirestore(userId, {
+              id: item.deterministicId,
+              riderId: item.riderId,
+              riderName: item.riderName,
+              riderPhone: item.riderPhone,
+              amount: item.amount,
+              date: item.date,
+              reason: item.reason,
+              source: 'surplus',
+              createdBy: item.createdBy,
+            });
+          }
+
+          // Mark sync lock ONLY AFTER Firestore ledger write succeeded
+          const cachedSheet = getCachedDailyCodSheetSync(item.date, userId);
+          if (cachedSheet && Array.isArray(cachedSheet.entries)) {
+            const patchedEntries = cachedSheet.entries.map((e) =>
+              e.riderId === item.riderId
+                ? {
+                    ...e,
+                    [item.syncProp]: true,
+                    [item.idProp]: item.deterministicId,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : e
+            );
+            await saveCodDailyEntries(userId, item.date, patchedEntries);
+          }
+
+          if (item.date === selectedDate) {
+            setGridEntries((prev) => {
+              const updated = prev.map((e) =>
+                e.riderId === item.riderId
+                  ? {
+                      ...e,
+                      [item.syncProp]: true,
+                      [item.idProp]: item.deterministicId,
+                      updatedAt: new Date().toISOString(),
+                    }
+                  : e
+              );
+              void saveCodDailyEntries(userId, selectedDate, updated);
+              return updated;
+            });
+          }
+
+          removePendingCodLedgerTransfer(userId, item.deterministicId);
+        } catch (err) {
+          console.warn('Standalone queued ledger transfer retry deferred:', err);
+        }
+      }
+    };
+
+    void flushPendingQueue();
+    const handleOnline = () => {
+      void flushPendingQueue();
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [userId, selectedDate]);
 
   // 2. Real-Time bi-directional synchronization on daily_cod_sheets/{selectedDate}
   // Immediately syncs whenever a rider saves in companion app without needing page reload
@@ -959,7 +1056,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
     });
   };
 
-  // One-click Shortage to Advance Transfer with SMS Trigger
+  // One-click Shortage to Advance Transfer with 0-second Optimistic UI & Background Retry Queue
   const handleSyncShortageToAdvance = async (
     row: CodDailyEntry,
     item: {
@@ -982,116 +1079,151 @@ export const CodStandaloneApp: React.FC<Props> = ({
     if (syncingKeysRef.current.has(lockKey)) return;
     syncingKeysRef.current.add(lockKey);
 
+    const activeDate = selectedDate;
+    const actorName = activeUser.name;
+    const actorRole = activeUser.role;
     const shortType = item.sourceType === 'cod' ? 'COD शॉर्टेज' : 'कैश/ऑनलाइन शॉर्टेज';
-    const reasonText = `दैनिक शॉर्टेज: ${shortType} (${selectedDate})`;
+    const reasonText = `दैनिक शॉर्टेज: ${shortType} (${activeDate})`;
 
     const targetRider = resolveTargetRider(row.riderId, row.riderPhone);
     const effectiveRiderId = targetRider?.id || row.riderId;
     const riderName = targetRider ? targetRider.name : row.riderName;
     const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
+    const deterministicAdvId = buildDeterministicShortageAdvId(activeDate, effectiveRiderId, item.field);
     const previousPendingAdvance = Number(targetRider?.totalAdvance) || 0;
-    const newTotalAdvance = previousPendingAdvance + shortAmount;
-    const deterministicAdvId = buildDeterministicShortageAdvId(selectedDate, effectiveRiderId, item.field);
+    const alreadyInProfile = Boolean(targetRider?.advances?.some((a) => a.id === deterministicAdvId));
+    const newTotalAdvance = alreadyInProfile ? previousPendingAdvance : previousPendingAdvance + shortAmount;
 
-    try {
-      // 1. Automatically write entry into `advances` collection with deterministic ID (prevents duplicates)
-      const advId = await writeAdvanceEntryToFirestore(userId, {
+    // 1. 0-SECOND OPTIMISTIC RIDER LEDGER UPDATE (UI reacts immediately)
+    let updatedRiderPayload: Rider | null = null;
+    if (targetRider) {
+      const newAdvanceItem: RiderAdvanceEntry = {
         id: deterministicAdvId,
-        riderId: effectiveRiderId,
-        riderName,
-        riderPhone,
+        riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
         amount: shortAmount,
         remainingAmount: shortAmount,
-        date: selectedDate,
+        date: activeDate,
         reason: reasonText,
         runningBalance: newTotalAdvance,
         isSettled: false,
+        isDeducted: false,
         status: 'PENDING',
-      });
+        createdAt: new Date().toISOString(),
+        createdBy: actorName,
+      };
+      const filteredAdvances = (targetRider.advances || []).filter((a) => a.id !== deterministicAdvId);
+      updatedRiderPayload = {
+        ...targetRider,
+        totalAdvance: newTotalAdvance,
+        advances: [newAdvanceItem, ...filteredAdvances],
+      };
+      persistUpdatedRiderLocalOnly(updatedRiderPayload);
+    }
 
-      // 2. Update rider advance ledger document and public statement
-      if (targetRider) {
-        const newAdvanceItem: RiderAdvanceEntry = {
-          id: advId,
-          riderId: targetRider.id,
-          riderName: targetRider.name,
-          riderPhone: targetRider.phone,
+    showToast(`⚡ ₹${shortAmount} ${shortType} एडवांस खाते में दर्ज किया जा रहा है...`, 'info');
+
+    // 2. NON-BLOCKING BACKGROUND SYNC + SAFE LOCK STAMPING (Only stamps SyncedToAdvance AFTER Firestore confirms!)
+    void (async () => {
+      try {
+        if (auth && !auth.currentUser) {
+          await signInAnonymously(auth).catch(() => {});
+        }
+
+        const advId = await writeAdvanceEntryToFirestore(userId, {
+          id: deterministicAdvId,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
           amount: shortAmount,
           remainingAmount: shortAmount,
-          date: selectedDate,
+          date: activeDate,
           reason: reasonText,
           runningBalance: newTotalAdvance,
           isSettled: false,
-          isDeducted: false,
           status: 'PENDING',
-          createdAt: new Date().toISOString(),
-          createdBy: activeUser.name,
-        };
-        const updatedAdvances = [newAdvanceItem, ...(targetRider.advances || [])];
-        const updatedRider: Rider = {
-          ...targetRider,
+        });
+
+        removePendingCodLedgerTransfer(userId, deterministicAdvId);
+
+        setGridEntries((prev) => {
+          const next = prev.map((e) =>
+            e.riderId === row.riderId
+              ? {
+                  ...e,
+                  [syncedProp]: true,
+                  syncedAdvanceId: advId,
+                  updatedAt: new Date().toISOString(),
+                  updatedBy: actorName,
+                }
+              : e
+          );
+          void saveCodDailyEntries(userId, activeDate, next);
+          return next;
+        });
+
+        if (updatedRiderPayload) {
+          void persistUpdatedRiderResilient(updatedRiderPayload);
+        }
+
+        recordCodAuditLog(userId, {
+          changedBy: actorName,
+          role: actorRole,
+          riderId: row.riderId,
+          riderName,
+          date: activeDate,
+          field: `${item.field.toUpperCase()} Shortage → Advance`,
+          previousValue: `Prev Adv: ₹${previousPendingAdvance}`,
+          newValue: `+₹${shortAmount} (Total: ₹${newTotalAdvance})`,
+          notes: reasonText,
+        }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
+
+        const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
+        const smsText = formatAdvanceSmsText({
+          riderName,
+          amount: shortAmount,
+          reason: reasonText,
           totalAdvance: newTotalAdvance,
-          advances: updatedAdvances,
-        };
-        await persistUpdatedRiderResilient(updatedRider);
+          statementUrl,
+        });
+
+        dispatchAutomatedSms({
+          riderName,
+          riderPhone,
+          amount: shortAmount,
+          message: smsText,
+          type: 'advance',
+          statementUrl,
+        }).catch((e) => console.warn('Background shortage SMS notice:', e));
+
+        showToast(`✅ ₹${shortAmount} ${shortType} सफलतापूर्वक एडवांस खाते में ट्रांसफर कर दिया गया एवं SMS भेजा गया!`, 'success');
+      } catch (err: any) {
+        console.warn('Shortage advance Firestore write deferred to auto-retry queue:', err);
+        enqueuePendingCodLedgerTransfer({
+          deterministicId: deterministicAdvId,
+          kind: 'advance',
+          hubId: userId,
+          date: activeDate,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
+          field: item.field,
+          amount: shortAmount,
+          reason: reasonText,
+          syncProp: String(syncedProp),
+          idProp: 'syncedAdvanceId',
+          createdBy: actorName,
+          createdAt: new Date().toISOString(),
+        });
+        showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+      } finally {
+        syncingKeysRef.current.delete(lockKey);
       }
-
-      // 3. Mark this shortage item as syncedToAdvance: true
-      const updatedEntries = gridEntries.map((e) => {
-        if (e.riderId !== row.riderId) return e;
-        return {
-          ...e,
-          [syncedProp]: true,
-          syncedAdvanceId: advId,
-          updatedAt: new Date().toISOString(),
-          updatedBy: activeUser.name,
-        };
-      });
-      setGridEntries(updatedEntries);
-      await saveCodDailyEntries(userId, selectedDate, updatedEntries);
-
-      // Audit Log
-      recordCodAuditLog(userId, {
-        changedBy: activeUser.name,
-        role: activeUser.role,
-        riderId: row.riderId,
-        riderName,
-        date: selectedDate,
-        field: `${item.field.toUpperCase()} Shortage → Advance`,
-        previousValue: `Prev Adv: ₹${previousPendingAdvance}`,
-        newValue: `+₹${shortAmount} (Total: ₹${newTotalAdvance})`,
-        notes: reasonText,
-      }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
-
-      // 4. Trigger background SMS confirmation
-      const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
-      const smsText = formatAdvanceSmsText({
-        riderName,
-        amount: shortAmount,
-        reason: reasonText,
-        totalAdvance: newTotalAdvance,
-        statementUrl,
-      });
-
-      dispatchAutomatedSms({
-        riderName,
-        riderPhone,
-        amount: shortAmount,
-        message: smsText,
-        type: 'advance',
-        statementUrl,
-      }).catch((e) => console.warn('Background shortage SMS notice:', e));
-
-      showToast(`✅ ₹${shortAmount} ${shortType} सफलतापूर्वक एडवांस खाते में ट्रांसफर कर दिया गया एवं SMS भेजा गया!`, 'success');
-    } catch (err: any) {
-      console.error('Error syncing shortage to advance:', err);
-      showToast('एडवांस खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
-    } finally {
-      syncingKeysRef.current.delete(lockKey);
-    }
+    })();
   };
 
-  // Surplus (Excess Cash) Auto-Transfer to Incentive Ledger with SMS Trigger
+  // Surplus (Excess Cash) Auto-Transfer to Incentive Ledger with 0-second Optimistic UI & Background Retry Queue
   const handleAddSurplusToIncentive = async (data: {
     surplusAmount: number;
     source: string;
@@ -1113,114 +1245,167 @@ export const CodStandaloneApp: React.FC<Props> = ({
     if (syncingKeysRef.current.has(lockKey)) return;
     syncingKeysRef.current.add(lockKey);
 
-    const targetRider = resolveTargetRider(riderId);
+    const activeDate = selectedDate;
+    const entryDate = data.date || activeDate;
+    const actorName = activeUser.name;
+    const actorRole = activeUser.role;
+
+    const targetRider = resolveTargetRider(riderId, currentRow?.riderPhone);
     const effectiveRiderId = targetRider?.id || riderId;
     const riderName = targetRider ? targetRider.name : shortageModal.riderName;
     const riderPhone = targetRider ? targetRider.phone : (currentRow?.riderPhone || '');
-    const reasonText = `COD Extra Deposit: ${data.source} (${data.date})`;
-    const deterministicIncId = buildDeterministicSurplusIncId(data.date || selectedDate, effectiveRiderId, field);
+    const reasonText = `COD Extra Deposit: ${data.source} (${entryDate})`;
+    const deterministicIncId = buildDeterministicSurplusIncId(entryDate, effectiveRiderId, field);
 
-    try {
-      // 1. Write directly to incentives collection with deterministic ID
-      const incId = await writeIncentiveEntryToFirestore(userId, {
+    const surplusProp = `${field}Surplus` as keyof CodDailyEntry;
+    const actualProp = `${field}ActualReceived` as keyof CodDailyEntry;
+    const shortageProp = `${field}Shortage` as keyof CodDailyEntry;
+
+    // 1. 0-SECOND OPTIMISTIC STATE + CLOSE MODAL
+    setShortageModal(null);
+    setGridEntries((prev) => {
+      const next = prev.map((e) =>
+        e.riderId === riderId
+          ? {
+              ...e,
+              [shortageProp]: 0,
+              [surplusProp]: surplusAmt,
+              ...(actualReceived !== undefined ? { [actualProp]: actualReceived } : {}),
+              updatedAt: new Date().toISOString(),
+              updatedBy: actorName,
+            }
+          : e
+      );
+      void saveCodDailyEntries(userId, activeDate, next);
+      return next;
+    });
+
+    const prevTotal = Number(targetRider?.totalIncentive) || 0;
+    const alreadyInProfile = Boolean(targetRider?.incentives?.some((i) => i.id === deterministicIncId));
+    const newTotalIncentive = alreadyInProfile ? prevTotal : prevTotal + surplusAmt;
+    let updatedRiderPayload: Rider | null = null;
+    if (targetRider) {
+      const newIncItem: RiderIncentiveEntry = {
         id: deterministicIncId,
-        riderId: effectiveRiderId,
-        riderName,
-        riderPhone,
+        riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
         amount: surplusAmt,
-        date: data.date,
+        date: entryDate,
         reason: reasonText,
         source: 'surplus',
-        createdBy: activeUser.name,
-      });
+        createdAt: new Date().toISOString(),
+        createdBy: actorName,
+      };
+      const filteredIncs = (targetRider.incentives || []).filter((i) => i.id !== deterministicIncId);
+      updatedRiderPayload = {
+        ...targetRider,
+        totalIncentive: newTotalIncentive,
+        incentives: [newIncItem, ...filteredIncs],
+      };
+      persistUpdatedRiderLocalOnly(updatedRiderPayload);
+    }
 
-      // 2. Update rider incentive in profile & statement
-      let newTotalIncentive = surplusAmt;
-      if (targetRider) {
-        const prevTotal = Number(targetRider.totalIncentive) || 0;
-        newTotalIncentive = prevTotal + surplusAmt;
-        const newIncItem: RiderIncentiveEntry = {
-          id: incId,
-          riderId: targetRider.id,
-          riderName: targetRider.name,
-          riderPhone: targetRider.phone,
+    showToast(`⚡ ₹${surplusAmt} सरप्लस ${riderName} के इंसेंटिव खाते में दर्ज किया जा रहा है...`, 'info');
+
+    // 2. NON-BLOCKING BACKGROUND SYNC + SAFE LOCK STAMPING
+    void (async () => {
+      try {
+        if (auth && !auth.currentUser) {
+          await signInAnonymously(auth).catch(() => {});
+        }
+
+        const incId = await writeIncentiveEntryToFirestore(userId, {
+          id: deterministicIncId,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
           amount: surplusAmt,
-          date: data.date,
+          date: entryDate,
           reason: reasonText,
           source: 'surplus',
-          createdAt: new Date().toISOString(),
-          createdBy: activeUser.name,
-        };
-        const updatedIncentives = [newIncItem, ...(targetRider.incentives || [])];
-        const updatedRider: Rider = {
-          ...targetRider,
+          createdBy: actorName,
+        });
+
+        removePendingCodLedgerTransfer(userId, deterministicIncId);
+
+        setGridEntries((prev) => {
+          const next = prev.map((e) =>
+            e.riderId === riderId
+              ? {
+                  ...e,
+                  [syncedIncProp]: true,
+                  syncedIncentiveId: incId,
+                  updatedAt: new Date().toISOString(),
+                  updatedBy: actorName,
+                }
+              : e
+          );
+          void saveCodDailyEntries(userId, activeDate, next);
+          return next;
+        });
+
+        if (updatedRiderPayload) {
+          void persistUpdatedRiderResilient(updatedRiderPayload);
+        }
+
+        recordCodAuditLog(userId, {
+          changedBy: actorName,
+          role: actorRole,
+          riderId,
+          riderName,
+          date: entryDate,
+          field: `${field.toUpperCase()} Surplus → Incentive`,
+          previousValue: 'Unrecorded Surplus',
+          newValue: `+₹${surplusAmt} Incentive`,
+          notes: reasonText,
+        }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
+
+        const statementUrl = getRiderStatementUrl(targetRider?.id || riderId);
+        const smsText = formatIncentiveSmsText({
+          riderName,
+          amount: surplusAmt,
+          reason: reasonText,
           totalIncentive: newTotalIncentive,
-          incentives: updatedIncentives,
-        };
-        await persistUpdatedRiderResilient(updatedRider);
+          statementUrl,
+        });
+
+        dispatchAutomatedSms({
+          riderName,
+          riderPhone,
+          amount: surplusAmt,
+          message: smsText,
+          type: 'general',
+          statementUrl,
+        }).catch((e) => console.warn('Background surplus SMS notice:', e));
+
+        showToast(`🎉 ₹${surplusAmt} सरप्लस सफलतापूर्वक ${riderName} के इंसेंटिव खाते में जोड़ दिया गया एवं SMS भेजा गया!`, 'success');
+      } catch (err: any) {
+        console.warn('Surplus incentive Firestore write deferred to auto-retry queue:', err);
+        enqueuePendingCodLedgerTransfer({
+          deterministicId: deterministicIncId,
+          kind: 'incentive',
+          hubId: userId,
+          date: activeDate,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
+          field,
+          amount: surplusAmt,
+          reason: reasonText,
+          syncProp: String(syncedIncProp),
+          idProp: 'syncedIncentiveId',
+          createdBy: actorName,
+          createdAt: new Date().toISOString(),
+        });
+        showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+      } finally {
+        syncingKeysRef.current.delete(lockKey);
       }
-
-      // 3. Persist synced state & surplus metadata on COD grid row (prevents duplicates)
-      const surplusProp = `${field}Surplus` as keyof CodDailyEntry;
-      const actualProp = `${field}ActualReceived` as keyof CodDailyEntry;
-      const shortageProp = `${field}Shortage` as keyof CodDailyEntry;
-      const updatedEntries = gridEntries.map((e) => {
-        if (e.riderId !== riderId) return e;
-        return {
-          ...e,
-          [shortageProp]: 0,
-          [surplusProp]: surplusAmt,
-          ...(actualReceived !== undefined ? { [actualProp]: actualReceived } : {}),
-          [syncedIncProp]: true,
-          syncedIncentiveId: incId,
-          updatedAt: new Date().toISOString(),
-          updatedBy: activeUser.name,
-        };
-      });
-      setGridEntries(updatedEntries);
-      await saveCodDailyEntries(userId, selectedDate, updatedEntries);
-
-      recordCodAuditLog(userId, {
-        changedBy: activeUser.name,
-        role: activeUser.role,
-        riderId,
-        riderName,
-        date: data.date,
-        field: `${field.toUpperCase()} Surplus → Incentive`,
-        previousValue: 'Unrecorded Surplus',
-        newValue: `+₹${surplusAmt} Incentive`,
-        notes: reasonText,
-      }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
-
-      // 4. Trigger background SMS confirmation
-      const statementUrl = getRiderStatementUrl(targetRider?.id || riderId);
-      const smsText = formatIncentiveSmsText({
-        riderName,
-        amount: surplusAmt,
-        reason: reasonText,
-        totalIncentive: newTotalIncentive,
-        statementUrl,
-      });
-
-      dispatchAutomatedSms({
-        riderName,
-        riderPhone,
-        amount: surplusAmt,
-        message: smsText,
-        type: 'general',
-        statementUrl,
-      }).catch((e) => console.warn('Background surplus SMS notice:', e));
-
-      showToast(`🎉 ₹${surplusAmt} सरप्लस सफलतापूर्वक ${riderName} के इंसेंटिव खाते में जोड़ दिया गया एवं SMS भेजा गया!`, 'success');
-    } catch (err: any) {
-      console.error('Error adding surplus to incentive:', err);
-      showToast('इंसेंटिव में जोड़ने में त्रुटि हुई।', 'error');
-    } finally {
-      syncingKeysRef.current.delete(lockKey);
-    }
+    })();
   };
 
-  // 1-Click Transfer COD Difference / Shortage to Advances Tab (Strict Date Preservation: uses selectedDate)
+  // 1-Click Transfer COD Difference / Shortage to Advances Tab (0s Optimistic + Background Queue + Safe Lock)
   const handleTransferDifferenceToAdvance = async (row: CodDailyEntry, shortAmount: number) => {
     const safeShort = Number(shortAmount) || 0;
     if (!safeShort || safeShort <= 0) return;
@@ -1233,113 +1418,149 @@ export const CodStandaloneApp: React.FC<Props> = ({
     if (syncingKeysRef.current.has(lockKey)) return;
     syncingKeysRef.current.add(lockKey);
 
-    const reasonText = `दैनिक COD शॉर्टेज: कम पैसा जमा किया (${selectedDate})`;
+    const activeDate = selectedDate;
+    const actorName = activeUser.name;
+    const actorRole = activeUser.role;
+    const reasonText = `दैनिक COD शॉर्टेज: कम पैसा जमा किया (${activeDate})`;
     const targetRider = resolveTargetRider(row.riderId, row.riderPhone);
     const effectiveRiderId = targetRider?.id || row.riderId;
     const riderName = targetRider ? targetRider.name : row.riderName;
     const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
     const previousPendingAdvance = Number(targetRider?.totalAdvance) || 0;
-    const newTotalAdvance = previousPendingAdvance + safeShort;
-    const deterministicAdvId = buildDeterministicShortageAdvId(selectedDate, effectiveRiderId, 'balance');
+    const deterministicAdvId = buildDeterministicShortageAdvId(activeDate, effectiveRiderId, 'balance');
+    const alreadyInProfile = Boolean(targetRider?.advances?.some((a) => a.id === deterministicAdvId));
+    const newTotalAdvance = alreadyInProfile ? previousPendingAdvance : previousPendingAdvance + safeShort;
 
-    try {
-      // 1. Automatically write entry into `advances` collection with selectedDate + deterministic ID
-      const advId = await writeAdvanceEntryToFirestore(userId, {
+    // 1. 0-SECOND OPTIMISTIC RIDER UPDATE (No premature grid lock until Firestore confirms)
+    let updatedRiderPayload: Rider | null = null;
+    if (targetRider) {
+      const newAdvanceItem: RiderAdvanceEntry = {
         id: deterministicAdvId,
-        riderId: effectiveRiderId,
-        riderName,
-        riderPhone,
+        riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
         amount: safeShort,
         remainingAmount: safeShort,
-        date: selectedDate, // Backdated date of COD sheet!
+        date: activeDate,
         reason: reasonText,
         runningBalance: newTotalAdvance,
         isSettled: false,
+        isDeducted: false,
         status: 'PENDING',
-      });
+        createdAt: new Date().toISOString(),
+        createdBy: actorName,
+      };
+      const filteredAdvances = (targetRider.advances || []).filter((a) => a.id !== deterministicAdvId);
+      updatedRiderPayload = {
+        ...targetRider,
+        totalAdvance: newTotalAdvance,
+        advances: [newAdvanceItem, ...filteredAdvances],
+      };
+      persistUpdatedRiderLocalOnly(updatedRiderPayload);
+    }
 
-      // 2. Update rider profile advances and statement
-      if (targetRider) {
-        const newAdvanceItem: RiderAdvanceEntry = {
-          id: advId,
-          riderId: targetRider.id,
-          riderName: targetRider.name,
-          riderPhone: targetRider.phone,
+    showToast(`⚡ ₹${safeShort} COD शॉर्टेज (${riderName}) एडवांस खाते में जोड़ा जा रहा है...`, 'info');
+
+    // 2. NON-BLOCKING BACKGROUND FIRESTORE SYNC + SAFE LOCK STAMPING
+    void (async () => {
+      try {
+        if (auth && !auth.currentUser) {
+          await signInAnonymously(auth).catch(() => {});
+        }
+
+        const advId = await writeAdvanceEntryToFirestore(userId, {
+          id: deterministicAdvId,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
           amount: safeShort,
           remainingAmount: safeShort,
-          date: selectedDate,
+          date: activeDate,
           reason: reasonText,
           runningBalance: newTotalAdvance,
           isSettled: false,
-          isDeducted: false,
           status: 'PENDING',
-          createdAt: new Date().toISOString(),
-          createdBy: activeUser.name,
-        };
-        const updatedAdvances = [newAdvanceItem, ...(targetRider.advances || [])];
-        const updatedRider: Rider = {
-          ...targetRider,
+        });
+
+        removePendingCodLedgerTransfer(userId, deterministicAdvId);
+
+        setGridEntries((prev) => {
+          const next = prev.map((e) =>
+            e.riderId === row.riderId
+              ? {
+                  ...e,
+                  balanceSyncedToAdvance: true,
+                  syncedAdvanceId: advId,
+                  updatedAt: new Date().toISOString(),
+                  updatedBy: actorName,
+                }
+              : e
+          );
+          void saveCodDailyEntries(userId, activeDate, next);
+          return next;
+        });
+
+        if (updatedRiderPayload) {
+          void persistUpdatedRiderResilient(updatedRiderPayload);
+        }
+
+        recordCodAuditLog(userId, {
+          changedBy: actorName,
+          role: actorRole,
+          riderId: row.riderId,
+          riderName,
+          date: activeDate,
+          field: 'COD Shortage → Advance',
+          previousValue: `Prev Adv: ₹${previousPendingAdvance}`,
+          newValue: `+₹${safeShort} (Total: ₹${newTotalAdvance})`,
+          notes: reasonText,
+        }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
+
+        const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
+        const smsText = formatAdvanceSmsText({
+          riderName,
+          amount: safeShort,
+          reason: reasonText,
           totalAdvance: newTotalAdvance,
-          advances: updatedAdvances,
-        };
-        await persistUpdatedRiderResilient(updatedRider);
+          statementUrl,
+        });
+
+        dispatchAutomatedSms({
+          riderName,
+          riderPhone,
+          amount: safeShort,
+          message: smsText,
+          type: 'advance',
+          statementUrl,
+        }).catch((e) => console.warn('Background shortage SMS notice:', e));
+
+        showToast(`✅ ₹${safeShort} COD शॉर्टेज दिनांक ${formatDateDisplay(activeDate)} एडवांस टैब में जुड़ गया एवं SMS भेजा गया!`, 'success');
+      } catch (err: any) {
+        console.warn('Difference advance Firestore write deferred to auto-retry queue:', err);
+        enqueuePendingCodLedgerTransfer({
+          deterministicId: deterministicAdvId,
+          kind: 'advance',
+          hubId: userId,
+          date: activeDate,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
+          field: 'balance',
+          amount: safeShort,
+          reason: reasonText,
+          syncProp: 'balanceSyncedToAdvance',
+          idProp: 'syncedAdvanceId',
+          createdBy: actorName,
+          createdAt: new Date().toISOString(),
+        });
+        showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+      } finally {
+        syncingKeysRef.current.delete(lockKey);
       }
-
-      // 3. Mark this row as balanceSyncedToAdvance: true
-      const updatedEntries = gridEntries.map((e) => {
-        if (e.riderId !== row.riderId) return e;
-        return {
-          ...e,
-          balanceSyncedToAdvance: true,
-          syncedAdvanceId: advId,
-          updatedAt: new Date().toISOString(),
-          updatedBy: activeUser.name,
-        };
-      });
-      setGridEntries(updatedEntries);
-      await saveCodDailyEntries(userId, selectedDate, updatedEntries);
-
-      recordCodAuditLog(userId, {
-        changedBy: activeUser.name,
-        role: activeUser.role,
-        riderId: row.riderId,
-        riderName,
-        date: selectedDate,
-        field: 'COD Shortage → Advance',
-        previousValue: `Prev Adv: ₹${previousPendingAdvance}`,
-        newValue: `+₹${safeShort} (Total: ₹${newTotalAdvance})`,
-        notes: reasonText,
-      }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
-
-      // 4. Trigger automated background SMS to rider
-      const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
-      const smsText = formatAdvanceSmsText({
-        riderName,
-        amount: safeShort,
-        reason: reasonText,
-        totalAdvance: newTotalAdvance,
-        statementUrl,
-      });
-
-      dispatchAutomatedSms({
-        riderName,
-        riderPhone,
-        amount: safeShort,
-        message: smsText,
-        type: 'advance',
-        statementUrl,
-      }).catch((e) => console.warn('Background shortage SMS notice:', e));
-
-      showToast(`✅ ₹${safeShort} COD शॉर्टेज दिनांक ${formatDateDisplay(selectedDate)} एडवांस टैब में जुड़ गया एवं SMS भेजा गया!`, 'success');
-    } catch (err: any) {
-      console.error('Error transferring difference to advance:', err);
-      showToast('एडवांस खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
-    } finally {
-      syncingKeysRef.current.delete(lockKey);
-    }
+    })();
   };
 
-  // 1-Click Transfer COD Surplus (Extra Cash Given) to Incentives Tab (Strict Date Preservation: uses selectedDate)
+  // 1-Click Transfer COD Surplus (Extra Cash Given) to Incentives Tab (0s Optimistic + Background Queue + Safe Lock)
   const handleTransferDifferenceToIncentive = async (row: CodDailyEntry, surplusAmount: number) => {
     const safeSurplus = Number(surplusAmount) || 0;
     if (!safeSurplus || safeSurplus <= 0) return;
@@ -1352,98 +1573,134 @@ export const CodStandaloneApp: React.FC<Props> = ({
     if (syncingKeysRef.current.has(lockKey)) return;
     syncingKeysRef.current.add(lockKey);
 
-    const reasonText = `दैनिक COD अतिरिक्त जमा: Surplus (${selectedDate})`;
+    const activeDate = selectedDate;
+    const actorName = activeUser.name;
+    const actorRole = activeUser.role;
+    const reasonText = `दैनिक COD अतिरिक्त जमा: Surplus (${activeDate})`;
     const targetRider = resolveTargetRider(row.riderId, row.riderPhone);
     const effectiveRiderId = targetRider?.id || row.riderId;
     const riderName = targetRider ? targetRider.name : row.riderName;
     const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
-    const deterministicIncId = buildDeterministicSurplusIncId(selectedDate, effectiveRiderId, 'balance');
+    const deterministicIncId = buildDeterministicSurplusIncId(activeDate, effectiveRiderId, 'balance');
+    const prevTotal = Number(targetRider?.totalIncentive) || 0;
+    const alreadyInProfile = Boolean(targetRider?.incentives?.some((i) => i.id === deterministicIncId));
+    const newTotalIncentive = alreadyInProfile ? prevTotal : prevTotal + safeSurplus;
 
-    try {
-      // 1. Write directly to incentives collection with selectedDate + deterministic ID
-      const incId = await writeIncentiveEntryToFirestore(userId, {
+    // 1. 0-SECOND OPTIMISTIC RIDER UPDATE
+    let updatedRiderPayload: Rider | null = null;
+    if (targetRider) {
+      const newIncItem: RiderIncentiveEntry = {
         id: deterministicIncId,
-        riderId: effectiveRiderId,
-        riderName,
-        riderPhone,
+        riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
         amount: safeSurplus,
-        date: selectedDate, // Backdated date of COD sheet!
+        date: activeDate,
         reason: reasonText,
         source: 'surplus',
-        createdBy: activeUser.name,
-      });
+        createdAt: new Date().toISOString(),
+        createdBy: actorName,
+      };
+      const filteredIncs = (targetRider.incentives || []).filter((i) => i.id !== deterministicIncId);
+      updatedRiderPayload = {
+        ...targetRider,
+        totalIncentive: newTotalIncentive,
+        incentives: [newIncItem, ...filteredIncs],
+      };
+      persistUpdatedRiderLocalOnly(updatedRiderPayload);
+    }
 
-      // 2. Update rider profile incentives and statement
-      if (targetRider) {
-        const prevTotal = Number(targetRider.totalIncentive) || 0;
-        const newTotalIncentive = prevTotal + safeSurplus;
-        const newIncItem: RiderIncentiveEntry = {
-          id: incId,
-          riderId: targetRider.id,
-          riderName: targetRider.name,
-          riderPhone: targetRider.phone,
+    showToast(`⚡ ₹${safeSurplus} अतिरिक्त राशि (${riderName}) इंसेंटिव खाते में जोड़ी जा रही है...`, 'info');
+
+    // 2. NON-BLOCKING BACKGROUND FIRESTORE SYNC + SAFE LOCK STAMPING
+    void (async () => {
+      try {
+        if (auth && !auth.currentUser) {
+          await signInAnonymously(auth).catch(() => {});
+        }
+
+        const incId = await writeIncentiveEntryToFirestore(userId, {
+          id: deterministicIncId,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
           amount: safeSurplus,
-          date: selectedDate,
+          date: activeDate,
           reason: reasonText,
           source: 'surplus',
+          createdBy: actorName,
+        });
+
+        removePendingCodLedgerTransfer(userId, deterministicIncId);
+
+        setGridEntries((prev) => {
+          const next = prev.map((e) =>
+            e.riderId === row.riderId
+              ? {
+                  ...e,
+                  balanceSyncedToIncentive: true,
+                  syncedIncentiveId: incId,
+                  updatedAt: new Date().toISOString(),
+                  updatedBy: actorName,
+                }
+              : e
+          );
+          void saveCodDailyEntries(userId, activeDate, next);
+          return next;
+        });
+
+        if (updatedRiderPayload) {
+          void persistUpdatedRiderResilient(updatedRiderPayload);
+        }
+
+        recordCodAuditLog(userId, {
+          changedBy: actorName,
+          role: actorRole,
+          riderId: row.riderId,
+          riderName,
+          date: activeDate,
+          field: 'COD Surplus → Incentive',
+          previousValue: 'Unrecorded Surplus',
+          newValue: `+₹${safeSurplus} Incentive`,
+          notes: reasonText,
+        }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
+
+        const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
+        const smsText = `नमस्ते ${riderName}, दिनांक ${formatDateDisplay(activeDate)} को COD में जमा की गई आपकी अतिरिक्त राशि ₹${safeSurplus} इंसेंटिव में जोड़ दी गई है। खाता विवरण: ${statementUrl}`;
+
+        dispatchAutomatedSms({
+          riderName,
+          riderPhone,
+          amount: safeSurplus,
+          message: smsText,
+          type: 'general',
+          statementUrl,
+        }).catch((e) => console.warn('Background surplus SMS notice:', e));
+
+        showToast(`🎉 ₹${safeSurplus} अतिरिक्त राशि दिनांक ${formatDateDisplay(activeDate)} इंसेंटिव खाते में जुड़ गई एवं SMS भेजा गया!`, 'success');
+      } catch (err: any) {
+        console.warn('Difference incentive Firestore write deferred to auto-retry queue:', err);
+        enqueuePendingCodLedgerTransfer({
+          deterministicId: deterministicIncId,
+          kind: 'incentive',
+          hubId: userId,
+          date: activeDate,
+          riderId: effectiveRiderId,
+          riderName,
+          riderPhone,
+          field: 'balance',
+          amount: safeSurplus,
+          reason: reasonText,
+          syncProp: 'balanceSyncedToIncentive',
+          idProp: 'syncedIncentiveId',
+          createdBy: actorName,
           createdAt: new Date().toISOString(),
-          createdBy: activeUser.name,
-        };
-        const updatedIncentives = [newIncItem, ...(targetRider.incentives || [])];
-        const updatedRider: Rider = {
-          ...targetRider,
-          totalIncentive: newTotalIncentive,
-          incentives: updatedIncentives,
-        };
-        await persistUpdatedRiderResilient(updatedRider);
+        });
+        showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट जुड़ते ही अपने-आप दर्ज हो जाएगी।', 'info');
+      } finally {
+        syncingKeysRef.current.delete(lockKey);
       }
-
-      // 3. Mark this row as balanceSyncedToIncentive: true
-      const updatedEntries = gridEntries.map((e) => {
-        if (e.riderId !== row.riderId) return e;
-        return {
-          ...e,
-          balanceSyncedToIncentive: true,
-          syncedIncentiveId: incId,
-          updatedAt: new Date().toISOString(),
-          updatedBy: activeUser.name,
-        };
-      });
-      setGridEntries(updatedEntries);
-      await saveCodDailyEntries(userId, selectedDate, updatedEntries);
-
-      recordCodAuditLog(userId, {
-        changedBy: activeUser.name,
-        role: activeUser.role,
-        riderId: row.riderId,
-        riderName,
-        date: selectedDate,
-        field: 'COD Surplus → Incentive',
-        previousValue: 'Unrecorded Surplus',
-        newValue: `+₹${safeSurplus} Incentive`,
-        notes: reasonText,
-      }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
-
-      // 4. Trigger automated background SMS to rider
-      const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
-      const smsText = `नमस्ते ${riderName}, दिनांक ${formatDateDisplay(selectedDate)} को COD में जमा की गई आपकी अतिरिक्त राशि ₹${safeSurplus} इंसेंटिव में जोड़ दी गई है। खाता विवरण: ${statementUrl}`;
-
-      dispatchAutomatedSms({
-        riderName,
-        riderPhone,
-        amount: safeSurplus,
-        message: smsText,
-        type: 'general',
-        statementUrl,
-      }).catch((e) => console.warn('Background surplus SMS notice:', e));
-
-      showToast(`🎉 ₹${safeSurplus} अतिरिक्त राशि दिनांक ${formatDateDisplay(selectedDate)} इंसेंटिव खाते में जुड़ गई एवं SMS भेजा गया!`, 'success');
-    } catch (err: any) {
-      console.error('Error transferring difference to incentive:', err);
-      showToast('इंसेंटिव खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
-    } finally {
-      syncingKeysRef.current.delete(lockKey);
-    }
+    })();
   };
 
   // Day Reconciled / Tally Complete Status Check
@@ -1903,50 +2160,55 @@ export const CodStandaloneApp: React.FC<Props> = ({
       id="cod-standalone-subapp-root"
       className="fixed inset-0 z-[100] h-screen w-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden select-none sm:select-auto"
     >
-      {/* 1. DEDICATED TOP APP BAR FOR COD SUB-APP */}
-      <header className="bg-gradient-to-r from-emerald-950 via-slate-900 to-sky-950 px-3 py-2.5 sm:px-5 sm:py-3 border-b border-emerald-500/30 flex items-center justify-between gap-3 shrink-0 shadow-lg shadow-emerald-950/40 z-30">
-        <div className="flex items-center gap-3">
+      {/* 1. DEDICATED TOP APP BAR FOR COD SUB-APP (Safe-area aware for Android status bar) */}
+      <header
+        className="bg-gradient-to-r from-emerald-950 via-slate-900 to-sky-950 px-3 pb-2.5 sm:px-5 sm:pb-3 border-b border-emerald-500/30 flex items-center justify-between gap-2 sm:gap-3 shrink-0 shadow-lg shadow-emerald-950/40 z-30"
+        style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0.75rem))' }}
+      >
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           {/* Prominent Exit Button to Admin Dashboard */}
           <button
             type="button"
             id="exit-to-main-app-btn"
             onClick={onExit}
-            className="inline-flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800/90 hover:bg-slate-750 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs sm:text-sm font-bold shadow-md transition active:scale-95 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs sm:text-sm font-bold shadow-md transition active:scale-95 cursor-pointer shrink-0 whitespace-nowrap"
             title="वापस एडमिन डैशबोर्ड (Back to Admin)"
           >
-            <ArrowLeft className="w-4 h-4 text-emerald-400" />
-            <span>← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
+            <ArrowLeft className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="sm:hidden">वापस</span>
+            <span className="hidden sm:inline">← वापस एडमिन डैशबोर्ड (Back to Admin)</span>
           </button>
 
-          <div className="h-6 w-px bg-slate-700 hidden sm:block" />
+          <div className="h-6 w-px bg-slate-700 hidden sm:block shrink-0" />
 
           {/* Title & Live Date & Role */}
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-1.5">
-                <span>COD हिसाब-किताब Portal</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+              <h1 className="text-xs sm:text-base font-black text-white tracking-tight flex items-center gap-1.5 truncate">
+                <span className="truncate">COD हिसाब-किताब</span>
+                <span className="hidden sm:inline">Portal</span>
               </h1>
-              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+              <span className="hidden md:inline-flex text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
                 Standalone Sub-App
               </span>
               {isDayLocked && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                  <Lock className="w-3 h-3" /> Day Locked
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">
+                  <Lock className="w-3 h-3" /> <span className="hidden sm:inline">Day Locked</span>
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-              <span className="text-emerald-300/90 font-medium">
-                {new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+            <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-slate-400 mt-0.5">
+              <span className="text-emerald-300/90 font-medium whitespace-nowrap">
+                {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
               </span>
               <span>•</span>
-              <span className="truncate max-w-[140px] sm:max-w-none">{hubName}</span>
+              <span className="truncate max-w-[95px] sm:max-w-none">{hubName}</span>
             </div>
           </div>
         </div>
 
         {/* Top App Bar Right: Active Persona Switcher & Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Launch / Switch to Companion App (Delivery Boys & Staff) */}
           <button
             type="button"
@@ -1959,12 +2221,12 @@ export const CodStandaloneApp: React.FC<Props> = ({
               }
               window.location.hash = '/cod-entry';
             }}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md transition active:scale-95 cursor-pointer"
+            className="inline-flex items-center gap-1 px-2 py-1.5 sm:px-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-[11px] sm:text-xs font-bold shadow-md transition active:scale-95 cursor-pointer whitespace-nowrap"
             title="डिलीवरी बॉय & स्टाफ मोबाइल ऐप खोलें / लिंक कॉपी करें"
           >
-            <Bike className="w-3.5 h-3.5" />
+            <Bike className="w-3.5 h-3.5 shrink-0" />
             <span className="hidden sm:inline">📱 राइडर ऐप (Companion)</span>
-            <span className="sm:hidden">📱 साथी ऐप</span>
+            <span className="sm:hidden">साथी ऐप</span>
           </button>
 
           {/* Active Persona Pill / Quick PIN Switch */}
@@ -1972,13 +2234,13 @@ export const CodStandaloneApp: React.FC<Props> = ({
             type="button"
             id="switch-cod-persona-top-btn"
             onClick={() => setIsPinModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition active:scale-95 cursor-pointer"
+            className="inline-flex items-center gap-1 px-2 py-1.5 sm:px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-[11px] sm:text-xs font-bold transition active:scale-95 cursor-pointer whitespace-nowrap"
             title="Click to authenticate via 4-digit PIN"
           >
-            <Key className="w-3.5 h-3.5 text-emerald-400" />
+            <Key className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             <span className="hidden md:inline">User: {activeUser.name}</span>
-            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-              {activeUser.role.replace('_', ' ')}
+            <span className="text-[9px] sm:text-[10px] uppercase font-mono px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+              {activeUser.role === 'hub_incharge' ? 'ADMIN' : activeUser.role.replace('_', ' ')}
             </span>
           </button>
 
@@ -2011,7 +2273,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                 showToast(err?.message || 'COD रिपोर्ट एक्सपोर्ट करने में त्रुटि हुई।', 'error');
               }
             }}
-            className="p-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white transition active:scale-95 cursor-pointer"
+            className="p-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white transition active:scale-95 cursor-pointer shrink-0"
             title="Export Excel / CSV Sheet"
           >
             <Download className="w-4 h-4" />
@@ -2251,8 +2513,8 @@ export const CodStandaloneApp: React.FC<Props> = ({
             <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900/95 shadow-2xl scrollbar-thin">
               <table className="w-full text-left text-xs border-collapse min-w-[1020px]">
                 <thead>
-                  <tr className="bg-slate-850 text-slate-200 border-b border-slate-750 text-[11px] font-bold uppercase tracking-wider">
-                    <th className="p-3 sticky left-0 z-20 bg-slate-850 shadow-sm min-w-[170px]">
+                  <tr className="bg-slate-800 text-slate-200 border-b border-slate-700 text-[11px] font-bold uppercase tracking-wider">
+                    <th className="p-3 sticky left-0 z-30 bg-slate-900 border-r border-slate-800 shadow-md min-w-[165px]">
                       Rider Name
                     </th>
                     <th className="p-3 min-w-[145px] text-sky-300">
@@ -2326,7 +2588,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                           }`}
                         >
                           {/* 1. Rider Name */}
-                          <td className="p-3 sticky left-0 z-10 bg-slate-900 shadow-sm">
+                          <td className="p-3 sticky left-0 z-20 bg-slate-900 border-r border-slate-800 shadow-sm">
                             <div className="flex items-center gap-2">
                               <div className="w-7 h-7 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center font-bold text-xs shrink-0">
                                 {row.riderName.charAt(0).toUpperCase()}
@@ -2917,7 +3179,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                         </button>
                       )}
                     </td>
-                    <td className="p-3 text-emerald-300 bg-slate-850 font-mono text-sm">
+                    <td className="p-3 text-emerald-300 bg-slate-900 font-mono text-sm">
                       {formatINR(gridTotals.totalCod)}
                     </td>
                     <td className="p-3 text-emerald-400 font-mono">
@@ -2962,7 +3224,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
                         </button>
                       )}
                     </td>
-                    <td className="p-3 text-indigo-300 bg-slate-850 font-mono text-sm">
+                    <td className="p-3 text-indigo-300 bg-slate-900 font-mono text-sm">
                       {formatINR(gridTotals.totalDeposit)}
                     </td>
                     <td className="p-3 text-center font-mono">
