@@ -23,7 +23,7 @@ import {
   IndianRupee
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, AppUser, RiderAdvanceEntry } from '../types';
-import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
+import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits, getTodayDateString } from '../utils/formatters';
 import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal } from '../utils/payoutCalculations';
 import { generatePayoutPDF } from '../utils/pdfGenerator';
 import { exportSingleRiderToCSV } from '../utils/csvExport';
@@ -226,7 +226,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
       return;
     }
     const dates = riderEntries.map((e) => e.date).sort();
-    const startDate = dates[0] || new Date().toISOString().split('T')[0];
+    const startDate = dates[0] || getTodayDateString();
     const endDate = dates[dates.length - 1] || startDate;
 
     generatePayoutPDF({

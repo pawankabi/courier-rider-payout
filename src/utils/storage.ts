@@ -40,6 +40,176 @@ function getSettlementsKey(userId?: string) {
 }
 
 /**
+ * Lightweight IndexedDB backing store so full historical delivery/rider/settlement caches
+ * remain available locally even when localStorage (~5MB) is full.
+ */
+const IDB_NAME = 'cp_offline_cache_v1';
+const IDB_STORE = 'kv';
+
+function saveToIndexedDB(key: string, value: unknown): void {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) return;
+  try {
+    const req = window.indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE);
+      }
+    };
+    req.onsuccess = () => {
+      try {
+        const db = req.result;
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).put(value, key);
+        tx.oncomplete = () => db.close();
+        tx.onerror = () => db.close();
+      } catch {
+        // Ignore non-fatal IDB errors
+      }
+    };
+  } catch {
+    // Ignore IDB unavailability (e.g. restricted private browsing)
+  }
+}
+
+function isQuotaError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof DOMException) {
+    return (
+      err.name === 'QuotaExceededError' ||
+      err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      err.code === 22 ||
+      err.code === 1014
+    );
+  }
+  const msg = String((err as any)?.message || err).toLowerCase();
+  return msg.includes('quota');
+}
+
+/**
+ * Frees localStorage space safely without deleting active user data:
+ * 1. Removes redundant legacy duplicate keys (`courier_riders_u_*`, `courier_deliveries_u_*`, etc.)
+ * 2. Removes redundant rolling snapshot (`cp_safety_shield_snapshot_v1`)
+ * 3. Removes stale guest caches when a real authenticated uid is active
+ * 4. Prunes oldest COD daily sheet duplicates beyond the newest 45 distinct days while preserving recent sheets
+ */
+export function reclaimLocalStorageSpace(activeUid?: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const keysToRemove: string[] = [];
+    const datedCodKeys: Array<{ key: string; date: string }> = [];
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+
+      // Legacy duplicate copies (superseded by cp_cache_*)
+      if (
+        k.startsWith('courier_riders_u_') ||
+        k.startsWith('courier_deliveries_u_') ||
+        k.startsWith('courier_settlements_u_') ||
+        k === 'courier_riders' ||
+        k === 'courier_deliveries' ||
+        k === 'courier_settlements' ||
+        k === 'cp_safety_shield_snapshot_v1'
+      ) {
+        keysToRemove.push(k);
+        continue;
+      }
+
+      // Stale guest caches when authenticated
+      if (
+        activeUid &&
+        activeUid !== 'guest' &&
+        (k === 'cp_cache_deliveries_guest' ||
+          k === 'cp_cache_riders_guest' ||
+          k === 'cp_cache_settlements_guest')
+      ) {
+        keysToRemove.push(k);
+        continue;
+      }
+
+      // Collect dated COD sheet caches so oldest duplicates (>45 days) can be trimmed if needed
+      const dateMatch = k.match(/(?:cp_cod_sheet_|cod_entries_|cp_cod_archived_sheet_).*(\d{4}-\d{2}-\d{2})$/);
+      if (dateMatch) {
+        datedCodKeys.push({ key: k, date: dateMatch[1] });
+      }
+    }
+
+    keysToRemove.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {}
+    });
+
+    // Prune older COD sheet local caches beyond newest 45 distinct calendar dates
+    const distinctDates = Array.from(new Set(datedCodKeys.map((d) => d.date))).sort();
+    if (distinctDates.length > 45) {
+      const keepDates = new Set(distinctDates.slice(-45));
+      for (const item of datedCodKeys) {
+        if (!keepDates.has(item.date)) {
+          try {
+            localStorage.removeItem(item.key);
+          } catch {}
+        }
+      }
+    }
+  } catch {
+    // Ignore storage iteration failures
+  }
+}
+
+export function trySetLocalStorageItem(key: string, jsonValue: string, activeUid?: string | null): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    localStorage.setItem(key, jsonValue);
+    return true;
+  } catch (err) {
+    if (!isQuotaError(err)) return false;
+    reclaimLocalStorageSpace(activeUid);
+    try {
+      localStorage.setItem(key, jsonValue);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * Compacts delivery objects for localStorage caching by omitting repetitive workspace/email metadata
+ * already scoped by `cp_cache_deliveries_${uid}`. Restores uid fields cleanly on load if needed.
+ */
+function compactDeliveryForCache(d: DeliveryEntry): Record<string, any> {
+  const out: Record<string, any> = {
+    id: d.id,
+    riderId: d.riderId,
+    riderName: d.riderName,
+    date: d.date,
+    parcels: d.parcels,
+    baseRate: d.baseRate,
+    hasIncentive: d.hasIncentive,
+    incentiveRate: d.incentiveRate,
+    baseAmount: d.baseAmount,
+    incentiveAmount: d.incentiveAmount,
+    totalEarnings: d.totalEarnings,
+    status: d.status,
+    createdAt: d.createdAt,
+  };
+  if (d.riderPhone) out.riderPhone = d.riderPhone;
+  if (d.paidAt) out.paidAt = d.paidAt;
+  if (d.advanceAmount) out.advanceAmount = d.advanceAmount;
+  if (d.advanceDate) out.advanceDate = d.advanceDate;
+  if (d.settlementId) out.settlementId = d.settlementId;
+  if (d.notes) out.notes = d.notes;
+  if (d.isDeleted) out.isDeleted = true;
+  if (d.deletedAt) out.deletedAt = d.deletedAt;
+  if ((d as any).updatedAt) out.updatedAt = (d as any).updatedAt;
+  if ((d as any).updatedBy) out.updatedBy = (d as any).updatedBy;
+  return out;
+}
+
+/**
  * PURE EMPTY INITIAL RIDERS - NO HARDCODED MOCK/SAMPLE DATA
  */
 export const INITIAL_RIDERS: Rider[] = [];
@@ -68,8 +238,11 @@ function isSampleDelivery(d: any): boolean {
   if (!d) return false;
   const riderName = (d.riderName || '').trim().toLowerCase();
   const riderPhone = (d.riderPhone || '').trim().replace(/\D/g, '');
+  const id = typeof d.id === 'string' ? d.id.trim() : '';
   return (
-    (typeof d.id === 'string' && d.id.startsWith('del_')) ||
+    id === 'del_1' ||
+    id === 'del_2' ||
+    id === 'del_3' ||
     d.riderName === 'Rahul Sharma' ||
     d.riderName === 'Amit Kumar' ||
     d.riderName === 'Priya Singh' ||
@@ -105,7 +278,7 @@ export function purgeLegacyMockStorage(): void {
                 const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
                 return name !== 'akash mahato' && phone !== '6207262418';
               });
-              localStorage.setItem(key, JSON.stringify(cleaned));
+              trySetLocalStorageItem(key, JSON.stringify(cleaned));
             } else if (parsed && typeof parsed === 'object') {
               if (Array.isArray(parsed.entries)) {
                 parsed.entries = parsed.entries.filter((item: any) => {
@@ -113,7 +286,7 @@ export function purgeLegacyMockStorage(): void {
                   const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
                   return name !== 'akash mahato' && phone !== '6207262418';
                 });
-                localStorage.setItem(key, JSON.stringify(parsed));
+                trySetLocalStorageItem(key, JSON.stringify(parsed));
               }
             }
           } catch {
@@ -187,7 +360,7 @@ export function loadRidersFromStorage(userId?: string): Rider[] {
       return a.joinedDate < b.joinedDate ? 1 : -1;
     });
   } catch (err) {
-    console.error('Error loading riders from storage', err);
+    console.warn('Notice loading riders from storage:', err);
     return [];
   }
 }
@@ -196,14 +369,19 @@ export function saveRidersToStorage(riders: Rider[], userId?: string): void {
   try {
     const cleanList = (riders || []).filter((r) => !isSampleRider(r));
     const key = getRidersKey(userId);
-    localStorage.setItem(key, JSON.stringify(cleanList));
-    // Also save under uid key for backwards compatibility
     const uid = userId || getCachedAuthUserId();
+
+    // Persist full list to IndexedDB and remove redundant legacy duplicate key first
+    saveToIndexedDB(key, cleanList);
     if (uid) {
-      localStorage.setItem(`courier_riders_u_${uid}`, JSON.stringify(cleanList));
+      try {
+        localStorage.removeItem(`courier_riders_u_${uid}`);
+      } catch {}
     }
+
+    trySetLocalStorageItem(key, JSON.stringify(cleanList), uid);
   } catch (err) {
-    console.error('Error saving riders to storage', err);
+    console.warn('Notice saving riders to storage:', err);
   }
 }
 
@@ -252,7 +430,7 @@ export function purgeUnsettledAdvancesFromStorage(userId?: string): Rider[] {
                   : [],
                 totalAdvance: 0,
               }));
-              localStorage.setItem(key, JSON.stringify(cleaned));
+              trySetLocalStorageItem(key, JSON.stringify(cleaned), userId);
             }
           }
         } catch {}
@@ -261,7 +439,7 @@ export function purgeUnsettledAdvancesFromStorage(userId?: string): Rider[] {
 
     return updatedRiders;
   } catch (err) {
-    console.error('Error during purgeUnsettledAdvancesFromStorage:', err);
+    console.warn('Notice during purgeUnsettledAdvancesFromStorage:', err);
     return [];
   }
 }
@@ -273,9 +451,9 @@ export function purgeUnsettledAdvancesFromStorage(userId?: string): Rider[] {
 export function loadDeliveriesFromStorage(_riders?: Rider[], userId?: string): DeliveryEntry[] {
   try {
     const key = getDeliveriesKey(userId);
+    const uid = userId || getCachedAuthUserId();
     const raw = localStorage.getItem(key);
     if (!raw) {
-      const uid = userId || getCachedAuthUserId();
       if (uid) {
         const legacyRaw = localStorage.getItem(`courier_deliveries_u_${uid}`);
         if (legacyRaw) {
@@ -292,9 +470,15 @@ export function loadDeliveriesFromStorage(_riders?: Rider[], userId?: string): D
 
     const parsed = JSON.parse(raw);
     const list: DeliveryEntry[] = Array.isArray(parsed) ? parsed : [];
-    return list.filter((d) => !isSampleDelivery(d));
+    return list
+      .filter((d) => !isSampleDelivery(d))
+      .map((d) =>
+        uid && (!d.workspaceId || !d.userId)
+          ? { ...d, workspaceId: d.workspaceId || uid, userId: d.userId || uid }
+          : d
+      );
   } catch (err) {
-    console.error('Error loading deliveries from storage', err);
+    console.warn('Notice loading deliveries from storage:', err);
     return [];
   }
 }
@@ -303,13 +487,50 @@ export function saveDeliveriesToStorage(deliveries: DeliveryEntry[], userId?: st
   try {
     const cleanList = (deliveries || []).filter((d) => !isSampleDelivery(d));
     const key = getDeliveriesKey(userId);
-    localStorage.setItem(key, JSON.stringify(cleanList));
     const uid = userId || getCachedAuthUserId();
+
+    // Always store full un-truncated history in IndexedDB
+    saveToIndexedDB(key, cleanList);
+
+    // Immediately reclaim space from legacy duplicate key before writing
     if (uid) {
-      localStorage.setItem(`courier_deliveries_u_${uid}`, JSON.stringify(cleanList));
+      try {
+        localStorage.removeItem(`courier_deliveries_u_${uid}`);
+      } catch {}
+    }
+
+    // Attempt 1: Full JSON in single scoped key
+    if (trySetLocalStorageItem(key, JSON.stringify(cleanList), uid)) {
+      return;
+    }
+
+    // Attempt 2: Compact records (omits repetitive uid/email metadata strings, keeps 100% of delivery accounting data)
+    const compactedAll = cleanList.map(compactDeliveryForCache);
+    if (trySetLocalStorageItem(key, JSON.stringify(compactedAll), uid)) {
+      return;
+    }
+
+    // Attempt 3: Prioritize ALL unpaid + soft-deleted Trash items + capped Paid history so 0ms startup cache never overflows 5MB
+    const sorted = [...cleanList].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const priority = sorted.filter((d) => Boolean(d.isDeleted) || d.status !== 'Paid');
+    const paid = sorted.filter((d) => !d.isDeleted && d.status === 'Paid');
+
+    for (const paidLimit of [1500, 800, 400, 150, 0]) {
+      const subset = [...priority, ...paid.slice(0, paidLimit)].map(compactDeliveryForCache);
+      if (trySetLocalStorageItem(key, JSON.stringify(subset), uid)) {
+        return;
+      }
+    }
+
+    // Attempt 4: Minimal recent window if even unpaid backlog is massive
+    for (const totalLimit of [300, 100, 25]) {
+      const minimalSubset = sorted.slice(0, totalLimit).map(compactDeliveryForCache);
+      if (trySetLocalStorageItem(key, JSON.stringify(minimalSubset), uid)) {
+        return;
+      }
     }
   } catch (err) {
-    console.error('Error saving deliveries to storage', err);
+    console.warn('Notice saving deliveries to storage (IDB fallback preserved):', err);
   }
 }
 
@@ -326,7 +547,10 @@ export function loadSettlementsFromStorage(userId?: string): SettlementRecord[] 
         const legacyRaw = localStorage.getItem(`courier_settlements_u_${uid}`);
         if (legacyRaw) {
           const parsed = JSON.parse(legacyRaw);
-          return Array.isArray(parsed) ? parsed : [];
+          if (Array.isArray(parsed)) {
+            saveSettlementsToStorage(parsed, uid);
+            return parsed;
+          }
         }
       }
       return [];
@@ -334,21 +558,35 @@ export function loadSettlementsFromStorage(userId?: string): SettlementRecord[] 
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
-    console.error('Error loading settlements from storage', err);
+    console.warn('Notice loading settlements from storage:', err);
     return [];
   }
 }
 
 export function saveSettlementsToStorage(settlements: SettlementRecord[], userId?: string): void {
   try {
+    const list = settlements || [];
     const key = getSettlementsKey(userId);
-    localStorage.setItem(key, JSON.stringify(settlements || []));
     const uid = userId || getCachedAuthUserId();
+
+    saveToIndexedDB(key, list);
     if (uid) {
-      localStorage.setItem(`courier_settlements_u_${uid}`, JSON.stringify(settlements || []));
+      try {
+        localStorage.removeItem(`courier_settlements_u_${uid}`);
+      } catch {}
     }
+
+    if (trySetLocalStorageItem(key, JSON.stringify(list), uid)) {
+      return;
+    }
+
+    // Fallback: keep recent 400 settlements in localStorage while IDB retains all
+    const recent = [...list]
+      .sort((a, b) => (b.paidAt || b.endDate || '').localeCompare(a.paidAt || a.endDate || ''))
+      .slice(0, 400);
+    trySetLocalStorageItem(key, JSON.stringify(recent), uid);
   } catch (err) {
-    console.error('Error saving settlements to storage', err);
+    console.warn('Notice saving settlements to storage:', err);
   }
 }
 
@@ -493,7 +731,9 @@ export function loadQuickStatsSummary(userId?: string): QuickStatsSummary | null
   if (typeof window === 'undefined') return null;
   try {
     const uid = userId || getCachedAuthUserId() || 'guest';
-    const raw = localStorage.getItem(`cp_stats_summary_${uid}`) || localStorage.getItem('cp_stats_summary_latest');
+    const raw = userId
+      ? localStorage.getItem(`cp_stats_summary_${uid}`)
+      : (localStorage.getItem(`cp_stats_summary_${uid}`) || localStorage.getItem('cp_stats_summary_latest'));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;

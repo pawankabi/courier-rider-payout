@@ -150,15 +150,21 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
 
   // Helper to recompute running balances chronologically for a list of advances
   const computeRunningBalances = (advList: RiderAdvanceEntry[]): { updatedAdvances: RiderAdvanceEntry[]; total: number } => {
-    // Sort oldest first to calculate running cumulative balances
-    const sorted = [...advList].sort((a, b) => {
+    const isNotDeleted = (item: RiderAdvanceEntry) =>
+      !item.isDeleted && item.status !== 'DELETED' && item.status !== 'RESET_ARCHIVED';
+
+    const activeItems = advList.filter(isNotDeleted);
+    const deletedItems = advList.filter((item) => !isNotDeleted(item));
+
+    // Sort oldest first to calculate running cumulative balances for active items only
+    const sortedActive = [...activeItems].sort((a, b) => {
       const timeA = new Date(a.date || a.createdAt || 0).getTime();
       const timeB = new Date(b.date || b.createdAt || 0).getTime();
       return timeA - timeB;
     });
 
     let running = 0;
-    const computed = sorted.map((item) => {
+    const computedActive = sortedActive.map((item) => {
       running += Number(item.amount) || 0;
       return {
         ...item,
@@ -167,13 +173,13 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     });
 
     // Active pending total must be computed using net advance (active advances minus active incentives)
-    const rawAdvTotal = calculateActiveAdvanceTotal(advList, settlements, rider.id);
+    const rawAdvTotal = calculateActiveAdvanceTotal(activeItems, settlements, rider.id);
     const rawIncTotal = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
     const activeAdvanceTotal = Math.max(0, rawAdvTotal - rawIncTotal);
 
-    // Return in reverse chronological order (newest first for UI display)
+    // Preserve soft-deleted items in the array (for 30-day Trash Bin) while keeping newest active first
     return {
-      updatedAdvances: computed.reverse(),
+      updatedAdvances: [...computedActive.reverse(), ...deletedItems],
       total: activeAdvanceTotal,
     };
   };
@@ -442,8 +448,13 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     setIsDeleting(true);
 
     try {
-      const remainingList = (rider.advances || []).filter((a) => a.id !== advId);
-      const { updatedAdvances, total } = computeRunningBalances(remainingList);
+      const nowIso = new Date().toISOString();
+      const softDeletedList = (rider.advances || []).map((a) =>
+        a.id === advId
+          ? { ...a, isDeleted: true, deletedAt: nowIso, status: 'DELETED' }
+          : a
+      );
+      const { updatedAdvances, total } = computeRunningBalances(softDeletedList);
 
       const updatedRider: Rider = {
         ...rider,
@@ -456,7 +467,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       if (editingAdvance?.id === advId) {
         handleCancelEdit();
       }
-      setToastMessage('एडवांस एंट्री सफलतापूर्वक हटाई गई।');
+      setToastMessage('एडवांस एंट्री कचरा पेटी में स्थानांतरित की गई।');
       setTimeout(() => setToastMessage(null), 3000);
       setDeletingAdvanceEntry(null);
     } catch (err: any) {

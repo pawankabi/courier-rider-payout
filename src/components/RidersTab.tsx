@@ -278,6 +278,8 @@ export const RidersTab: React.FC<Props> = ({
   const [phoneError, setPhoneError] = useState('');
   const [editPhoneError, setEditPhoneError] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showContactPasteModal, setShowContactPasteModal] = useState(false);
+  const [contactPasteInput, setContactPasteInput] = useState('');
 
   // Edit Rider Modal
   const [editingRider, setEditingRider] = useState<Rider | null>(null);
@@ -407,7 +409,8 @@ export const RidersTab: React.FC<Props> = ({
     const rangePaid = calculateSettlementsPaidForRange(riderId, startDate, endDate);
     const rider = riders.find((r) => r.id === riderId);
     const activeAdvance = rider ? calculateActiveAdvanceTotal(rider.advances, settlements, rider.id) : 0;
-    return (rangeEarnings - rangePaid) - activeAdvance;
+    const activeIncentive = rider ? calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id) : 0;
+    return (rangeEarnings - rangePaid) + activeIncentive - activeAdvance;
   };
 
   const filteredRangeEntries = entries.filter((e) => {
@@ -449,27 +452,29 @@ export const RidersTab: React.FC<Props> = ({
         }
       }
 
-      // 2. Reliable Direct Fallback for devices/browsers where Contact Picker API is unavailable:
-      // Prompt user to paste or enter rider name and phone directly
-      const pasted = window.prompt(
-        'फ़ोनबुक पिकर इस ब्राउज़र में सीधे समर्थित नहीं है। कृपया राइडर का नाम और 10-अंकों का नंबर दर्ज या पेस्ट करें:'
-      );
-      if (pasted && pasted.trim()) {
-        const text = pasted.trim();
-        const digits = text.replace(/\D/g, '');
-        const phoneMatch = digits.length >= 10 ? digits.slice(-10) : '';
-        const namePart = text.replace(/[0-9+\-()\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        if (namePart) setName(namePart);
-        if (phoneMatch) {
-          setPhone(phoneMatch);
-        }
-      }
+      // 2. Reliable In-App Fallback when browser/WebView Contact Picker API is unavailable
+      setContactPasteInput('');
+      setShowContactPasteModal(true);
     } catch (err: any) {
       console.log('Contact pick cancelled or error:', err);
       if (err?.name !== 'AbortError') {
         setPhoneError('फ़ोनबुक संपर्क चुनने में असमर्थ। कृपया नाम और 10-अंकों का नंबर सीधे टाइप करें।');
       }
     }
+  };
+
+  const handleApplyContactPaste = (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = contactPasteInput.trim();
+    if (text) {
+      const digits = text.replace(/\D/g, '');
+      const phoneMatch = digits.length >= 10 ? digits.slice(-10) : '';
+      const namePart = text.replace(/[0-9+\-()\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (namePart) setName(namePart);
+      if (phoneMatch) setPhone(phoneMatch);
+    }
+    setShowContactPasteModal(false);
+    setContactPasteInput('');
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
@@ -737,6 +742,12 @@ export const RidersTab: React.FC<Props> = ({
     const startDate = dates[0] || getTodayDateString();
     const endDate = dates[dates.length - 1] || getTodayDateString();
 
+    const riderFin = calculateRiderFinancialState(rider.advances, rider.incentives, settlements, rider.id);
+    const activeIncentiveTotal = riderFin.netIncentive;
+    const deliveryBaseTotal = stats.unpaidEntries.reduce((sum, e) => sum + e.baseAmount, 0);
+    const deliveryIncentiveTotal = stats.unpaidEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
+    const grossWithIncentives = stats.unpaidAmount + activeIncentiveTotal;
+
     onMarkEntriesPaid(
       unpaidIds,
       numAdvance,
@@ -748,18 +759,15 @@ export const RidersTab: React.FC<Props> = ({
         startDate,
         endDate,
         totalParcels: stats.unpaidParcels,
-        baseAmount: stats.unpaidEntries.reduce((sum, e) => sum + e.baseAmount, 0),
-        incentiveAmount: stats.unpaidEntries.reduce(
-          (sum, e) => sum + e.incentiveAmount,
-          0
-        ),
-        grossTotal: stats.unpaidAmount,
+        baseAmount: deliveryBaseTotal,
+        incentiveAmount: deliveryIncentiveTotal + activeIncentiveTotal,
+        grossTotal: grossWithIncentives,
       }
     );
 
     // Precise SIM SMS dispatch on payout settlement stating exact date range, gross, advance adjustment and net
     const cleanPhone = cleanPhoneNumber(rider.phone);
-    const grossPayout = stats.unpaidAmount;
+    const grossPayout = grossWithIncentives;
     const netPayout = grossPayout - numAdvance;
     const effectiveHub = (hubSignature || '').trim() || 'सरायकेला कूरियर हब';
 
@@ -800,7 +808,7 @@ export const RidersTab: React.FC<Props> = ({
   };
 
   // Global counts for filter badges with 0.0s cold-start pre-cache fallback
-  const cachedSummary = loadQuickStatsSummary();
+  const cachedSummary = loadQuickStatsSummary(userId && userId !== 'guest' ? userId : undefined);
   const totalUnpaidDeliveries = entries.filter((e) => e.status === 'Unpaid');
   const liveUnpaidAmount = totalUnpaidDeliveries.reduce(
     (sum, e) => sum + (Number(e.totalEarnings) || 0),
@@ -1796,41 +1804,66 @@ export const RidersTab: React.FC<Props> = ({
               </button>
             </div>
 
-            <div className="bg-slate-900 p-4 rounded-xl space-y-2 border border-slate-800 text-xs">
-              <div className="flex justify-between text-slate-400">
-                <span>Unpaid Deliveries</span>
-                <span className="text-white font-semibold">{payingRiderData.stats.unpaidCount} entries</span>
-              </div>
-              <div className="flex justify-between text-slate-400">
-                <span>Gross Unpaid Amount</span>
-                <span className="text-emerald-400 font-bold text-sm">
-                  {formatINR(payingRiderData.stats.unpaidAmount)}
-                </span>
-              </div>
-              {calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id) > 0 && (
-                <div className="flex justify-between text-rose-400 pt-2 border-t border-slate-800">
-                  <span>Available Advance</span>
-                  <span>{formatINR(calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id))}</span>
-                </div>
-              )}
-            </div>
+            {(() => {
+              const modalFin = calculateRiderFinancialState(
+                payingRiderData.rider.advances,
+                payingRiderData.rider.incentives,
+                settlements,
+                payingRiderData.rider.id
+              );
+              const modalBonus = modalFin.netIncentive;
+              const modalGross = payingRiderData.stats.unpaidAmount + modalBonus;
+              const modalNetAdvance = modalFin.netAdvance;
 
-            {calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id) > 0 && (
-              <div className="space-y-1.5">
-                <label className="text-xs text-slate-300 font-medium">Deduct Advance from Payout (₹)</label>
-                <input
-                  type="number"
-                  value={advanceDeduction}
-                  onChange={(e) => setAdvanceDeduction(e.target.value)}
-                  max={Math.min(
-                    payingRiderData.stats.unpaidAmount,
-                    calculateActiveAdvanceTotal(payingRiderData.rider.advances, settlements, payingRiderData.rider.id)
+              return (
+                <>
+                  <div className="bg-slate-900 p-4 rounded-xl space-y-2 border border-slate-800 text-xs">
+                    <div className="flex justify-between text-slate-400">
+                      <span>Unpaid Deliveries</span>
+                      <span className="text-white font-semibold">{payingRiderData.stats.unpaidCount} entries</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Delivery Earnings</span>
+                      <span className="text-slate-200 font-semibold">
+                        {formatINR(payingRiderData.stats.unpaidAmount)}
+                      </span>
+                    </div>
+                    {modalBonus > 0 && (
+                      <div className="flex justify-between text-emerald-400">
+                        <span>Active Incentive / Bonus</span>
+                        <span className="font-bold">+{formatINR(modalBonus)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-slate-300 pt-1.5 border-t border-slate-800">
+                      <span className="font-semibold">Total Gross Payout</span>
+                      <span className="text-emerald-400 font-bold text-sm">
+                        {formatINR(modalGross)}
+                      </span>
+                    </div>
+                    {modalNetAdvance > 0 && (
+                      <div className="flex justify-between text-rose-400 pt-1.5 border-t border-slate-800">
+                        <span>Net Outstanding Advance</span>
+                        <span>{formatINR(modalNetAdvance)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {modalNetAdvance > 0 && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-slate-300 font-medium">Deduct Advance from Payout (₹)</label>
+                      <input
+                        type="number"
+                        value={advanceDeduction}
+                        onChange={(e) => setAdvanceDeduction(e.target.value)}
+                        max={Math.min(modalGross, modalNetAdvance)}
+                        min={0}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
                   )}
-                  min={0}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-blue-500"
-                />
-              </div>
-            )}
+                </>
+              );
+            })()}
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
@@ -2224,6 +2257,55 @@ export const RidersTab: React.FC<Props> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* In-App Contact Paste Fallback Modal (Replaces window.prompt for Android WebView compatibility) */}
+      {showContactPasteModal && (
+        <div className="fixed inset-0 z-[70] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <form
+            onSubmit={handleApplyContactPaste}
+            className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Phone className="w-4 h-4 text-emerald-400" />
+                <span>संपर्क विवरण पेस्ट करें</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowContactPasteModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              फ़ोनबुक पिकर इस डिवाइस में सीधे समर्थित नहीं है। कृपया राइडर का नाम और 10-अंकों का मोबाइल नंबर यहाँ पेस्ट या दर्ज करें (उदा. Ramesh Kumar 9876543210):
+            </p>
+            <input
+              type="text"
+              autoFocus
+              value={contactPasteInput}
+              onChange={(e) => setContactPasteInput(e.target.value)}
+              placeholder="जैसे: Ramesh Kumar 9876543210"
+              className="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+            />
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowContactPasteModal(false)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+              >
+                रद्द करें
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+              >
+                लागू करें
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

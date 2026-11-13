@@ -20,7 +20,7 @@
  */
 
 import { PublicRiderStatement, RiderAdvanceEntry, RiderIncentiveEntry } from '../types';
-import { formatINR, formatDateDisplay } from './formatters';
+import { formatINR, formatDateDisplay, getTodayDateString } from './formatters';
 
 export interface LedgerSalaryRecord {
   id: string;
@@ -156,16 +156,27 @@ export function calculatePureRiderLedger(
   }
 
   // 1. Gather Authentic Advances (resolving both statement.advances and external master advances)
-  const rawAdvancesList: RiderAdvanceEntry[] = [];
-  const advSeen = new Set<string>();
+  const isNotDeleted = (item: any) =>
+    Boolean(item) &&
+    item.isDeleted !== true &&
+    item.status !== 'DELETED' &&
+    item.status !== 'RESET_ARCHIVED';
+
+  const rawAdvancesMap = new Map<string, RiderAdvanceEntry>();
+  const noIdAdvances: RiderAdvanceEntry[] = [];
   const addAdv = (a: RiderAdvanceEntry) => {
     if (!a) return;
-    const key = a.id || (a as any)._id;
-    if (key && !advSeen.has(key)) {
-      advSeen.add(key);
-      rawAdvancesList.push(a);
-    } else if (!key) {
-      rawAdvancesList.push(a);
+    const key = String(a.id || (a as any)._id || '').trim();
+    if (key) {
+      const existing = rawAdvancesMap.get(key);
+      // Authoritative deleted status or external master update overrides stale snapshot
+      if (!existing || a.isDeleted || (a as any).status === 'DELETED' || (a as any).status === 'RESET_ARCHIVED') {
+        rawAdvancesMap.set(key, a);
+      } else {
+        rawAdvancesMap.set(key, { ...existing, ...a });
+      }
+    } else {
+      noIdAdvances.push(a);
     }
   };
 
@@ -185,11 +196,12 @@ export function calculatePureRiderLedger(
       .forEach(addAdv);
   }
 
+  const rawAdvancesList: RiderAdvanceEntry[] = [...Array.from(rawAdvancesMap.values()), ...noIdAdvances].filter(isNotDeleted);
   const validAdvances: RiderAdvanceEntry[] = purgePhantomAdvances(rawAdvancesList);
 
   // 2. Gather Authentic Incentives
   const validIncentives: RiderIncentiveEntry[] = (statement.incentives || []).filter((i) => {
-    return (Number(i.amount) || 0) > 0;
+    return isNotDeleted(i) && (Number(i.amount) || 0) > 0;
   });
 
   // 3. Gather Authentic Settlements / Salaries (deduplicating to prevent double-counting)
@@ -242,6 +254,7 @@ export function calculatePureRiderLedger(
   // Helper: check if an advance is active and truly unsettled (5-condition qualification)
   const isUnsettledAdvanceEntry = (adv: RiderAdvanceEntry): boolean => {
     if (!adv) return false;
+    if (!isNotDeleted(adv)) return false;
     const advId = String(adv.id || (adv as any)._id || '').trim();
 
     // 1) adv.isSettled !== true && (adv as any).status !== 'PAID'
@@ -457,30 +470,59 @@ export function calculatePureRiderLedger(
     }
   });
 
-  // D. Uncovered Settlement Deficits Carried Over (if not already represented in active advances)
-  const deficitSettlements = salaries
-    .filter((s) => (!s.status || s.status.trim().toUpperCase() === 'PAID') && Number(s.netTotal) < 0)
+  // D. Uncovered Settlement Deficits Carried Over (ONLY if not superseded by a later settlement and not already in active advances)
+  const paidOrSettledSalaries = salaries.filter(
+    (s) => !s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED'
+  );
+
+  const uncoveredDeficitSettlements = paidOrSettledSalaries
+    .filter((s) => {
+      if (Number(s.netTotal) >= 0) return false;
+      const sTs = new Date(s.paidAt || s.endDate || s.startDate).getTime() || 0;
+      const deficitId = `adv_deficit_${s.id}`;
+      const remId = `adv_rem_${s.id}`;
+
+      // If any strictly later paid settlement covered/absorbed advances or settled this residual ID, do NOT resurrect
+      const supersededByLater = paidOrSettledSalaries.some((laterS) => {
+        if (laterS.id === s.id) return false;
+        const laterTs = new Date(laterS.paidAt || laterS.endDate || laterS.startDate).getTime() || 0;
+        const isLater = laterS.endDate > s.endDate || laterTs > sTs;
+        if (!isLater) return false;
+        const hasSettledToken =
+          Array.isArray((laterS as any).settledAdvanceIds) &&
+          ((laterS as any).settledAdvanceIds.includes(deficitId) || (laterS as any).settledAdvanceIds.includes(remId));
+        return hasSettledToken || Number(laterS.advanceAmount) > 0;
+      });
+      if (supersededByLater) return false;
+
+      // Also if its explicit residual advance was already marked settled/deleted in validAdvances/rawAdvancesMap, do NOT resurrect
+      const explicitRem = rawAdvancesMap.get(remId) || rawAdvancesMap.get(deficitId);
+      if (explicitRem && (explicitRem.isSettled === true || (explicitRem as any).status === 'PAID' || !isNotDeleted(explicitRem))) {
+        return false;
+      }
+
+      return true;
+    })
     .sort((a, b) => new Date(b.endDate || b.startDate).getTime() - new Date(a.endDate || a.startDate).getTime());
 
-  const totalSettlementDeficits = deficitSettlements.reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
+  const totalSettlementDeficits = uncoveredDeficitSettlements.reduce((sum, s) => sum + Math.abs(Number(s.netTotal)), 0);
 
   const alreadyHasDeficitAdvance = rawList.some(
     (r) =>
       r.type === 'advance' &&
       (r.originalId?.startsWith('adv_deficit_') ||
         r.originalId?.startsWith('adv_rem_') ||
-        r.originalId?.includes('_rem') ||
-        r.originalId?.includes('rem') ||
-        r.id?.includes('deficit') ||
-        r.id?.includes('rem') ||
+        r.originalId?.endsWith('_rem') ||
+        r.id?.startsWith('adv-adv_deficit_') ||
+        r.id?.startsWith('adv-adv_rem_') ||
         r.title?.includes('पिछला सेटलमेंट घाटा') ||
         r.title?.includes('बकाया एडवांस') ||
         r.title?.includes('सेटलमेंट शेष'))
   );
 
   if (totalSettlementDeficits > 0 && !alreadyHasDeficitAdvance) {
-    const latestDeficitSal = deficitSettlements[0] || salaries[0];
-    const deficitDate = latestDeficitSal?.endDate || new Date().toISOString().split('T')[0];
+    const latestDeficitSal = uncoveredDeficitSettlements[0] || salaries[0];
+    const deficitDate = latestDeficitSal?.endDate || getTodayDateString();
     const deficitTimestamp = (new Date(deficitDate).getTime() || Date.now()) + 5; // Chronologically immediately after settlement
 
     rawList.push({
@@ -589,8 +631,20 @@ export function calculatePureRiderLedger(
     processedRows.reverse();
   }
 
-  const rawActiveAdvAmt = validAdvances.filter((a) => isUnsettledAdvanceEntry(a)).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-  const rawActiveIncAmt = validIncentives.filter((i) => !i.isSettled && !i.isPaid && (i as any).status !== 'PAID').reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+  const rawRegularActiveAdvAmt = validAdvances
+    .filter((a) => isUnsettledAdvanceEntry(a))
+    .reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const rawActiveRecoveryAmt = validAdvances
+    .filter((a) => {
+      if (!isNotDeleted(a)) return false;
+      if (a.isSettled === true || a.isDeducted === true || (a as any).status === 'PAID' || a.settlementId) return false;
+      return Boolean(a.isRecovery || a.type === 'recovery') && (Number(a.amount) || 0) !== 0;
+    })
+    .reduce((sum, a) => sum + Math.abs(Number(a.amount) || 0), 0);
+  const rawActiveAdvAmt = Math.max(0, rawRegularActiveAdvAmt - rawActiveRecoveryAmt);
+  const rawActiveIncAmt = validIncentives
+    .filter((i) => !i.isSettled && !i.isPaid && (i as any).status !== 'PAID' && !i.settlementId && !i.settledPayoutId && !i.settledInPayoutId)
+    .reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
   const canonicalUnsettledAdvances = Math.max(0, rawActiveAdvAmt - rawActiveIncAmt);
   const canonicalUnsettledIncentives = Math.max(0, rawActiveIncAmt - rawActiveAdvAmt);
 

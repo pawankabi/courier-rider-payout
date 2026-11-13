@@ -90,7 +90,9 @@ export const AdvancesTab: React.FC<Props> = ({
     (riders || []).forEach((r) => {
       if (Array.isArray(r.advances) && r.advances.length > 0) {
         r.advances.forEach((adv) => {
-          list.push({ entry: adv, rider: r });
+          if (!adv.isDeleted && (adv as any).status !== 'DELETED' && (adv as any).status !== 'RESET_ARCHIVED') {
+            list.push({ entry: adv, rider: r });
+          }
         });
       }
     });
@@ -285,18 +287,23 @@ export const AdvancesTab: React.FC<Props> = ({
     const { rider, entry } = deletingAdvance;
     setIsDeleting(true);
     try {
-      const remainingAdvances = (rider.advances || []).filter((a) => a.id !== entry.id);
-      const rawAdv = calculateActiveAdvanceTotal(remainingAdvances, settlements, rider.id);
+      const nowIso = new Date().toISOString();
+      const softDeletedAdvances = (rider.advances || []).map((a) =>
+        a.id === entry.id
+          ? { ...a, isDeleted: true, deletedAt: nowIso, status: 'DELETED' }
+          : a
+      );
+      const rawAdv = calculateActiveAdvanceTotal(softDeletedAdvances, settlements, rider.id);
       const rawInc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
       const newTotal = Math.max(0, rawAdv - rawInc);
       const updatedRider: Rider = {
         ...rider,
         totalAdvance: newTotal,
-        advances: remainingAdvances,
+        advances: softDeletedAdvances,
       };
 
       await onDeleteAdvance(updatedRider, entry.id);
-      showToast('एडवांस एंट्री सफलतापूर्वक हटाई गई।');
+      showToast('एडवांस एंट्री कचरा पेटी में स्थानांतरित की गई।');
       setDeletingAdvance(null);
     } catch (err) {
       console.error('Error deleting advance:', err);

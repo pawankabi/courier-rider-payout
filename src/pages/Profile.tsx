@@ -207,12 +207,12 @@ export const Profile: React.FC<ProfileProps> = ({
                   {appLockOn && (
                     <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1">
                       <Check className="w-3 h-3" />
-                      15 मिनट सुरक्षा Active
+                      तुरंत सुरक्षा Active
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  15 मिनट फोन स्क्रीन ऑफ या निष्क्रिय रहने पर फिंगरप्रिंट लॉक सक्रिय होगा। काम करते समय कभी लॉक नहीं होगा।
+                  स्क्रीन ऑफ या ऐप बैकग्राउंड में जाते ही सुरक्षा लॉक सक्रिय होगा। काम करते समय कभी लॉक नहीं होगा।
                 </p>
                 <div className="text-[11px] text-blue-400 flex items-center gap-1.5 pt-0.5">
                   <KeyRound className="w-3.5 h-3.5 text-blue-400 shrink-0" />

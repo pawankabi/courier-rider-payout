@@ -3,9 +3,18 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isSuperAdmin() {
+      return request.auth != null &&
+        request.auth.token.email != null &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email.lower() == 'pawankabiseraikella@gmail.com';
+    }
+
+    function isOwnerDoc(data) {
       return request.auth != null && (
-        (request.auth.token.email != null && request.auth.token.email.lower() == 'pawankabiseraikella@gmail.com') ||
-        (request.auth.token.keys().hasAny(['email']) && request.auth.token.email.lower() == 'pawankabiseraikella@gmail.com')
+        isSuperAdmin() ||
+        data.userId == request.auth.uid ||
+        data.workspaceId == request.auth.uid ||
+        data.createdBy == request.auth.uid
       );
     }
 
@@ -54,7 +63,8 @@ service cloud.firestore {
 
       match /riders/{riderId} {
         allow read: if true; // Public read for ledger statement verification
-        allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+        allow create, update: if request.auth != null; // Admin + Companion anonymous auth for COD shortage conversion
+        allow delete: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
       }
 
       match /entries/{entryId} {
@@ -67,6 +77,18 @@ service cloud.firestore {
         allow write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
       }
 
+      match /advances/{advanceId} {
+        allow read: if true; // Public read for rider advance ledger verification
+        allow create, update: if request.auth != null; // Admin + Companion anonymous auth for COD shortage advance creation
+        allow delete: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+      }
+
+      match /incentives/{incentiveId} {
+        allow read: if true; // Public read for rider incentive ledger verification
+        allow create, update: if request.auth != null;
+        allow delete: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
+      }
+
       match /{allSubpaths=**} {
         allow read, write: if request.auth != null && (request.auth.uid == userId || isSuperAdmin());
       }
@@ -75,13 +97,13 @@ service cloud.firestore {
     // Primary database collections for riders, deliveries, settlements, and auto-backups (Strict Zero Hard-Delete Policy)
     match /riders/{riderId} {
       allow read, create, update: if true; // Public read & sync for rider profile & advances
-      allow delete: if false; // Strict Zero-Data-Loss: Hard deletion prohibited
+      allow delete: if isOwnerDoc(resource.data); // Owner/Admin can permanently purge trashed records
     }
 
     // Public read-only statements/ledgers accessible without login
     match /public_statements/{statementId} {
       allow read, create, update: if true;
-      allow delete: if false;
+      allow delete: if request.auth != null && (isSuperAdmin() || isOwnerDoc(resource.data));
     }
 
     // COD Staff PINs & Access Control for companion mobile web app login (Delivery boys & Hub Staff)
@@ -117,12 +139,22 @@ service cloud.firestore {
 
     match /deliveries/{deliveryId} {
       allow read, create, update: if true; // Public read & sync for rider delivery logs
-      allow delete: if false; // Financial records cannot be hard deleted
+      allow delete: if isOwnerDoc(resource.data); // Owner/Admin can permanently purge trashed deliveries
     }
 
     match /settlements/{settlementId} {
       allow read, create, update: if true; // Public read & sync for rider payout settlements
-      allow delete: if false; // Settlement records cannot be hard deleted
+      allow delete: if false; // Settlement audit trail cannot be hard deleted
+    }
+
+    match /advances/{advanceId} {
+      allow read, create, update: if true; // Public read & sync for rider advance logs
+      allow delete: if isOwnerDoc(resource.data); // Owner/Admin can permanently purge trashed advances
+    }
+
+    match /incentives/{incentiveId} {
+      allow read, create, update: if true; // Public read & sync for rider incentive logs
+      allow delete: if isOwnerDoc(resource.data); // Owner/Admin can permanently purge trashed incentives
     }
 
     // Collection Group Queries for Public Statements (allows unauthenticated query by riderId)
@@ -135,6 +167,14 @@ service cloud.firestore {
     }
 
     match /{path=**}/settlements/{settlementId} {
+      allow read: if true;
+    }
+
+    match /{path=**}/advances/{advanceId} {
+      allow read: if true;
+    }
+
+    match /{path=**}/incentives/{incentiveId} {
       allow read: if true;
     }
 

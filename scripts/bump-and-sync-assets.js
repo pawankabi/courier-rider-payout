@@ -3,10 +3,32 @@ import path from 'path';
 
 console.log('🔄 [Version & Assets Sync] Starting automated version bump and icon generation...');
 
-// 1. Read package.json and determine new version
+function compareSemver(a, b) {
+  const pa = (a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = (b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+// 1. Read package.json & android/app/build.gradle and determine highest floor version
 const pkgPath = path.resolve('package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-let currentVersion = pkg.version || '1.0.25';
+let currentVersion = pkg.version || '1.0.58';
+
+const buildGradlePath = path.resolve('android', 'app', 'build.gradle');
+let existingGradleContent = '';
+if (fs.existsSync(buildGradlePath)) {
+  existingGradleContent = fs.readFileSync(buildGradlePath, 'utf8');
+  const vnMatch = existingGradleContent.match(/versionName\s+"([^"]+)"/);
+  if (vnMatch && compareSemver(vnMatch[1], currentVersion) > 0) {
+    currentVersion = vnMatch[1];
+  }
+}
 
 // Query GitHub Releases API to guarantee the new version is strictly higher than any published release
 try {
@@ -20,27 +42,20 @@ try {
   if (ghRes.ok) {
     const ghData = await ghRes.json();
     const rawTag = (ghData.tag_name || ghData.name || '').replace(/^v/i, '').trim();
-    if (rawTag) {
-      const ghP = rawTag.split('.').map((n) => parseInt(n, 10) || 0);
-      const curP = currentVersion.split('.').map((n) => parseInt(n, 10) || 0);
-      if (ghP[2] > curP[2]) {
-        currentVersion = rawTag;
-        console.log(`🌐 GitHub latest release discovered: v${rawTag} (ensuring next version is strictly higher)`);
-      }
+    if (rawTag && compareSemver(rawTag, currentVersion) > 0) {
+      currentVersion = rawTag;
+      console.log(`🌐 GitHub latest release discovered: v${rawTag} (ensuring next version is strictly higher)`);
     }
   }
 } catch (e) {
-  // Offline or timeout fallback to package.json
+  // Offline or timeout fallback to local floor
 }
 
-// Parse semver (e.g., 1.0.24 -> 1.0.25)
-const parts = currentVersion.split('.').map((n) => parseInt(n, 10));
-if (parts.length === 3 && !isNaN(parts[2])) {
-  parts[2] += 1;
-} else {
-  parts[parts.length - 1] += 1;
-}
-const nextVersion = parts.join('.');
+// Parse semver (e.g., 1.0.58 -> 1.0.59)
+const parts = currentVersion.split('.').map((n) => parseInt(n, 10) || 0);
+while (parts.length < 3) parts.push(0);
+parts[2] += 1;
+const nextVersion = parts.slice(0, 3).join('.');
 
 console.log(`📌 Bumping Version: ${currentVersion} ➔ ${nextVersion}`);
 pkg.version = nextVersion;
@@ -56,12 +71,10 @@ if (fs.existsSync(versionTsPath)) {
 }
 
 // 3. Update android/app/build.gradle
-const buildGradlePath = path.resolve('android', 'app', 'build.gradle');
-if (fs.existsSync(buildGradlePath)) {
-  let bg = fs.readFileSync(buildGradlePath, 'utf8');
-  // Match current versionCode
+let nextVersionCode = parts[2] || 44;
+if (existingGradleContent) {
+  let bg = existingGradleContent;
   const vcMatch = bg.match(/versionCode\s+(\d+)/);
-  let nextVersionCode = 10;
   if (vcMatch) {
     nextVersionCode = parseInt(vcMatch[1], 10) + 1;
   }
@@ -73,15 +86,16 @@ if (fs.existsSync(buildGradlePath)) {
 
 // 4. Update public/version.json & src/services/liveUpdateService.ts
 const buildTime = Date.now();
-const todayDate = new Date().toISOString().split('T')[0];
+const nowLocal = new Date(buildTime);
+const todayDate = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
 const versionJsonPath = path.resolve('public', 'version.json');
 const versionInfo = {
   version: nextVersion,
-  versionCode: parts[2] || 10,
+  versionCode: nextVersionCode,
   buildTime,
   buildDate: todayDate,
-  releaseNotes: `Auto-Sync Version ${nextVersion} - Modern Adaptive Icons, Real-time Payout & Fast OTA Update`,
-  updatedAt: new Date().toISOString()
+  releaseNotes: `Auto-Sync Version ${nextVersion} - Safe Ledger, Trash Auto-Purge & Fast OTA Update`,
+  updatedAt: new Date(buildTime).toISOString()
 };
 fs.writeFileSync(versionJsonPath, JSON.stringify(versionInfo, null, 2));
 console.log(`   - Updated public/version.json`);

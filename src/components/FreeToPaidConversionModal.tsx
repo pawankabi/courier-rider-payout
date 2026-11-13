@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { AppUser } from '../types';
 import { compressAndEncodeImage, validateImageFile } from '../utils/imageUpload';
+import { getTodayDateString } from '../utils/formatters';
 
 interface FreeToPaidConversionModalProps {
   user: AppUser | null;
@@ -33,7 +34,7 @@ export const FreeToPaidConversionModal: React.FC<FreeToPaidConversionModalProps>
   onConfirm,
 }) => {
   const [monthlyFee, setMonthlyFee] = useState<number>(499);
-  const [startDate, setStartDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [startDate, setStartDate] = useState<string>(() => getTodayDateString());
   const [durationDays, setDurationDays] = useState<number>(30);
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [useCustomEndDate, setUseCustomEndDate] = useState<boolean>(false);
@@ -48,7 +49,7 @@ export const FreeToPaidConversionModal: React.FC<FreeToPaidConversionModalProps>
       const sub = user.subscription;
       const initialFee = (sub && sub.monthlyFee > 0) ? sub.monthlyFee : 499;
       setMonthlyFee(initialFee);
-      setStartDate(new Date().toISOString().slice(0, 10));
+      setStartDate(getTodayDateString());
       setDurationDays(30);
       setUseCustomEndDate(false);
       setCustomEndDate('');

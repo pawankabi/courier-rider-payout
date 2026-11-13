@@ -1613,9 +1613,9 @@ export async function ensureWorkspaceMigration(
     }
 
     // Also check local storage for this user or generic legacy
-    const rawRiders = localStorage.getItem(`courier_riders_u_${userId}`) || localStorage.getItem('courier_riders');
-    const rawDeliveries = localStorage.getItem(`courier_deliveries_u_${userId}`) || localStorage.getItem('courier_deliveries');
-    const rawSettlements = localStorage.getItem(`courier_settlements_u_${userId}`) || localStorage.getItem('courier_settlements');
+    const rawRiders = localStorage.getItem(`cp_cache_riders_${userId}`) || localStorage.getItem(`courier_riders_u_${userId}`) || localStorage.getItem('courier_riders');
+    const rawDeliveries = localStorage.getItem(`cp_cache_deliveries_${userId}`) || localStorage.getItem(`courier_deliveries_u_${userId}`) || localStorage.getItem('courier_deliveries');
+    const rawSettlements = localStorage.getItem(`cp_cache_settlements_${userId}`) || localStorage.getItem(`courier_settlements_u_${userId}`) || localStorage.getItem('courier_settlements');
 
     if (rawRiders) {
       try {
@@ -1751,11 +1751,13 @@ export function subscribeToUserData(
   const deliveriesMap = new Map<string, DeliveryEntry>();
   const settlementsMap = new Map<string, SettlementRecord>();
   const advancesMap = new Map<string, RiderAdvanceEntry>();
+  const incentivesMap = new Map<string, RiderIncentiveEntry>();
 
   const notifyRiders = () => {
     // Strictly isolate: only include riders created by or belonging to this user's workspace
     const rawList = Array.from(ridersMap.values()).filter((r) => isEntityOwnedByUser(r, userId, effectiveEmail));
     const allWorkspaceAdvances = Array.from(advancesMap.values());
+    const allWorkspaceIncentives = Array.from(incentivesMap.values());
     let settlementsList = Array.from(settlementsMap.values());
     if (settlementsList.length === 0) {
       const cachedSettlements = loadSettlementsFromStorage(userId);
@@ -1765,36 +1767,59 @@ export function subscribeToUserData(
     }
 
     const list = rawList.map((r) => {
-      // Merge advances from rider doc and workspace advances collection
-      const combined = [...(r.advances || [])];
+      const cleanRiderPhone = String(r.phone || '').replace(/\D/g, '').slice(-10);
+
+      // Merge advances from rider doc and authoritative workspace advances collection
+      const advByKey = new Map<string, RiderAdvanceEntry>();
+      (r.advances || []).forEach((a) => {
+        if (!a) return;
+        const key = a.id || `${a.date}_${a.amount}_${a.reason}`;
+        advByKey.set(key, a);
+      });
       allWorkspaceAdvances.forEach((adv) => {
+        if (!adv) return;
         const matchesId = String(adv.riderId || '').trim() === String(r.id).trim();
         const cleanAdvPhone = String((adv as any).riderPhone || '').replace(/\D/g, '').slice(-10);
-        const cleanRiderPhone = String(r.phone || '').replace(/\D/g, '').slice(-10);
         const matchesPhone = Boolean(cleanAdvPhone && cleanRiderPhone && cleanAdvPhone === cleanRiderPhone);
         if (matchesId || matchesPhone) {
-          combined.push(adv);
+          const key = adv.id || `${adv.date}_${adv.amount}_${adv.reason}`;
+          const prev = advByKey.get(key);
+          // Workspace subcollection soft-delete or latest edit overrides embedded rider snapshot
+          advByKey.set(key, prev ? { ...prev, ...adv } : adv);
         }
       });
+      const dedupedAdvances = Array.from(advByKey.values());
 
-      // Deduplicate advances cleanly
-      const seen = new Set<string>();
-      const dedupedAdvances: RiderAdvanceEntry[] = [];
-      combined.forEach((a) => {
-        const key = a.id || `${a.date}_${a.amount}_${a.reason}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          dedupedAdvances.push(a);
+      // Merge incentives from rider doc and authoritative workspace incentives collection
+      const incByKey = new Map<string, RiderIncentiveEntry>();
+      (r.incentives || []).forEach((inc) => {
+        if (!inc) return;
+        const key = inc.id || `${inc.date}_${inc.amount}_${inc.reason}`;
+        incByKey.set(key, inc);
+      });
+      allWorkspaceIncentives.forEach((inc) => {
+        if (!inc) return;
+        const matchesId = String(inc.riderId || '').trim() === String(r.id).trim();
+        const cleanIncPhone = String((inc as any).riderPhone || '').replace(/\D/g, '').slice(-10);
+        const matchesPhone = Boolean(cleanIncPhone && cleanRiderPhone && cleanIncPhone === cleanRiderPhone);
+        if (matchesId || matchesPhone) {
+          const key = inc.id || `${inc.date}_${inc.amount}_${inc.reason}`;
+          const prev = incByKey.get(key);
+          incByKey.set(key, prev ? { ...prev, ...inc } : inc);
         }
       });
+      const dedupedIncentives = Array.from(incByKey.values());
 
       const totalAdv = calculateActiveAdvanceTotal(dedupedAdvances, settlementsList, r.id);
-      const totalInc = calculateActiveIncentiveTotal(r.incentives, settlementsList, r.id);
+      const totalInc = calculateActiveIncentiveTotal(dedupedIncentives, settlementsList, r.id);
       const netAdv = Math.max(0, totalAdv - totalInc);
+      const netInc = Math.max(0, totalInc - totalAdv);
       return {
         ...r,
         advances: dedupedAdvances,
+        incentives: dedupedIncentives,
         totalAdvance: netAdv,
+        totalIncentive: netInc,
       };
     });
 
@@ -1812,8 +1837,11 @@ export function subscribeToUserData(
   const notifyDeliveries = () => {
     const allowedRiderIds = new Set(Array.from(ridersMap.values()).map((r) => r.id));
     const list = Array.from(deliveriesMap.values()).filter((d) => {
-      if (d.riderId && !allowedRiderIds.has(d.riderId)) return false;
-      return isEntityOwnedByUser(d, userId, effectiveEmail);
+      if (!isEntityOwnedByUser(d, userId, effectiveEmail)) return false;
+      // Never hide soft-deleted Trash Bin entries or entries arriving before ridersMap hydrates
+      if (d.isDeleted) return true;
+      if (allowedRiderIds.size > 0 && d.riderId && !allowedRiderIds.has(d.riderId)) return false;
+      return true;
     });
     list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     setCachedAuthUserId(userId);
@@ -1824,8 +1852,10 @@ export function subscribeToUserData(
   const notifySettlements = () => {
     const allowedRiderIds = new Set(Array.from(ridersMap.values()).map((r) => r.id));
     const list = Array.from(settlementsMap.values()).filter((s) => {
-      if (s.riderId && !allowedRiderIds.has(s.riderId)) return false;
-      return isEntityOwnedByUser(s, userId, effectiveEmail);
+      if (!isEntityOwnedByUser(s, userId, effectiveEmail)) return false;
+      if (s.isDeleted) return true;
+      if (allowedRiderIds.size > 0 && s.riderId && !allowedRiderIds.has(s.riderId)) return false;
+      return true;
     });
     list.sort((a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime());
     setCachedAuthUserId(userId);
@@ -1842,6 +1872,7 @@ export function subscribeToUserData(
   const workspaceEntriesRef = collection(db, 'workspaces', userId, 'entries');
   const workspaceSettlementsRef = collection(db, 'workspaces', userId, 'settlements');
   const workspaceAdvancesRef = collection(db, 'workspaces', userId, 'advances');
+  const workspaceIncentivesRef = collection(db, 'workspaces', userId, 'incentives');
 
   const unsubRiders = onSnapshot(
     workspaceRidersRef,
@@ -1855,6 +1886,8 @@ export function subscribeToUserData(
         ridersMap.set(docSnap.id, r);
       });
       notifyRiders();
+      if (deliveriesMap.size > 0) notifyDeliveries();
+      if (settlementsMap.size > 0) notifySettlements();
     },
     (error) => {
       console.warn('Warning listening to workspace riders collection:', error);
@@ -1874,6 +1907,21 @@ export function subscribeToUserData(
     },
     (error) => {
       console.warn('Warning listening to workspace advances collection:', error);
+    }
+  );
+
+  const unsubIncentives = onSnapshot(
+    workspaceIncentivesRef,
+    (snapshot) => {
+      incentivesMap.clear();
+      snapshot.forEach((docSnap) => {
+        const inc = docSnap.data() as RiderIncentiveEntry;
+        incentivesMap.set(docSnap.id, inc);
+      });
+      notifyRiders();
+    },
+    (error) => {
+      console.warn('Warning listening to workspace incentives collection:', error);
     }
   );
 
@@ -1919,6 +1967,7 @@ export function subscribeToUserData(
   return () => {
     unsubRiders();
     unsubAdvances();
+    unsubIncentives();
     unsubEntries();
     unsubSettlements();
   };
@@ -1976,9 +2025,9 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
   };
 
   try {
-    const rawRiders = localStorage.getItem(`courier_riders_u_${userId}`) || localStorage.getItem('courier_riders');
-    const rawDeliveries = localStorage.getItem(`courier_deliveries_u_${userId}`) || localStorage.getItem('courier_deliveries');
-    const rawSettlements = localStorage.getItem(`courier_settlements_u_${userId}`) || localStorage.getItem('courier_settlements');
+    const rawRiders = localStorage.getItem(`cp_cache_riders_${userId}`) || localStorage.getItem(`courier_riders_u_${userId}`) || localStorage.getItem('courier_riders');
+    const rawDeliveries = localStorage.getItem(`cp_cache_deliveries_${userId}`) || localStorage.getItem(`courier_deliveries_u_${userId}`) || localStorage.getItem('courier_deliveries');
+    const rawSettlements = localStorage.getItem(`cp_cache_settlements_${userId}`) || localStorage.getItem(`courier_settlements_u_${userId}`) || localStorage.getItem('courier_settlements');
 
     const localRiders: Rider[] = rawRiders ? JSON.parse(rawRiders) : [];
     const localDeliveries: DeliveryEntry[] = rawDeliveries ? JSON.parse(rawDeliveries) : [];
@@ -2347,16 +2396,34 @@ export async function syncPublicRiderStatement(
   if (!rider?.id) return;
   try {
     const docRef = doc(db, 'public_statements', rider.id);
-    
-    // Purge phantom advances
-    const rawAdvances = advances.length > 0 ? advances : (rider.advances || []);
+    const isNotDeleted = (item: any) =>
+      Boolean(item) &&
+      item.isDeleted !== true &&
+      item.status !== 'DELETED' &&
+      item.status !== 'RESET_ARCHIVED';
+
+    // Read existing doc once when either settlements or deliveries are omitted/empty so we NEVER wipe them
+    let existingDocData: PublicRiderStatement | null = null;
+    if (!settlements || settlements.length === 0 || !deliveries || deliveries.length === 0) {
+      try {
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          existingDocData = snap.data() as PublicRiderStatement;
+        }
+      } catch (e) {
+        console.warn('Could not read existing public_statements doc:', e);
+      }
+    }
+
+    // Purge phantom & soft-deleted advances
+    const rawAdvances = (advances.length > 0 ? advances : (rider.advances || [])).filter(isNotDeleted);
     const cleanAdvances = purgePhantomAdvances(rawAdvances);
 
     // If settlements parameter is not passed or empty, NEVER wipe out authentic settlements!
     let riderSettlements: any[] = [];
     if (settlements && settlements.length > 0) {
       riderSettlements = settlements
-        .filter((s) => s.riderId === rider.id || (rider.phone && (s as any).riderPhone === rider.phone))
+        .filter((s) => !s.isDeleted && (s.riderId === rider.id || (rider.phone && (s as any).riderPhone === rider.phone)))
         .sort((a, b) => new Date(b.paidAt || b.startDate).getTime() - new Date(a.paidAt || a.startDate).getTime())
         .map((s) => ({
           id: s.id,
@@ -2372,19 +2439,12 @@ export async function syncPublicRiderStatement(
           netTotal: Number(s.netTotal) || 0,
           paidAt: s.paidAt || s.endDate,
           status: s.status || 'PAID',
+          settledAdvanceIds: s.settledAdvanceIds,
+          settledIncentiveIds: s.settledIncentiveIds,
         }));
     } else {
-      // Retain existing settlements from public_statements document if available
-      try {
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          const oldData = snap.data() as PublicRiderStatement;
-          if (Array.isArray(oldData.salaries) && oldData.salaries.length > 0) {
-            riderSettlements = oldData.salaries;
-          }
-        }
-      } catch (e) {
-        console.warn('Could not read existing salaries from doc:', e);
+      if (existingDocData && Array.isArray(existingDocData.salaries) && existingDocData.salaries.length > 0) {
+        riderSettlements = existingDocData.salaries;
       }
 
       // If still empty, query collectionGroup('settlements') to find all authentic settlements for this rider
@@ -2393,9 +2453,10 @@ export async function syncPublicRiderStatement(
           const qSettle = query(collectionGroup(db, 'settlements'), where('riderId', '==', rider.id));
           const snapSettle = await getDocs(qSettle);
           if (!snapSettle.empty) {
-            riderSettlements = snapSettle.docs.map((d) => {
-              const s = d.data() as SettlementRecord;
-              return {
+            riderSettlements = snapSettle.docs
+              .map((d) => d.data() as SettlementRecord)
+              .filter((s) => !s.isDeleted)
+              .map((s) => ({
                 id: s.id,
                 startDate: s.startDate,
                 endDate: s.endDate,
@@ -2409,8 +2470,9 @@ export async function syncPublicRiderStatement(
                 netTotal: Number(s.netTotal) || 0,
                 paidAt: s.paidAt || s.endDate,
                 status: s.status || 'PAID',
-              };
-            });
+                settledAdvanceIds: s.settledAdvanceIds,
+                settledIncentiveIds: s.settledIncentiveIds,
+              }));
           }
         } catch (e) {
           console.warn('collectionGroup settlements lookup notice:', e);
@@ -2452,40 +2514,52 @@ export async function syncPublicRiderStatement(
       return timeB - timeA;
     });
 
-    // Deliveries: keep all unpaid deliveries plus recent paid ones
-    const riderDeliveries = deliveries.filter((d) => d.riderId === rider.id);
-    const unpaidDeliveries = riderDeliveries.filter((d) => d.status === 'Unpaid');
-    const paidDeliveries = riderDeliveries
-      .filter((d) => d.status === 'Paid')
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .slice(0, 100);
-    const recentDeliveries = [...unpaidDeliveries, ...paidDeliveries]
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .map((d) => ({
-        id: d.id,
-        date: d.date,
-        parcels: d.parcels,
-        totalEarnings: d.totalEarnings,
-        status: d.status,
-        settlementId: d.settlementId,
-      }));
+    // Deliveries: keep all unpaid deliveries plus recent paid ones; NEVER wipe existing recentDeliveries if omitted
+    let recentDeliveries: any[] = [];
+    if (deliveries && deliveries.length > 0) {
+      const riderDeliveries = deliveries.filter((d) => d && !d.isDeleted && d.riderId === rider.id);
+      const unpaidDeliveries = riderDeliveries.filter((d) => d.status === 'Unpaid');
+      const paidDeliveries = riderDeliveries
+        .filter((d) => d.status === 'Paid')
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 100);
+      recentDeliveries = [...unpaidDeliveries, ...paidDeliveries]
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .map((d) => ({
+          id: d.id,
+          date: d.date,
+          parcels: d.parcels,
+          totalEarnings: d.totalEarnings,
+          status: d.status,
+          settlementId: d.settlementId,
+        }));
+    } else if (existingDocData && Array.isArray(existingDocData.recentDeliveries)) {
+      recentDeliveries = existingDocData.recentDeliveries;
+    }
 
-    const sortedIncentives = [...(rider.incentives || [])].sort((a, b) => {
-      const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
-      const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
-      return timeB - timeA;
-    });
+    const sortedIncentives = [...(rider.incentives || [])]
+      .filter(isNotDeleted)
+      .sort((a, b) => {
+        const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
+        const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
+        return timeB - timeA;
+      });
+
+    const canonicalRawAdv = calculateActiveAdvanceTotal(sortedAdvances, riderSettlements as any, rider.id);
+    const canonicalRawInc = calculateActiveIncentiveTotal(sortedIncentives, riderSettlements as any, rider.id);
+    const canonicalTotalAdv = Math.max(0, canonicalRawAdv - canonicalRawInc);
+    const canonicalTotalInc = Math.max(0, canonicalRawInc - canonicalRawAdv);
 
     const statementPayload: PublicRiderStatement = {
       riderId: rider.id,
       riderName: rider.name,
       riderPhone: rider.phone,
       vehicleType: rider.vehicleType || 'Hero Splendor (Bike)',
-      hubName: hubName || 'Courier Delivery Hub',
-      hubSignature: hubSignature || '',
-      totalAdvance: typeof rider.totalAdvance === 'number' ? rider.totalAdvance : 0,
+      hubName: hubName || existingDocData?.hubName || 'Courier Delivery Hub',
+      hubSignature: hubSignature || existingDocData?.hubSignature || '',
+      totalAdvance: canonicalTotalAdv,
       advances: sortedAdvances,
-      totalIncentive: typeof rider.totalIncentive === 'number' ? rider.totalIncentive : 0,
+      totalIncentive: canonicalTotalInc,
       incentives: sortedIncentives,
       salaries: riderSettlements,
       recentDeliveries,
@@ -2575,10 +2649,19 @@ export async function fetchPublicRiderStatement(
       console.warn('public_statements direct lookup notice:', e);
     }
 
-    // If existing statement exists, ensure its salaries and advances are complete
+    const isNotDeleted = (item: any) =>
+      Boolean(item) &&
+      item.isDeleted !== true &&
+      item.status !== 'DELETED' &&
+      item.status !== 'RESET_ARCHIVED';
+
+    // If existing statement exists, ensure its salaries and advances are complete and deleted items are stripped
     if (existingStatement) {
       if (Array.isArray(existingStatement.advances)) {
-        existingStatement.advances = purgePhantomAdvances(existingStatement.advances);
+        existingStatement.advances = purgePhantomAdvances(existingStatement.advances.filter(isNotDeleted));
+      }
+      if (Array.isArray(existingStatement.incentives)) {
+        existingStatement.incentives = existingStatement.incentives.filter(isNotDeleted);
       }
 
       // Check if salaries are missing or empty in this existingStatement
@@ -2587,9 +2670,10 @@ export async function fetchPublicRiderStatement(
           const qSettle = query(collectionGroup(db, 'settlements'), where('riderId', 'in', [cleanId, decodedId]));
           const snapSettle = await getDocs(qSettle);
           if (!snapSettle.empty) {
-            existingStatement.salaries = snapSettle.docs.map((d) => {
-              const s = d.data() as SettlementRecord;
-              return {
+            existingStatement.salaries = snapSettle.docs
+              .map((d) => d.data() as SettlementRecord)
+              .filter((s) => !s.isDeleted)
+              .map((s) => ({
                 id: s.id,
                 startDate: s.startDate,
                 endDate: s.endDate,
@@ -2603,8 +2687,9 @@ export async function fetchPublicRiderStatement(
                 netTotal: Number(s.netTotal) || 0,
                 paidAt: s.paidAt || s.endDate,
                 status: s.status || 'PAID',
-              };
-            });
+                settledAdvanceIds: s.settledAdvanceIds,
+                settledIncentiveIds: s.settledIncentiveIds,
+              }));
             // Background save back to document so it stays locked & permanent
             setDoc(doc(db, 'public_statements', cleanId), { salaries: existingStatement.salaries }, { merge: true }).catch(() => {});
           }
@@ -2623,21 +2708,34 @@ export async function fetchPublicRiderStatement(
       }
     }
 
-    // 2. Fetch rider profile document (direct /riders, collection query, or collectionGroup)
+    // 2. Fetch rider profile document (prefer collectionGroup /workspaces/*/riders over legacy root /riders)
     let foundRider: Rider | null = null;
 
-    // Check direct /riders/{id}
+    // Check collectionGroup('riders') first so workspace-authoritative data wins over stale root doc
     try {
-      const riderDirectSnap = await getDoc(doc(db, 'riders', cleanId));
-      if (riderDirectSnap.exists()) {
-        foundRider = riderDirectSnap.data() as Rider;
-      } else if (decodedId !== cleanId) {
-        const decodedSnap = await getDoc(doc(db, 'riders', decodedId));
-        if (decodedSnap.exists()) {
-          foundRider = decodedSnap.data() as Rider;
-        }
+      const qRider = query(collectionGroup(db, 'riders'), where('id', '==', cleanId), limit(1));
+      const snapRider = await getDocs(qRider);
+      if (!snapRider.empty) {
+        foundRider = snapRider.docs[0].data() as Rider;
       }
-    } catch {}
+    } catch (err) {
+      console.warn('collectionGroup riders notice:', err);
+    }
+
+    // Check direct /riders/{id}
+    if (!foundRider) {
+      try {
+        const riderDirectSnap = await getDoc(doc(db, 'riders', cleanId));
+        if (riderDirectSnap.exists()) {
+          foundRider = riderDirectSnap.data() as Rider;
+        } else if (decodedId !== cleanId) {
+          const decodedSnap = await getDoc(doc(db, 'riders', decodedId));
+          if (decodedSnap.exists()) {
+            foundRider = decodedSnap.data() as Rider;
+          }
+        }
+      } catch {}
+    }
 
     // Check query on collection('riders')
     if (!foundRider) {
@@ -2648,19 +2746,6 @@ export async function fetchPublicRiderStatement(
           foundRider = snapDirect.docs[0].data() as Rider;
         }
       } catch {}
-    }
-
-    // Check collectionGroup('riders') with single equality (does not require composite index)
-    if (!foundRider) {
-      try {
-        const qRider = query(collectionGroup(db, 'riders'), where('id', '==', cleanId), limit(1));
-        const snapRider = await getDocs(qRider);
-        if (!snapRider.empty) {
-          foundRider = snapRider.docs[0].data() as Rider;
-        }
-      } catch (err) {
-        console.warn('collectionGroup riders notice:', err);
-      }
     }
 
     // Local storage fallback
@@ -2694,39 +2779,52 @@ export async function fetchPublicRiderStatement(
       return safeFallback;
     }
 
-    // 3. Fetch advances
-    let advances: RiderAdvanceEntry[] = Array.isArray(foundRider.advances) ? foundRider.advances : [];
-    if (advances.length === 0) {
-      try {
-        const qAdv = query(collectionGroup(db, 'advances'), where('riderId', '==', cleanId));
-        const snapAdv = await getDocs(qAdv);
-        if (!snapAdv.empty) {
-          advances = snapAdv.docs.map((d) => d.data() as RiderAdvanceEntry);
-        }
-      } catch {}
-    }
-
-    // 3b. Fetch incentives
-    let incentives: RiderIncentiveEntry[] = Array.isArray(foundRider.incentives) ? foundRider.incentives : [];
-    if (incentives.length === 0) {
-      try {
-        const qInc = query(collectionGroup(db, 'incentives'), where('riderId', '==', cleanId));
-        const snapInc = await getDocs(qInc);
-        if (!snapInc.empty) {
-          incentives = snapInc.docs.map((d) => d.data() as RiderIncentiveEntry);
-        }
-      } catch {}
-    }
-
-    // 4. Fetch settlements / salaries
-    let salaries: any[] = [];
+    // 3. Merge advances from foundRider and collectionGroup('advances')
+    const advMap = new Map<string, RiderAdvanceEntry>();
+    (Array.isArray(foundRider.advances) ? foundRider.advances : []).forEach((a) => {
+      if (a && a.id) advMap.set(a.id, a);
+    });
     try {
-      const qSettlements = query(collection(db, 'settlements'), where('riderId', '==', cleanId));
-      const snapSettlements = await getDocs(qSettlements);
-      if (!snapSettlements.empty) {
-        salaries = snapSettlements.docs.map((d) => {
-          const s = d.data() as SettlementRecord;
-          return {
+      const qAdv = query(collectionGroup(db, 'advances'), where('riderId', '==', cleanId));
+      const snapAdv = await getDocs(qAdv);
+      snapAdv.docs.forEach((d) => {
+        const a = d.data() as RiderAdvanceEntry;
+        if (a && a.id) {
+          const prev = advMap.get(a.id);
+          advMap.set(a.id, prev ? { ...prev, ...a } : a);
+        }
+      });
+    } catch {}
+    let advances: RiderAdvanceEntry[] = purgePhantomAdvances(Array.from(advMap.values()).filter(isNotDeleted));
+
+    // 3b. Merge incentives from foundRider and collectionGroup('incentives')
+    const incMap = new Map<string, RiderIncentiveEntry>();
+    (Array.isArray(foundRider.incentives) ? foundRider.incentives : []).forEach((i) => {
+      if (i && i.id) incMap.set(i.id, i);
+    });
+    try {
+      const qInc = query(collectionGroup(db, 'incentives'), where('riderId', '==', cleanId));
+      const snapInc = await getDocs(qInc);
+      snapInc.docs.forEach((d) => {
+        const i = d.data() as RiderIncentiveEntry;
+        if (i && i.id) {
+          const prev = incMap.get(i.id);
+          incMap.set(i.id, prev ? { ...prev, ...i } : i);
+        }
+      });
+    } catch {}
+    let incentives: RiderIncentiveEntry[] = Array.from(incMap.values()).filter(isNotDeleted);
+
+    // 4. Fetch & merge settlements from BOTH collectionGroup('settlements') (workspace-authoritative) AND root settlements
+    const salariesMap = new Map<string, any>();
+    try {
+      const qSettleGroup = query(collectionGroup(db, 'settlements'), where('riderId', '==', cleanId));
+      const snapSettleGroup = await getDocs(qSettleGroup);
+      snapSettleGroup.docs.forEach((d) => {
+        const s = d.data() as SettlementRecord;
+        if (s && !s.isDeleted) {
+          const key = s.id || `${s.startDate}_${s.endDate}`;
+          salariesMap.set(key, {
             id: s.id,
             startDate: s.startDate,
             endDate: s.endDate,
@@ -2740,19 +2838,21 @@ export async function fetchPublicRiderStatement(
             netTotal: s.netTotal,
             paidAt: s.paidAt,
             status: s.status || 'PAID',
-          };
-        });
-      }
+            settledAdvanceIds: s.settledAdvanceIds,
+            settledIncentiveIds: s.settledIncentiveIds,
+          });
+        }
+      });
     } catch {}
-
-    if (salaries.length === 0) {
-      try {
-        const qSettlements = query(collectionGroup(db, 'settlements'), where('riderId', '==', cleanId));
-        const snapSettlements = await getDocs(qSettlements);
-        if (!snapSettlements.empty) {
-          salaries = snapSettlements.docs.map((d) => {
-            const s = d.data() as SettlementRecord;
-            return {
+    try {
+      const qSettlements = query(collection(db, 'settlements'), where('riderId', '==', cleanId));
+      const snapSettlements = await getDocs(qSettlements);
+      snapSettlements.docs.forEach((d) => {
+        const s = d.data() as SettlementRecord;
+        if (s && !s.isDeleted) {
+          const key = s.id || `${s.startDate}_${s.endDate}`;
+          if (!salariesMap.has(key)) {
+            salariesMap.set(key, {
               id: s.id,
               startDate: s.startDate,
               endDate: s.endDate,
@@ -2766,11 +2866,14 @@ export async function fetchPublicRiderStatement(
               netTotal: s.netTotal,
               paidAt: s.paidAt,
               status: s.status || 'PAID',
-            };
-          });
+              settledAdvanceIds: s.settledAdvanceIds,
+              settledIncentiveIds: s.settledIncentiveIds,
+            });
+          }
         }
-      } catch {}
-    }
+      });
+    } catch {}
+    let salaries: any[] = Array.from(salariesMap.values());
 
     // Check localStorage settlements fallback
     if (salaries.length === 0) {
@@ -3475,5 +3578,173 @@ export async function resetRiderAccountInFirestore(
     console.warn('Error resetting public statement doc:', e);
   }
 }
+
+/**
+ * Keep /advances and /incentives root & workspace subcollections in sync when settlement executes,
+ * so subscribeToUserData merging subcollection docs NEVER reverts settled statuses.
+ */
+export async function syncSettledAdvancesAndIncentivesToFirestore(
+  userId: string,
+  settledAdvances: RiderAdvanceEntry[],
+  settledIncentives: RiderIncentiveEntry[],
+  riderMeta: { riderId: string; riderName?: string; riderPhone?: string; createdBy?: string }
+): Promise<void> {
+  if (!userId && settledAdvances.length === 0 && settledIncentives.length === 0) return;
+
+  const ops: Promise<any>[] = [];
+
+  settledAdvances.forEach((adv) => {
+    if (!adv || !adv.id) return;
+    const cleanId = adv.id.replace(/^adv-/, '');
+    const payload = cleanForFirestore({
+      ...adv,
+      riderId: adv.riderId || riderMeta.riderId,
+      riderName: adv.riderName || riderMeta.riderName || '',
+      riderPhone: adv.riderPhone || riderMeta.riderPhone || '',
+      createdBy: adv.createdBy || riderMeta.createdBy || userId || '',
+      workspaceId: userId || '',
+      userId: userId || '',
+      updatedAt: new Date().toISOString(),
+    });
+    ops.push(setDoc(doc(db, 'advances', cleanId), payload, { merge: true }).catch(() => {}));
+    if (userId) {
+      ops.push(setDoc(doc(db, 'workspaces', userId, 'advances', cleanId), payload, { merge: true }).catch(() => {}));
+    }
+  });
+
+  settledIncentives.forEach((inc) => {
+    if (!inc || !inc.id) return;
+    const cleanId = inc.id.replace(/^inc-/, '');
+    const payload = cleanForFirestore({
+      ...inc,
+      riderId: inc.riderId || riderMeta.riderId,
+      riderName: inc.riderName || riderMeta.riderName || '',
+      riderPhone: inc.riderPhone || riderMeta.riderPhone || '',
+      createdBy: inc.createdBy || riderMeta.createdBy || userId || '',
+      workspaceId: userId || '',
+      userId: userId || '',
+      updatedAt: new Date().toISOString(),
+    });
+    ops.push(setDoc(doc(db, 'incentives', cleanId), payload, { merge: true }).catch(() => {}));
+    if (userId) {
+      ops.push(setDoc(doc(db, 'workspaces', userId, 'incentives', cleanId), payload, { merge: true }).catch(() => {}));
+    }
+  });
+
+  await Promise.all(ops);
+}
+
+/**
+ * Permanently delete a single trashed Delivery Entry from Firestore (frees Firebase storage)
+ */
+export async function permanentlyDeleteDeliveryFromFirestore(
+  userId: string,
+  entryId: string
+): Promise<void> {
+  if (!entryId) return;
+  const ops: Promise<any>[] = [
+    deleteDoc(doc(db, 'deliveries', entryId)).catch(() => {}),
+  ];
+  if (userId) {
+    ops.push(deleteDoc(doc(db, 'workspaces', userId, 'entries', entryId)).catch(() => {}));
+    ops.push(deleteDoc(doc(db, 'users', userId, 'deliveries', entryId)).catch(() => {}));
+  }
+  await Promise.all(ops);
+}
+
+/**
+ * Permanently delete a single trashed Rider from Firestore (frees Firebase storage)
+ */
+export async function permanentlyDeleteRiderFromFirestore(
+  userId: string,
+  riderId: string
+): Promise<void> {
+  if (!riderId) return;
+  const ops: Promise<any>[] = [
+    deleteDoc(doc(db, 'riders', riderId)).catch(() => {}),
+    deleteDoc(doc(db, 'public_statements', riderId)).catch(() => {}),
+  ];
+  if (userId) {
+    ops.push(deleteDoc(doc(db, 'workspaces', userId, 'riders', riderId)).catch(() => {}));
+    ops.push(deleteDoc(doc(db, 'users', userId, 'riders', riderId)).catch(() => {}));
+  }
+  await Promise.all(ops);
+}
+
+/**
+ * Permanently delete a single trashed Advance from Firestore subcollections and update Rider doc
+ */
+export async function permanentlyDeleteAdvanceFromFirestore(
+  userId: string,
+  updatedRider: Rider,
+  advanceId: string,
+  userEmail?: string | null
+): Promise<void> {
+  if (!advanceId) return;
+  const cleanId = advanceId.replace(/^adv-/, '');
+  const ops: Promise<any>[] = [
+    deleteDoc(doc(db, 'advances', cleanId)).catch(() => {}),
+  ];
+  if (cleanId !== advanceId) {
+    ops.push(deleteDoc(doc(db, 'advances', advanceId)).catch(() => {}));
+  }
+  if (userId) {
+    ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', cleanId)).catch(() => {}));
+    if (cleanId !== advanceId) {
+      ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', advanceId)).catch(() => {}));
+    }
+    ops.push(saveRiderToFirestore(userId, updatedRider, userEmail).catch(() => {}));
+  }
+  await Promise.all(ops);
+}
+
+/**
+ * Empty All / Auto-Purge expired trash records from Firestore cleanly in chunks
+ */
+export async function emptyAllTrashInFirestore(
+  userId: string,
+  trashedEntryIds: string[],
+  trashedRiderIds: string[],
+  trashedAdvances: Array<{ advanceId: string }>,
+  ridersWithPrunedAdvances: Rider[],
+  userEmail?: string | null
+): Promise<void> {
+  const ops: Promise<any>[] = [];
+
+  trashedEntryIds.forEach((entryId) => {
+    ops.push(permanentlyDeleteDeliveryFromFirestore(userId, entryId));
+  });
+
+  trashedRiderIds.forEach((riderId) => {
+    ops.push(permanentlyDeleteRiderFromFirestore(userId, riderId));
+  });
+
+  trashedAdvances.forEach(({ advanceId }) => {
+    const cleanId = advanceId.replace(/^adv-/, '');
+    ops.push(deleteDoc(doc(db, 'advances', cleanId)).catch(() => {}));
+    if (cleanId !== advanceId) {
+      ops.push(deleteDoc(doc(db, 'advances', advanceId)).catch(() => {}));
+    }
+    if (userId) {
+      ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', cleanId)).catch(() => {}));
+      if (cleanId !== advanceId) {
+        ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', advanceId)).catch(() => {}));
+      }
+    }
+  });
+
+  if (userId) {
+    ridersWithPrunedAdvances.forEach((r) => {
+      ops.push(saveRiderToFirestore(userId, r, userEmail).catch(() => {}));
+    });
+  }
+
+  // Process in manageable batches so mobile network never saturates
+  const CHUNK_SIZE = 20;
+  for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+    await Promise.all(ops.slice(i, i + CHUNK_SIZE));
+  }
+}
+
 
 

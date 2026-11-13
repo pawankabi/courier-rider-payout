@@ -5,7 +5,7 @@
 import { App } from '@capacitor/app';
 import { isNativeAndroid } from '../services/nativeSms';
 
-export const APP_VERSION = '1.0.55';
+export const APP_VERSION = '1.0.58';
 export const DEFAULT_GITHUB_REPO = 'pawankabi/courier-rider-payout';
 
 let nativeAppVersionCache: string | null = null;

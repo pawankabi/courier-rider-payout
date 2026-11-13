@@ -143,9 +143,6 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     return riders.find((r) => r.id === selectedRiderId) || riders[0];
   }, [riders, selectedRiderId]);
 
-  console.log("SETTLEMENT TAB ADVANCES PROP:", advances);
-  console.log("SELECTED RIDER:", selectedRider);
-
   // 15-Day Payout Presets
   const setFirstHalfOfMonth = () => {
     const now = new Date();

@@ -28,6 +28,15 @@ export function formatDateDisplay(dateStr: string): string {
   }
 }
 
+export function toLocalDateString(dateInput?: Date | string | number): string {
+  const d = dateInput instanceof Date ? dateInput : (dateInput !== undefined ? new Date(dateInput) : new Date());
+  if (isNaN(d.getTime())) return getTodayDateString();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function getTodayDateString(): string {
   const today = new Date();
   const year = today.getFullYear();

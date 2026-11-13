@@ -98,7 +98,9 @@ export const IncentivesTab: React.FC<Props> = ({
     (riders || []).forEach((r) => {
       if (Array.isArray(r.incentives) && r.incentives.length > 0) {
         r.incentives.forEach((inc) => {
-          list.push({ entry: inc, rider: r });
+          if (!inc.isDeleted && (inc as any).status !== 'DELETED' && (inc as any).status !== 'RESET_ARCHIVED') {
+            list.push({ entry: inc, rider: r });
+          }
         });
       }
     });
@@ -132,7 +134,11 @@ export const IncentivesTab: React.FC<Props> = ({
   }, [allIncentives]);
 
   const ridersWithIncentivesCount = useMemo(() => {
-    return (riders || []).filter((r) => Array.isArray(r.incentives) && r.incentives.length > 0).length;
+    return (riders || []).filter(
+      (r) =>
+        Array.isArray(r.incentives) &&
+        r.incentives.some((inc) => !inc.isDeleted && (inc as any).status !== 'DELETED' && (inc as any).status !== 'RESET_ARCHIVED')
+    ).length;
   }, [riders]);
 
   const currentMonthIncentivesAmount = useMemo(() => {

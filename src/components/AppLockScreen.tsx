@@ -101,21 +101,6 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
     return () => clearTimeout(timer);
   }, []);
 
-  // Emergency Unlock with Active Firebase Session
-  const handleSessionRecoveryUnlock = async () => {
-    try {
-      if (disableLockOnUnlock) {
-        await setAppLockEnabled(false, auth.currentUser?.uid);
-      }
-      recordAppUnlock();
-      onUnlock();
-    } catch (err: any) {
-      console.warn('Emergency session unlock error:', err);
-      recordAppUnlock();
-      onUnlock();
-    }
-  };
-
   // Emergency Unlock with Password Verification
   const handlePasswordUnlock = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -164,10 +149,10 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
         
         {!showEmergencyUnlock ? (
           <>
-            {/* Top Security & 15-Min Inactivity Badge */}
+            {/* Top Security Badge */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs font-semibold mb-5">
               <Clock className="w-3.5 h-3.5 text-blue-400" />
-              <span>15 मिनट सुरक्षा लॉक (Device Protected)</span>
+              <span>तुरंत सुरक्षा लॉक (Device Protected)</span>
             </div>
 
             {/* Biometric / Lock Icon Pulsing Halo */}
@@ -190,7 +175,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
             </p>
 
             <p className="text-xs text-slate-400 mt-2.5 leading-relaxed">
-              15 मिनट स्क्रीन ऑफ / निष्क्रियता के बाद ऐप सुरक्षित रूप से लॉक हुआ है। फोन के फिंगरप्रिंट या स्क्रीन लॉक पिन से अनलॉक करें।
+              स्क्रीन ऑफ या ऐप बंद होने पर डेटा की सुरक्षा के लिए तुरंत लॉक सक्रिय हुआ है। फोन के फिंगरप्रिंट या स्क्रीन लॉक पिन से अनलॉक करें।
             </p>
 
             {/* Error message if cancelled or failed */}
@@ -289,28 +274,7 @@ export const AppLockScreen: React.FC<AppLockScreenProps> = ({
               </div>
             )}
 
-            {/* Option A: Fast One-Tap Verified Session Unlock */}
-            {auth.currentUser && (
-              <div className="mb-4 p-3.5 rounded-xl bg-blue-950/40 border border-blue-500/30">
-                <div className="text-xs font-bold text-blue-200 mb-1 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-                  <span>त्वरित सत्र पुनर्प्राप्ति (Instant Session Recovery)</span>
-                </div>
-                <p className="text-[11px] text-slate-300 leading-relaxed mb-3">
-                  आपके डिवाइस में पहले से सत्यापित लॉगिन मौजूद है। तुरंत डैशबोर्ड खोलने के लिए नीचे टैप करें।
-                </p>
-                <button
-                  type="button"
-                  onClick={handleSessionRecoveryUnlock}
-                  className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/30 flex items-center justify-center gap-1.5 cursor-pointer transition active:scale-98"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>सत्र सत्यापित कर ऐप खोलें</span>
-                </button>
-              </div>
-            )}
-
-            {/* Option B: Account Password Form */}
+            {/* Account Password Verification Form */}
             {activeEmail && (
               <form onSubmit={handlePasswordUnlock} className="space-y-3">
                 <div>

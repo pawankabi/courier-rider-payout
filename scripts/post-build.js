@@ -134,7 +134,10 @@ try {
 // C. Sync Rider Companion Flavor Assets
 console.log('📦 Isolating Rider assets into android/app/src/rider/assets/public...');
 try {
-  if (!fs.existsSync(companionDir)) {
+  if (process.env.VITE_SKIP_COMPANION !== 'true') {
+    if (fs.existsSync(companionDir)) {
+      fs.rmSync(companionDir, { recursive: true, force: true });
+    }
     console.log('   - Building Companion Rider Web Flavor (VITE_APP_TARGET=cod_companion)...');
     try {
       execSync('npx vite build --outDir dist-companion', {
@@ -145,6 +148,8 @@ try {
       console.warn('   - Companion build fallback: copying main dist as base');
       fs.cpSync(distDir, companionDir, { recursive: true });
     }
+  } else if (!fs.existsSync(companionDir)) {
+    fs.cpSync(distDir, companionDir, { recursive: true });
   }
 
   fs.mkdirSync(riderAssetsDir, { recursive: true });

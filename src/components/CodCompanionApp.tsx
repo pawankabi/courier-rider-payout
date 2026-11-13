@@ -63,6 +63,7 @@ import {
   subscribeToHubRiders,
   updateSingleRiderEntryInSheet,
   toggleDayEndLockForSheet,
+  saveCodCacheSafely,
   normalizePhoneNumber,
   resolveHubIdFromPhone,
   mergeCodEntriesNonDestructively,
@@ -1102,14 +1103,19 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         entries: nextEntries,
         updatedAt: new Date().toISOString(),
       };
-      // Dual Backup in Phone Memory:
+      // Dual Backup in Phone Memory with Quota Guard:
       try {
+        const sheetJson = JSON.stringify(updatedSheet);
+        const entriesJson = JSON.stringify(nextEntries);
+        const pairs: Array<[string, string]> = [
+          [`cp_cod_sheet_${selectedDate}`, sheetJson],
+          [`cod_entries_${selectedDate}`, entriesJson],
+        ];
         if (currentHubId) {
-          localStorage.setItem(`cp_cod_sheet_${currentHubId}_${selectedDate}`, JSON.stringify(updatedSheet));
-          localStorage.setItem(`cod_entries_${currentHubId}_${selectedDate}`, JSON.stringify(nextEntries));
+          pairs.unshift([`cod_entries_${currentHubId}_${selectedDate}`, entriesJson]);
+          pairs.unshift([`cp_cod_sheet_${currentHubId}_${selectedDate}`, sheetJson]);
         }
-        localStorage.setItem(`cp_cod_sheet_${selectedDate}`, JSON.stringify(updatedSheet));
-        localStorage.setItem(`cod_entries_${selectedDate}`, JSON.stringify(nextEntries));
+        saveCodCacheSafely(pairs, currentHubId || undefined);
       } catch {}
       return updatedSheet;
     });

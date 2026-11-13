@@ -12,6 +12,7 @@ import { Rider, DeliveryEntry, SettlementRecord, PublicRiderStatement, RiderAdva
 import { calculatePureRiderLedger, purgePhantomAdvances } from '../utils/pureLedgerEngine';
 import { calculateNetActiveAdvance } from '../utils/payoutCalculations';
 import { syncPublicRiderStatement } from './firestoreSync';
+import { getTodayDateString } from '../utils/formatters';
 import { 
   loadRidersFromStorage, 
   saveRidersToStorage, 
@@ -334,7 +335,7 @@ export function exportEmergencySafetyBackup(
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `सुरक्षा_कवच_बैकअप_${new Date().toISOString().split('T')[0]}_${Date.now()}.json`;
+    a.download = `सुरक्षा_कवच_बैकअप_${getTodayDateString()}_${Date.now()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

@@ -93,7 +93,7 @@ import { validateImageFile, compressAndEncodeImage } from '../utils/imageUpload'
 import { getAppShareUrl, copyAppShareLink, SHARE_SUCCESS_MESSAGE } from '../utils/shareLink';
 import { exportBulkRidersToCSV, exportSingleRiderToCSV } from '../utils/csvExport';
 import { generatePayoutPDF } from '../utils/pdfGenerator';
-import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
+import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits, getTodayDateString } from '../utils/formatters';
 import { UserManagementModal } from './UserManagementModal';
 import { SingleRiderDetailModal } from './SingleRiderDetailModal';
 import { AdminBillingExpiryAndSlips } from './AdminBillingExpiryAndSlips';
@@ -410,7 +410,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       return;
     }
     const dates = workspaceData.entries.map((e) => e.date).sort();
-    const startDate = dates[0] || new Date().toISOString().split('T')[0];
+    const startDate = dates[0] || getTodayDateString();
     const endDate = dates[dates.length - 1] || startDate;
 
     generatePayoutPDF({
@@ -1781,7 +1781,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                               generatePayoutPDF({
                                 title: `Rider Payout Statement - ${rider.name}`,
                                 riderFilterName: rider.name,
-                                startDate: dates[0] || new Date().toISOString().split('T')[0],
+                                startDate: dates[0] || getTodayDateString(),
                                 endDate: dates[dates.length - 1] || dates[0],
                                 entries: riderEntries,
                                 riders: [rider],

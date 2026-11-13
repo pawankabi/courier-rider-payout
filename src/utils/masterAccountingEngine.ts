@@ -89,6 +89,9 @@ export function purgeCorruptAdvances(advances: RiderAdvanceEntry[]): RiderAdvanc
 
   for (const adv of advances) {
     if (!adv) continue;
+    if (adv.isDeleted === true || (adv as any).status === 'DELETED' || (adv as any).status === 'RESET_ARCHIVED') {
+      continue;
+    }
     const amt = Number(adv.amount) || 0;
     if (amt <= 0) continue;
 
@@ -442,9 +445,19 @@ export function calculateMasterLedger(
   }> = [];
 
   // 1. Advance Entries Taken by Rider (Minus -)
+  // Skip carry-forward tokens (adv_rem_*, adv_deficit_*, settlement_adv_*) because original advances + settlements already represent them without doubling!
   cleanAdvances.forEach((adv) => {
     const amt = Number(adv.amount) || 0;
     if (amt <= 0) return;
+    const advId = String(adv.id || (adv as any)._id || '').trim();
+    if (
+      advId.startsWith('adv_rem_') ||
+      advId.startsWith('adv_deficit_') ||
+      advId.startsWith('settlement_adv_') ||
+      advId.endsWith('_rem')
+    ) {
+      return;
+    }
     const isRec = Boolean(adv.isRecovery || adv.type === 'recovery');
     const dateVal = adv.date || adv.createdAt || '';
     const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
@@ -483,11 +496,12 @@ export function calculateMasterLedger(
     }
   });
 
-  // 2. Active standalone incentives (not already in a settlement)
+  // 2. Active standalone incentives (not already in a settlement or deleted)
   (rider.incentives || []).forEach((inc) => {
+    if (!inc || (inc as any).isDeleted === true || (inc as any).status === 'DELETED' || (inc as any).status === 'RESET_ARCHIVED') return;
     const amt = Number(inc.amount) || 0;
     if (amt <= 0) return;
-    if (inc.isSettled || inc.isPaid || (inc as any).status === 'PAID') return;
+    if (inc.isSettled || inc.isPaid || (inc as any).status === 'PAID' || inc.settlementId || inc.settledPayoutId || inc.settledInPayoutId) return;
     const dateVal = inc.date || inc.createdAt || '';
     const timestamp = dateVal ? new Date(dateVal).getTime() : 0;
 

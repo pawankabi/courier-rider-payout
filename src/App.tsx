@@ -59,7 +59,12 @@ import {
   writeIncentiveEntryToFirestore,
   deleteAdvanceFromFirestore,
   deleteIncentiveFromFirestore,
-  resetRiderAccountInFirestore
+  resetRiderAccountInFirestore,
+  syncSettledAdvancesAndIncentivesToFirestore,
+  permanentlyDeleteDeliveryFromFirestore,
+  permanentlyDeleteRiderFromFirestore,
+  permanentlyDeleteAdvanceFromFirestore,
+  emptyAllTrashInFirestore
 } from './services/firestoreSync';
 import { 
   formatIncentiveSmsText, 
@@ -613,10 +618,10 @@ function MainCourierApp() {
     const r = riders.find((x) => x.id === viewingLedgerRiderId);
     if (!r) return null;
 
-    const riderSettlements = settlements.filter((s) => s.riderId === r.id);
+    const riderSettlements = settlements.filter((s) => !s.isDeleted && s.riderId === r.id);
     const sanitized = reindexAndSanitizeRiderBalances([r], riderSettlements).updatedRiders[0] || r;
 
-    const riderDeliveries = entries.filter((e) => e.riderId === r.id);
+    const riderDeliveries = entries.filter((e) => !e.isDeleted && e.riderId === r.id);
     const unpaidDels = riderDeliveries.filter((e) => e.status === 'Unpaid');
     const paidDels = riderDeliveries
       .filter((e) => e.status === 'Paid')
@@ -1552,7 +1557,7 @@ function MainCourierApp() {
   // Run a global ledger re-index so every rider's ledger sheet immediately recalculates correctly.
   // Any rider whose previous settlements are PAID will immediately flip from red "लेना बाकी" to green/neutral "हिसाब चुकता: ₹0".
   useEffect(() => {
-    if (riders.length > 0 && settlements.length > 0) {
+    if (riders.length > 0) {
       const { updatedRiders, hasChanges } = reindexAndSanitizeRiderBalances(riders, settlements);
       if (hasChanges) {
         setRiders(updatedRiders);
@@ -1560,7 +1565,84 @@ function MainCourierApp() {
         saveRidersToStorage(updatedRiders, targetUid);
       }
     }
-  }, [settlements]);
+  }, [settlements, riders.length]);
+
+  // RULE 5: 30-DAY AUTOMATIC TRASH BIN PURGE (Storage Optimization for Firebase & Device)
+  // Runs once per session after cloud hydration finishes; strictly requires valid deletedAt >= 30 days old.
+  const trashAutoPurgeDoneRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isInitialized || isDataLoading) return;
+    const effectiveUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
+    const sessionScopeKey = effectiveUid || 'guest';
+    if (trashAutoPurgeDoneRef.current === sessionScopeKey) return;
+    if (riders.length === 0 && entries.length === 0) return;
+
+    trashAutoPurgeDoneRef.current = sessionScopeKey;
+
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+    const nowMs = Date.now();
+    const isExpired = (deletedAt?: string) => {
+      if (!deletedAt) return false;
+      const ts = new Date(deletedAt).getTime();
+      return !isNaN(ts) && nowMs - ts >= THIRTY_DAYS_MS;
+    };
+
+    const expiredEntryIds = entries
+      .filter((e) => e.isDeleted && isExpired(e.deletedAt))
+      .map((e) => e.id);
+    const expiredRiderIds = riders
+      .filter((r) => r.isDeleted && isExpired(r.deletedAt))
+      .map((r) => r.id);
+
+    const expiredAdvances: Array<{ advanceId: string }> = [];
+    const ridersWithPrunedAdvances: Rider[] = [];
+
+    const nextRiders = riders
+      .filter((r) => !expiredRiderIds.includes(r.id))
+      .map((r) => {
+        const advs = r.advances || [];
+        let changed = false;
+        const keptAdvs = advs.filter((adv) => {
+          const isTrashed = Boolean(adv.isDeleted || adv.status === 'DELETED' || adv.status === 'RESET_ARCHIVED');
+          if (isTrashed && isExpired(adv.deletedAt)) {
+            expiredAdvances.push({ advanceId: adv.id });
+            changed = true;
+            return false;
+          }
+          return true;
+        });
+        if (changed) {
+          const updatedR = { ...r, advances: keptAdvs };
+          ridersWithPrunedAdvances.push(updatedR);
+          return updatedR;
+        }
+        return r;
+      });
+
+    if (expiredEntryIds.length === 0 && expiredRiderIds.length === 0 && expiredAdvances.length === 0) {
+      return;
+    }
+
+    if (expiredEntryIds.length > 0) {
+      const nextEntries = entries.filter((e) => !expiredEntryIds.includes(e.id));
+      updateEntries(nextEntries);
+    }
+    if (expiredRiderIds.length > 0 || ridersWithPrunedAdvances.length > 0) {
+      updateRiders(nextRiders);
+    }
+
+    const ownerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+    emptyAllTrashInFirestore(
+      effectiveUid || '',
+      expiredEntryIds,
+      expiredRiderIds,
+      expiredAdvances,
+      ridersWithPrunedAdvances,
+      ownerEmail
+    ).catch((err) => {
+      console.warn('30-day trash auto-purge background notice:', err);
+    });
+  }, [isInitialized, isDataLoading, inspectedUser, currentUser, riders, entries]);
 
   // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
   useEffect(() => {
@@ -1676,6 +1758,20 @@ function MainCourierApp() {
     saveDeliveriesToStorage(newEntries, targetUid);
   };
 
+  const syncRiderPublicLedgerInBackground = (riderId?: string, nextEntries: DeliveryEntry[] = entries) => {
+    if (!riderId) return;
+    const targetRider = riders.find((r) => r.id === riderId);
+    if (!targetRider) return;
+    syncPublicRiderStatement(
+      targetRider,
+      targetRider.advances || [],
+      settlements,
+      nextEntries,
+      userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+      userRateConfig.hubSignature
+    ).catch(() => {});
+  };
+
   // Add Delivery Entry
   const handleAddEntry = async (entryData: Omit<DeliveryEntry, 'id' | 'createdAt'>) => {
     const currentOwnerId = inspectedUser ? inspectedUser.uid : (currentUser?.uid || 'guest');
@@ -1691,6 +1787,7 @@ function MainCourierApp() {
     };
     const updated = [newEntry, ...entries];
     updateEntries(updated);
+    syncRiderPublicLedgerInBackground(newEntry.riderId, updated);
 
     if (targetUid) {
       setSyncStatus('syncing');
@@ -1735,6 +1832,7 @@ function MainCourierApp() {
     };
     const updated = entries.map((e) => (e.id === updatedEntry.id ? entryWithOwnership : e));
     updateEntries(updated);
+    syncRiderPublicLedgerInBackground(entryWithOwnership.riderId, updated);
 
     if (targetUid) {
       setSyncStatus('syncing');
@@ -1752,8 +1850,10 @@ function MainCourierApp() {
   // Soft-Delete Delivery Entry (Zero Data Loss) - Protected by Master PIN
   const handleDeleteEntry = async (id: string): Promise<void> => {
     return executeWithPinVerification(async () => {
+      const targetEntry = entries.find((e) => e.id === id);
       const updated = entries.map((e) => (e.id === id ? { ...e, isDeleted: true, deletedAt: new Date().toISOString() } : e));
       updateEntries(updated);
+      syncRiderPublicLedgerInBackground(targetEntry?.riderId, updated);
 
       if (targetUid) {
         setSyncStatus('syncing');
@@ -1775,8 +1875,10 @@ function MainCourierApp() {
 
   // Restore Delivery Entry from Trash
   const handleRestoreEntry = async (id: string) => {
+    const targetEntry = entries.find((e) => e.id === id);
     const updated = entries.map((e) => (e.id === id ? { ...e, isDeleted: false, deletedAt: undefined } : e));
     updateEntries(updated);
+    syncRiderPublicLedgerInBackground(targetEntry?.riderId, updated);
 
     if (targetUid) {
       setSyncStatus('syncing');
@@ -1971,6 +2073,106 @@ function MainCourierApp() {
     });
   };
 
+  // Permanent Delete Single Entry from Trash Bin (frees device & Firestore storage immediately)
+  const handlePermanentDeleteEntry = async (entryId: string) => {
+    const nextEntries = entries.filter((e) => e.id !== entryId);
+    updateEntries(nextEntries);
+    if (targetUid) {
+      try {
+        await permanentlyDeleteDeliveryFromFirestore(targetUid, entryId);
+      } catch (err) {
+        console.warn('Permanent delete delivery notice:', err);
+      }
+    }
+  };
+
+  // Permanent Delete Single Rider from Trash Bin
+  const handlePermanentDeleteRider = async (riderId: string) => {
+    const nextRiders = riders.filter((r) => r.id !== riderId);
+    updateRiders(nextRiders);
+    if (targetUid) {
+      try {
+        await permanentlyDeleteRiderFromFirestore(targetUid, riderId);
+      } catch (err) {
+        console.warn('Permanent delete rider notice:', err);
+      }
+    }
+  };
+
+  // Permanent Delete Single Advance from Trash Bin
+  const handlePermanentDeleteAdvance = async (riderId: string, advanceId: string) => {
+    const targetRider = riders.find((r) => r.id === riderId);
+    if (!targetRider) return;
+    const prunedAdvances = (targetRider.advances || []).filter((a) => a.id !== advanceId);
+    const updatedRider: Rider = { ...targetRider, advances: prunedAdvances };
+    const nextRiders = riders.map((r) => (r.id === riderId ? updatedRider : r));
+    updateRiders(nextRiders);
+    if (targetUid) {
+      const ownerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+      try {
+        await permanentlyDeleteAdvanceFromFirestore(targetUid, updatedRider, advanceId, ownerEmail);
+      } catch (err) {
+        console.warn('Permanent delete advance notice:', err);
+      }
+    }
+  };
+
+  // Empty Entire Trash Bin Immediately (Purge all trashed deliveries, riders, and advances)
+  const handleEmptyTrash = async () => {
+    const trashedEntryIds = entries.filter((e) => Boolean(e.isDeleted)).map((e) => e.id);
+    const trashedRiderIds = riders.filter((r) => Boolean(r.isDeleted)).map((r) => r.id);
+    const trashedAdvances: Array<{ advanceId: string }> = [];
+    const ridersWithPrunedAdvances: Rider[] = [];
+
+    const nextRiders = riders
+      .filter((r) => !r.isDeleted)
+      .map((r) => {
+        const advs = r.advances || [];
+        let changed = false;
+        const kept = advs.filter((adv) => {
+          if (adv.isDeleted || adv.status === 'DELETED' || adv.status === 'RESET_ARCHIVED') {
+            trashedAdvances.push({ advanceId: adv.id });
+            changed = true;
+            return false;
+          }
+          return true;
+        });
+        if (changed) {
+          const updatedR = { ...r, advances: kept };
+          ridersWithPrunedAdvances.push(updatedR);
+          return updatedR;
+        }
+        return r;
+      });
+
+    if (trashedEntryIds.length > 0) {
+      updateEntries(entries.filter((e) => !e.isDeleted));
+    }
+    if (trashedRiderIds.length > 0 || ridersWithPrunedAdvances.length > 0) {
+      updateRiders(nextRiders);
+    }
+
+    if (targetUid) {
+      const ownerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+      try {
+        await emptyAllTrashInFirestore(
+          targetUid,
+          trashedEntryIds,
+          trashedRiderIds,
+          trashedAdvances,
+          ridersWithPrunedAdvances,
+          ownerEmail
+        );
+      } catch (err) {
+        console.warn('Empty trash Firestore notice:', err);
+      }
+    }
+    setToastMessage({
+      text: 'कचरा पेटी पूरी तरह साफ कर दी गई। स्टोरेज खाली हुआ!',
+      type: 'success',
+    });
+  };
+
   // Mark all entries as Paid with optional advance deduction
   const handleMarkEntriesPaid = async (
     entryIds: string[],
@@ -2100,6 +2302,23 @@ function MainCourierApp() {
         saveRidersToStorage(updatedRiders, targetUid);
         if (targetUid) {
           saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch(() => {});
+          const touchedAdvances = updatedAdvances.filter(
+            (a) =>
+              a.settlementId === settlementId ||
+              a.settledPayoutId === settlementId ||
+              (a.id || '').includes(settlementId)
+          );
+          const touchedIncentives = updatedIncentives.filter(
+            (i) => i.settlementId === settlementId || i.settledPayoutId === settlementId
+          );
+          if (touchedAdvances.length > 0 || touchedIncentives.length > 0) {
+            syncSettledAdvancesAndIncentivesToFirestore(targetUid, touchedAdvances, touchedIncentives, {
+              riderId: targetRider.id,
+              riderName: targetRider.name,
+              riderPhone: targetRider.phone,
+              createdBy: currentOwnerEmail || currentOwnerId,
+            }).catch(() => {});
+          }
         }
 
         // Sync public statement ledger for this rider with zeroed settled balance
@@ -2160,7 +2379,7 @@ function MainCourierApp() {
           riderName: updatedRider.name,
           riderPhone: updatedRider.phone,
           amount: newAdvance.amount,
-          date: newAdvance.date || new Date().toISOString().split('T')[0],
+          date: newAdvance.date || getTodayDateString(),
           reason: newAdvance.reason || 'सामान्य एडवांस',
           runningBalance: newAdvance.runningBalance,
         });
@@ -2295,10 +2514,17 @@ function MainCourierApp() {
       updatedIncentives = [newIncEntry, ...existingList];
     }
 
-    const newTotal = updatedIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+    const finState = calculateRiderFinancialState(
+      targetRider.advances,
+      updatedIncentives,
+      settlements,
+      targetRider.id
+    );
+    const newTotal = finState.netIncentive;
 
     const updatedRider: Rider = {
       ...targetRider,
+      totalAdvance: finState.netAdvance,
       totalIncentive: newTotal,
       incentives: updatedIncentives,
     };
@@ -2376,10 +2602,17 @@ function MainCourierApp() {
     if (!targetRider) return;
 
     const remainingIncentives = (targetRider.incentives || []).filter((i) => i.id !== incentiveId);
-    const newTotal = remainingIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+    const finState = calculateRiderFinancialState(
+      targetRider.advances,
+      remainingIncentives,
+      settlements,
+      targetRider.id
+    );
+    const newTotal = finState.netIncentive;
 
     const updatedRider: Rider = {
       ...targetRider,
+      totalAdvance: finState.netAdvance,
       totalIncentive: newTotal,
       incentives: remainingIncentives,
     };
@@ -2510,6 +2743,9 @@ function MainCourierApp() {
       return e;
     });
     updateEntries(updated);
+    if (toggledEntry) {
+      syncRiderPublicLedgerInBackground((toggledEntry as DeliveryEntry).riderId, updated);
+    }
 
     if (targetUid && toggledEntry) {
       setSyncStatus('syncing');
@@ -2625,7 +2861,7 @@ function MainCourierApp() {
     (dashboardRiders || []).forEach((r) => {
       if (Array.isArray(r.advances) && r.advances.length > 0) {
         r.advances.forEach((adv) => {
-          if (adv) {
+          if (adv && !adv.isDeleted && (adv as any).status !== 'DELETED' && (adv as any).status !== 'RESET_ARCHIVED') {
             list.push({
               ...adv,
               riderId: adv.riderId || r.id,
@@ -3588,7 +3824,7 @@ function MainCourierApp() {
         onOpenChangeSecurityPin={() => setIsChangePinModalOpen(true)}
       />
 
-      {/* Zero Data Loss - Recycle Bin & Recovery Modal */}
+      {/* Zero Data Loss - Recycle Bin & 30-Day Auto-Purge Recovery Modal */}
       <TrashRecoveryModal
         isOpen={isTrashRecoveryOpen}
         onClose={() => setIsTrashRecoveryOpen(false)}
@@ -3597,6 +3833,10 @@ function MainCourierApp() {
         onRestoreRider={handleRestoreRider}
         onRestoreEntry={handleRestoreEntry}
         onRestoreAdvance={handleRestoreAdvance}
+        onPermanentDeleteEntry={handlePermanentDeleteEntry}
+        onPermanentDeleteRider={handlePermanentDeleteRider}
+        onPermanentDeleteAdvance={handlePermanentDeleteAdvance}
+        onEmptyTrash={handleEmptyTrash}
       />
 
       {/* Automated Daily Cloud Snapshots Modal */}
@@ -3769,7 +4009,7 @@ function MainCourierApp() {
                   ...existing,
                   amount: updatedData.amount,
                   reason: updatedData.reason || existing.reason || 'सामान्य एडवांस',
-                  date: updatedData.date || existing.date || new Date().toISOString().split('T')[0],
+                  date: updatedData.date || existing.date || getTodayDateString(),
                   updatedAt: new Date().toISOString(),
                 };
                 updatedAdvances = sourceList.map((a, idx) => (idx === matchIndex ? updatedAdv : a));
@@ -3783,7 +4023,7 @@ function MainCourierApp() {
                   riderId: rider.id,
                   amount: updatedData.amount,
                   reason: updatedData.reason || 'ओपनिंग एडवांस',
-                  date: updatedData.date || new Date().toISOString().split('T')[0],
+                  date: updatedData.date || getTodayDateString(),
                   runningBalance: updatedData.amount,
                   createdAt: new Date().toISOString(),
                   updatedAt: new Date().toISOString(),
@@ -3806,15 +4046,18 @@ function MainCourierApp() {
                 ? rider.advances
                 : (inAppLedgerInitialStatement?.advances || []);
 
-              const rem = sourceList.filter(
-                (a) => a.id !== cleanId && a.id !== advId && `adv-${a.id}` !== advId
+              const nowIso = new Date().toISOString();
+              const softDeletedList = sourceList.map((a) =>
+                a.id === cleanId || a.id === advId || `adv-${a.id}` === advId
+                  ? { ...a, isDeleted: true, deletedAt: nowIso, status: 'DELETED' }
+                  : a
               );
-              const activeAdv = cleanId === 'prior-settled-advance' && rem.length === 0
+              const activeAdv = cleanId === 'prior-settled-advance'
                 ? 0
-                : calculateActiveAdvanceTotal(rem, settlements, rider.id);
+                : calculateActiveAdvanceTotal(softDeletedList, settlements, rider.id);
               const activeInc = calculateActiveIncentiveTotal(rider.incentives, settlements, rider.id);
               const total = Math.max(0, activeAdv - activeInc);
-              const updated: Rider = { ...rider, totalAdvance: total, advances: rem };
+              const updated: Rider = { ...rider, totalAdvance: total, advances: softDeletedList };
               await handleDeleteRiderAdvance(updated, cleanId);
             }}
             onDeleteIncentive={async (incId) => {

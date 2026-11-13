@@ -14,6 +14,7 @@
 import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { APP_VERSION } from '../utils/version';
+import { getTodayDateString } from '../utils/formatters';
 
 export const CURRENT_LOCAL_BUILD_TIME = 1794291636154;
 export const CURRENT_LOCAL_VERSION = APP_VERSION;
@@ -124,7 +125,7 @@ class LiveUpdateService {
   public handleManifestDiscovered(manifest: CloudVersionManifest, force = false) {
     if (typeof window === 'undefined') return;
 
-    const todayDate = new Date().toISOString().split('T')[0];
+    const todayDate = getTodayDateString();
     const dismissedDate = localStorage.getItem('cp_dismissed_update_date');
     const appliedVersion = localStorage.getItem('cp_applied_version');
 
@@ -195,7 +196,7 @@ class LiveUpdateService {
     this.updateAvailable = false;
     this.clearUpdateAvailable();
     try {
-      const todayDate = new Date().toISOString().split('T')[0];
+      const todayDate = getTodayDateString();
       localStorage.setItem('cp_dismissed_update_date', todayDate);
     } catch {}
   }
@@ -298,11 +299,6 @@ class LiveUpdateService {
     setTimeout(() => {
       window.location.reload();
     }, 250);
-
-    // Refresh smoothly with fresh cache
-    setTimeout(() => {
-      window.location.reload();
-    }, 250);
   }
 }
 
@@ -314,8 +310,8 @@ export async function syncLatestManifestToFirestore(): Promise<void> {
     const updateData = {
       version: APP_VERSION,
       buildTime: CURRENT_LOCAL_BUILD_TIME,
-      buildDate: new Date().toISOString().split('T')[0],
-      releaseNotes: 'v1.0.30 - Zero Data Loss Protection, 1-Click Recycle Bin (कचरा पेटी), Daily Auto Cloud Snapshots, Daily Hub P&L (लाभ-हानि), Rider Attendance (हाजिरी), and Master Security PIN',
+      buildDate: getTodayDateString(),
+      releaseNotes: `v${APP_VERSION} - Safe Accounting, Auto-Purge Trash Bin (30 Days), COD Quota Guard & Security Updates`,
       updatedAt: new Date().toISOString(),
     };
     await setDoc(doc(db, 'app_updates', 'latest'), updateData, { merge: true });

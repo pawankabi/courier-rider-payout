@@ -73,6 +73,8 @@ export function isUnsettledIncentive(
   settlements?: SettlementRecord[],
   riderId?: string
 ): boolean {
+  if (!inc) return false;
+  if ((inc as any).isDeleted === true || (inc as any).status === 'DELETED' || (inc as any).status === 'RESET_ARCHIVED') return false;
   if (inc.isSettled === true || inc.isPaid === true) return false;
   if ((inc as any).status === 'PAID') return false;
   if (inc.settledInPayoutId || inc.settledPayoutId || inc.settlementId) return false;
@@ -124,6 +126,7 @@ export function isUnsettledAdvance(
   riderId?: string
 ): boolean {
   if (!adv) return false;
+  if (adv.isDeleted === true || (adv as any).status === 'DELETED' || (adv as any).status === 'RESET_ARCHIVED') return false;
   const advId = String(adv.id || (adv as any)._id || '').trim();
 
   // 1) adv.isSettled !== true && (adv as any).status !== 'PAID'
@@ -189,6 +192,8 @@ export function calculateActiveAdvanceTotal(
   // 2. Total active un-settled cash recoveries
   const { settledAdvIds } = getSettlementContext(settlements, riderId);
   const recoveries = advances.filter((a) => {
+    if (!a) return false;
+    if (a.isDeleted === true || (a as any).status === 'DELETED' || (a as any).status === 'RESET_ARCHIVED') return false;
     if (a.isSettled === true || a.isDeducted === true || (a as any).status === 'PAID' || a.settlementId) return false;
     if (settledAdvIds.has(a.id)) return false;
     return (a.isRecovery || a.type === 'recovery') && !a.id?.startsWith('settle_adj') && (Number(a.amount) || 0) !== 0;
@@ -491,6 +496,10 @@ export function reindexAndSanitizeRiderBalances(
     const sanitizedAdvances: RiderAdvanceEntry[] = [];
 
     sortedRegular.forEach((adv) => {
+      if (adv.isDeleted === true || (adv as any).status === 'DELETED' || (adv as any).status === 'RESET_ARCHIVED') {
+        sanitizedAdvances.push(adv);
+        return;
+      }
       const advId = String(adv.id || (adv as any)._id || '').trim();
       const advAmt = Number(adv.amount) || 0;
       const advDate = adv.date || (adv.createdAt ? adv.createdAt.split('T')[0] : '');
@@ -556,22 +565,30 @@ export function reindexAndSanitizeRiderBalances(
       if (net < 0) {
         const deficitAmt = Math.abs(net);
         const deficitId = `adv_deficit_${s.id}`;
+        const sTimestamp = new Date(s.paidAt || s.endDate).getTime() || 0;
 
-        // Check if settled by a strictly later settlement
-        const isSettledInLaterSettlement = riderPaidSettlements.some(
-          (laterS) =>
-            laterS.id !== s.id &&
-            laterS.endDate > s.endDate &&
+        // Check if settled or superseded by a strictly later settlement
+        const isSettledInLaterSettlement = riderPaidSettlements.some((laterS) => {
+          if (laterS.id === s.id) return false;
+          const laterTs = new Date(laterS.paidAt || laterS.endDate).getTime() || 0;
+          const isLater = laterS.endDate > s.endDate || laterTs > sTimestamp;
+          if (!isLater) return false;
+          const explicitlySettled =
             Array.isArray(laterS.settledAdvanceIds) &&
-            laterS.settledAdvanceIds.includes(deficitId)
-        );
+            (laterS.settledAdvanceIds.includes(deficitId) || laterS.settledAdvanceIds.includes(`adv_rem_${s.id}`));
+          return explicitlySettled || Number(laterS.advanceAmount) > 0;
+        });
 
         const existingIdx = sanitizedAdvances.findIndex(
           (a) => a.id === deficitId || a.id === `adv_rem_${s.id}` || a.id === `${s.id}_rem`
         );
 
         if (existingIdx >= 0) {
-          if (!isSettledInLaterSettlement) {
+          if (
+            !isSettledInLaterSettlement &&
+            !sanitizedAdvances[existingIdx].isDeleted &&
+            (sanitizedAdvances[existingIdx] as any).status !== 'DELETED'
+          ) {
             sanitizedAdvances[existingIdx] = {
               ...sanitizedAdvances[existingIdx],
               amount: deficitAmt,
@@ -583,7 +600,12 @@ export function reindexAndSanitizeRiderBalances(
         } else if (!isSettledInLaterSettlement) {
           // Only add if not already covered by another active residual advance
           const hasResidualAlready = sanitizedAdvances.some(
-            (a) => !a.isSettled && (a as any).status !== 'PAID' && (a.id?.includes('rem') || a.id?.includes('deficit'))
+            (a) =>
+              !a.isDeleted &&
+              (a as any).status !== 'DELETED' &&
+              !a.isSettled &&
+              (a as any).status !== 'PAID' &&
+              (a.id?.startsWith('adv_rem_') || a.id?.startsWith('adv_deficit_') || a.id?.endsWith('_rem'))
           );
           if (!hasResidualAlready) {
             riderChanged = true;
@@ -613,6 +635,10 @@ export function reindexAndSanitizeRiderBalances(
 
     const sanitizedIncentives: RiderIncentiveEntry[] = [];
     sortedIncentives.forEach((inc) => {
+      if ((inc as any).isDeleted === true || (inc as any).status === 'DELETED' || (inc as any).status === 'RESET_ARCHIVED') {
+        sanitizedIncentives.push(inc);
+        return;
+      }
       const incId = String(inc.id || '').trim();
       const isSettled =
         settledIncIdSet.has(incId) ||

@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { PublicRiderStatement, RiderAdvanceEntry } from '../types';
-import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits } from '../utils/formatters';
+import { formatINR, formatDateDisplay, formatPhoneNumber, getCleanPhoneDigits, getTodayDateString } from '../utils/formatters';
 import { fetchPublicRiderStatement, subscribeToPublicRiderStatement } from '../services/firestoreSync';
 import { generateStatementUrl } from '../services/smsService';
 import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
@@ -49,6 +49,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   advances: propAdvances,
   externalAdvances: propExternalAdvances,
   onBackToApp,
+  userId: propUserId,
   isAdmin = false,
   onDeleteAdvance,
   onEditAdvance,
@@ -110,26 +111,23 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     if (initialStatement) return initialStatement;
     if (typeof window !== 'undefined' && resolvedRiderId) {
       try {
-        const cachedRiders = loadRidersFromStorage();
+        const cachedRiders = loadRidersFromStorage(propUserId);
         const cleanResolved = resolvedRiderId.toLowerCase().trim();
         const localRider = (cachedRiders || []).find((r) => {
-          if (!r) return false;
+          if (!r || r.isDeleted) return false;
           const rId = (r.id || '').toLowerCase().trim();
           const rPhone = (r.phone || '').trim();
           const rName = (r.name || '').toLowerCase().trim();
           return (
             rId === cleanResolved ||
-            rPhone === cleanResolved ||
-            rPhone.endsWith(cleanResolved) ||
-            rName === cleanResolved ||
-            rName.includes(cleanResolved) ||
-            cleanResolved.includes(rName)
+            (cleanResolved.length >= 6 && (rPhone === cleanResolved || rPhone.endsWith(cleanResolved))) ||
+            rName === cleanResolved
           );
         });
 
         if (localRider) {
-          const cachedDeliveries = loadDeliveriesFromStorage(cachedRiders);
-          const cachedSettlements = loadSettlementsFromStorage();
+          const cachedDeliveries = loadDeliveriesFromStorage(cachedRiders, propUserId);
+          const cachedSettlements = loadSettlementsFromStorage(propUserId);
           return {
             riderId: localRider.id || resolvedRiderId,
             riderName: localRider.name || 'कूरियर डिलीवरी राइडर',
@@ -235,10 +233,19 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     };
   }, [onBackToApp]);
 
-  // Real-time Firestore sync & listener: guarantees instant live parity between Admin & Rider phones
+  // Real-time Firestore sync & listener:
+  // - On Rider / Public Statement view: live-subscribes to /public_statements/{riderId}
+  // - On Admin view with live initialStatement: parent App state already syncs in real time from /workspaces/{uid},
+  //   so we NEVER allow a stale /public_statements snapshot to overwrite Admin's authoritative data.
   useEffect(() => {
     let isMounted = true;
     if (!resolvedRiderId) {
+      setLoading(false);
+      return;
+    }
+
+    if (isAdmin && initialStatement) {
+      setStatement(initialStatement);
       setLoading(false);
       return;
     }
@@ -256,9 +263,9 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
           setStatement((prev) => {
             // Keep local salaries if incoming document has fewer records
             if (
-              prev?.salaries && 
-              Array.isArray(prev.salaries) && 
-              prev.salaries.length > 0 && 
+              prev?.salaries &&
+              Array.isArray(prev.salaries) &&
+              prev.salaries.length > 0 &&
               (!data.salaries || data.salaries.length < prev.salaries.length)
             ) {
               return { ...data, salaries: prev.salaries };
@@ -278,7 +285,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       isMounted = false;
       unsubscribe();
     };
-  }, [resolvedRiderId, initialStatement]);
+  }, [resolvedRiderId, initialStatement, isAdmin]);
 
   // Statement URL strictly resolved to production domain or current host origin
   const baseUrl = typeof window !== 'undefined' && window.location?.hostname?.includes('vercel.app')
@@ -305,39 +312,38 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   const isRider = !isAdmin;
 
   const effectiveSettlements = useMemo(() => {
-    if (propSettlements && Array.isArray(propSettlements) && propSettlements.length > 0) {
+    if (Array.isArray(propSettlements)) {
       return propSettlements;
     }
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && propUserId) {
       try {
-        const stored = loadSettlementsFromStorage();
+        const stored = loadSettlementsFromStorage(propUserId);
         if (stored && stored.length > 0) return stored;
       } catch {}
     }
     return statement?.salaries || [];
-  }, [propSettlements, statement?.salaries]);
+  }, [propSettlements, propUserId, statement?.salaries]);
 
   // Gather effective master advances across sources
   const effectiveAdvances = useMemo(() => {
-    const list: RiderAdvanceEntry[] = [];
-    if (propAdvances && Array.isArray(propAdvances)) {
-      list.push(...propAdvances);
-    }
-    if (propExternalAdvances && Array.isArray(propExternalAdvances)) {
-      list.push(...propExternalAdvances);
-    }
-    if (list.length > 0) {
+    if (Array.isArray(propAdvances) || Array.isArray(propExternalAdvances)) {
+      const list: RiderAdvanceEntry[] = [];
+      if (Array.isArray(propAdvances)) list.push(...propAdvances);
+      if (Array.isArray(propExternalAdvances)) list.push(...propExternalAdvances);
       return list;
     }
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && propUserId) {
       try {
-        const cachedRiders = loadRidersFromStorage();
-        const allCachedAdvances = (cachedRiders || []).flatMap((r) => r.advances || []);
+        const cachedRiders = loadRidersFromStorage(propUserId);
+        const matchingRiders = (cachedRiders || []).filter(
+          (r) => r && (r.id === resolvedRiderId || (statement?.riderPhone && r.phone === statement.riderPhone))
+        );
+        const allCachedAdvances = matchingRiders.flatMap((r) => r.advances || []);
         if (allCachedAdvances.length > 0) return allCachedAdvances;
       } catch {}
     }
     return statement?.advances || [];
-  }, [propAdvances, propExternalAdvances, statement?.advances]);
+  }, [propAdvances, propExternalAdvances, propUserId, resolvedRiderId, statement?.riderPhone, statement?.advances]);
 
   // Pure Arithmetic Accounting Calculation via pureLedgerEngine
   const { 
@@ -372,9 +378,14 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       setStatement((prev) => {
         if (!prev) return null;
         if (row.type === 'advance') {
+          const nowIso = new Date().toISOString();
           return {
             ...prev,
-            advances: (prev.advances || []).filter((a) => a.id !== row.originalId && `adv-${a.id}` !== row.id),
+            advances: (prev.advances || []).map((a) =>
+              a.id === row.originalId || `adv-${a.id}` === row.id
+                ? { ...a, isDeleted: true, deletedAt: nowIso, status: 'DELETED' }
+                : a
+            ),
           };
         }
         if (row.type === 'incentive') {
@@ -398,7 +409,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   const handleStartEditAdvance = (row: UnifiedTransactionItem) => {
     setEditingAdvanceRow(row);
     setEditAmount(row.minusAmount ? String(row.minusAmount) : '');
-    setEditDate(row.rawDate || new Date().toISOString().split('T')[0]);
+    setEditDate(row.rawDate || getTodayDateString());
     setEditReason(row.title || 'एडवांस भुगतान');
   };
 
@@ -420,7 +431,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       await onEditAdvance(editingAdvanceRow.originalId, {
         amount: numAmount,
         reason: editReason.trim() || 'एडवांस भुगतान',
-        date: editDate || new Date().toISOString().split('T')[0],
+        date: editDate || getTodayDateString(),
       });
 
       setStatement((prev) => {
@@ -455,7 +466,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   const handleStartEditIncentive = (row: UnifiedTransactionItem) => {
     setEditingIncentiveRow(row);
     setEditIncAmount(row.plusAmount ? String(row.plusAmount) : '');
-    setEditIncDate(row.rawDate || new Date().toISOString().split('T')[0]);
+    setEditIncDate(row.rawDate || getTodayDateString());
     setEditIncReason(row.title || 'इंसेंटिव / बोनस');
   };
 
@@ -477,7 +488,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       await onEditIncentive(editingIncentiveRow.originalId, {
         amount: numAmount,
         reason: editIncReason.trim() || 'इंसेंटिव / बोनस',
-        date: editIncDate || new Date().toISOString().split('T')[0],
+        date: editIncDate || getTodayDateString(),
       });
 
       setStatement((prev) => {
@@ -955,7 +966,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                 यह <strong>{statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}</strong> द्वारा जारी किया गया आधिकारिक कंप्यूटर जनरेटेड खाता विवरण है।
               </p>
               <p className="text-slate-400 text-[10px] mt-1 font-mono">
-                जनरेटेड दिनांक: {formatDateDisplay(new Date().toISOString().split('T')[0])}
+                जनरेटेड दिनांक: {formatDateDisplay(getTodayDateString())}
               </p>
             </div>
             <div className="text-right">

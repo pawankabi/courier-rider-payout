@@ -35,8 +35,27 @@ import {
 import { getTodayDateString, formatINR } from '../utils/formatters';
 import { dispatchAutomatedSms, getRiderStatementUrl } from './smsService';
 import { isNativeAndroid, sendNativeBackgroundSms } from './nativeSms';
-import { loadRidersFromStorage, saveRidersToStorage } from '../utils/storage';
+import { loadRidersFromStorage, saveRidersToStorage, trySetLocalStorageItem, reclaimLocalStorageSpace } from '../utils/storage';
 import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
+
+/**
+ * Quota-safe COD localStorage writer:
+ * Automatically prunes redundant/old COD date caches (>45 distinct dates) if browser/WebView quota is tight.
+ */
+export function saveCodCacheSafely(entriesToSave: Array<[string, string]>, hubId?: string): void {
+  if (typeof window === 'undefined') return;
+  for (const [k, v] of entriesToSave) {
+    const ok = trySetLocalStorageItem(k, v, hubId);
+    if (!ok) {
+      reclaimLocalStorageSpace(hubId);
+      try {
+        localStorage.setItem(k, v);
+      } catch {
+        // Non-fatal: Firestore remains the primary source of truth
+      }
+    }
+  }
+}
 
 const DEFAULT_COMPANY_1 = 'Valmo COD';
 const DEFAULT_COMPANY_2 = 'Xpressbees COD';
@@ -988,14 +1007,19 @@ export async function saveCodDailyEntries(
     (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
   );
   try {
-    // Dual phone memory backup: Array entries key and full sheet key
-    localStorage.setItem(localKey, JSON.stringify(cleanEntries));
-    localStorage.setItem(`cod_entries_${targetDate}`, JSON.stringify(cleanEntries));
-    localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify({ date: targetDate, entries: cleanEntries }));
+    // Dual phone memory backup with quota guard: Array entries key and full sheet key
+    const entriesJson = JSON.stringify(cleanEntries);
+    const sheetJson = JSON.stringify({ date: targetDate, entries: cleanEntries });
+    const cachePairs: Array<[string, string]> = [
+      [localKey, entriesJson],
+      [`cod_entries_${targetDate}`, entriesJson],
+      [`cp_cod_sheet_${targetDate}`, sheetJson],
+    ];
     if (userId) {
-      localStorage.setItem(`cod_entries_${userId}_${targetDate}`, JSON.stringify(cleanEntries));
-      localStorage.setItem(`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify({ date: targetDate, entries: cleanEntries }));
+      cachePairs.push([`cod_entries_${userId}_${targetDate}`, entriesJson]);
+      cachePairs.push([`cp_cod_sheet_${userId}_${targetDate}`, sheetJson]);
     }
+    saveCodCacheSafely(cachePairs, userId);
   } catch {}
 
   if (db) {
@@ -2175,8 +2199,13 @@ export function subscribeToDailyCodSheet(
         };
         activeSheetInMemory = enriched;
         try {
-          localStorage.setItem(localCacheKey, JSON.stringify(enriched));
-          localStorage.setItem(`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(defaultEntries));
+          saveCodCacheSafely(
+            [
+              [localCacheKey, JSON.stringify(enriched)],
+              [`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(defaultEntries)],
+            ],
+            effectiveHubId
+          );
         } catch {}
         onUpdate(enriched);
         return;
@@ -2240,13 +2269,18 @@ export function subscribeToDailyCodSheet(
     const pushLatestSheetUpdate = (updatedSheet: DailyCodSheetData) => {
       activeSheetInMemory = updatedSheet;
       try {
-        // Dual Backup in phone memory: full sheet and dedicated entries array
-        localStorage.setItem(localCacheKey, JSON.stringify(updatedSheet));
-        localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(updatedSheet));
+        // Dual Backup in phone memory with quota guard: full sheet and dedicated entries array
+        const sheetJson = JSON.stringify(updatedSheet);
+        const cachePairs: Array<[string, string]> = [
+          [localCacheKey, sheetJson],
+          [`cp_cod_sheet_${targetDate}`, sheetJson],
+        ];
         if (updatedSheet.entries && updatedSheet.entries.length > 0) {
-          localStorage.setItem(`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(updatedSheet.entries));
-          localStorage.setItem(`cod_entries_${targetDate}`, JSON.stringify(updatedSheet.entries));
+          const entriesJson = JSON.stringify(updatedSheet.entries);
+          cachePairs.push([`cod_entries_${effectiveHubId}_${targetDate}`, entriesJson]);
+          cachePairs.push([`cod_entries_${targetDate}`, entriesJson]);
         }
+        saveCodCacheSafely(cachePairs, effectiveHubId);
       } catch {}
       onUpdate(updatedSheet);
     };
@@ -2517,11 +2551,17 @@ export async function updateSingleRiderEntryInSheet(
       hubId: effectiveHubId,
       updatedAt: new Date().toISOString(),
     };
-    localStorage.setItem(localCacheKey, JSON.stringify(updatedSheet));
-    localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify(updatedSheet));
-    // DUAL BACKUP in phone memory: dedicated entries array for resilient 0s retrieval
-    localStorage.setItem(`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(currentEntries));
-    localStorage.setItem(`cod_entries_${targetDate}`, JSON.stringify(currentEntries));
+    const sheetJson = JSON.stringify(updatedSheet);
+    const entriesJson = JSON.stringify(currentEntries);
+    saveCodCacheSafely(
+      [
+        [localCacheKey, sheetJson],
+        [`cp_cod_sheet_${targetDate}`, sheetJson],
+        [`cod_entries_${effectiveHubId}_${targetDate}`, entriesJson],
+        [`cod_entries_${targetDate}`, entriesJson],
+      ],
+      effectiveHubId
+    );
   } catch {}
 
   // 2. Audit Trail Log: Record edit history with previousValue, updatedValue, editedAt
@@ -2668,7 +2708,7 @@ export async function toggleDayEndLockForSheet(
         sheetObj.lockedBy = isLocked ? lockedBy : undefined;
         sheetObj.lockedAt = isLocked ? new Date().toISOString() : undefined;
         sheetObj.updatedAt = new Date().toISOString();
-        localStorage.setItem(localCacheKey, JSON.stringify(sheetObj));
+        saveCodCacheSafely([[localCacheKey, JSON.stringify(sheetObj)]], effectiveHubId);
       }
     }
   } catch {}
@@ -2732,9 +2772,12 @@ export async function toggleDayEndLockForSheet(
         const archiveDocRef = doc(db, 'hubs', effectiveHubId, 'archived_cod_sheets', targetDate);
         await setDoc(archiveDocRef, archivedPayload, { merge: true });
 
-        // Save into local archive cache as well
+        // Save into local archive cache safely
         try {
-          localStorage.setItem(`cp_cod_archived_sheet_${effectiveHubId}_${targetDate}`, JSON.stringify(archivedPayload));
+          saveCodCacheSafely(
+            [[`cp_cod_archived_sheet_${effectiveHubId}_${targetDate}`, JSON.stringify(archivedPayload)]],
+            effectiveHubId
+          );
         } catch {}
 
         // Log audit event
@@ -2884,7 +2927,7 @@ export async function convertCodShortageToAdvance(
               return e;
             });
             parsed.entries = nextEntries;
-            localStorage.setItem(localSheetKey, JSON.stringify(parsed));
+            saveCodCacheSafely([[localSheetKey, JSON.stringify(parsed)]], effectiveHubId);
           }
         }
       } catch (err) {
