@@ -34,6 +34,7 @@ import {
   calculateVaultRemainingSummary,
   formatVaultSummaryShareText
 } from '../../utils/denominationUtils';
+import { saveCodWithdrawalsToSheet } from '../../services/codService';
 
 export interface DailyConsolidatedDenominationSummaryProps {
   entries: CodDailyEntry[];
@@ -42,6 +43,7 @@ export interface DailyConsolidatedDenominationSummaryProps {
   isDarkTheme?: boolean;
   hubId?: string;
   adminName?: string;
+  cloudWithdrawals?: CashWithdrawalRecord[];
   onWithdrawalsChange?: (withdrawals: CashWithdrawalRecord[]) => void;
 }
 
@@ -60,6 +62,7 @@ export const DailyConsolidatedDenominationSummary: React.FC<DailyConsolidatedDen
   isDarkTheme = false,
   hubId,
   adminName = 'हब एडमिन',
+  cloudWithdrawals,
   onWithdrawalsChange,
 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -87,8 +90,20 @@ export const DailyConsolidatedDenominationSummary: React.FC<DailyConsolidatedDen
     return [];
   });
 
-  // Re-sync when selectedDate or hubId changes
+  // Re-sync when selectedDate, hubId, or cloudWithdrawals change
   useEffect(() => {
+    if (Array.isArray(cloudWithdrawals)) {
+      setWithdrawals((prev) => {
+        const prevSig = prev.map((w) => `${w.id}:${w.totalAmount}`).join('|');
+        const cloudSig = cloudWithdrawals.map((w) => `${w.id}:${w.totalAmount}`).join('|');
+        if (prevSig === cloudSig) return prev;
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(cloudWithdrawals));
+        } catch {}
+        return cloudWithdrawals;
+      });
+      return;
+    }
     try {
       const raw = localStorage.getItem(storageKey);
       if (raw) {
@@ -102,7 +117,7 @@ export const DailyConsolidatedDenominationSummary: React.FC<DailyConsolidatedDen
     } catch (e) {
       setWithdrawals([]);
     }
-  }, [storageKey]);
+  }, [storageKey, cloudWithdrawals]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -115,6 +130,9 @@ export const DailyConsolidatedDenominationSummary: React.FC<DailyConsolidatedDen
       localStorage.setItem(storageKey, JSON.stringify(updated));
     } catch (e) {
       console.warn('Failed to save withdrawals to storage:', e);
+    }
+    if (hubId) {
+      void saveCodWithdrawalsToSheet(hubId, selectedDate, updated);
     }
     onWithdrawalsChange?.(updated);
   };

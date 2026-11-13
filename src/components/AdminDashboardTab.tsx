@@ -381,7 +381,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
     );
   }, [workspaceData, workspaceRiderSearch]);
 
-  const handleBulkExportCSV = () => {
+  const handleBulkExportCSV = async () => {
     if (!selectedUser || !workspaceData) {
       showToast('Please select a user workspace first.', 'info');
       return;
@@ -390,14 +390,18 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
       showToast('No riders in this workspace to export.', 'info');
       return;
     }
-    exportBulkRidersToCSV({
-      userName: selectedUser.displayName || selectedUser.name || selectedUser.email,
-      userEmail: selectedUser.email,
-      riders: workspaceData.riders,
-      entries: workspaceData.entries,
-      settlements: workspaceData.settlements,
-    });
-    showToast(`Bulk Excel/CSV exported for ${selectedUser.displayName || selectedUser.email}!`, 'success');
+    try {
+      await exportBulkRidersToCSV({
+        userName: selectedUser.displayName || selectedUser.name || selectedUser.email,
+        userEmail: selectedUser.email,
+        riders: workspaceData.riders,
+        entries: workspaceData.entries,
+        settlements: workspaceData.settlements,
+      });
+      showToast(`Bulk Excel/CSV exported for ${selectedUser.displayName || selectedUser.email}!`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'CSV export failed.', 'error');
+    }
   };
 
   const handleBulkExportPDF = () => {
@@ -1796,13 +1800,17 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                           <button
                             id={`quick-csv-rider-btn-${rider.id}`}
                             type="button"
-                            onClick={() => {
-                              exportSingleRiderToCSV({
-                                userName: selectedUser.displayName || selectedUser.name || selectedUser.email,
-                                userEmail: selectedUser.email,
-                                rider,
-                                entries: riderEntries,
-                              });
+                            onClick={async () => {
+                              try {
+                                await exportSingleRiderToCSV({
+                                  userName: selectedUser.displayName || selectedUser.name || selectedUser.email,
+                                  userEmail: selectedUser.email,
+                                  rider,
+                                  entries: riderEntries,
+                                });
+                              } catch (err: any) {
+                                showToast(err?.message || 'CSV export failed.', 'error');
+                              }
                             }}
                             className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
                             title="Download Single Rider Excel/CSV"

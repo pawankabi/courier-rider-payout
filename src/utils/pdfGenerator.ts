@@ -90,14 +90,15 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     return nameA.localeCompare(nameB);
   });
 
-  // Calculate overall totals
-  const totalParcels = entries.reduce((sum, e) => sum + e.parcels, 0);
-  const totalBase = entries.reduce((sum, e) => sum + e.baseAmount, 0);
-  const totalIncentive = entries.reduce((sum, e) => sum + e.incentiveAmount, 0);
-  const grandTotal = entries.reduce((sum, e) => sum + e.totalEarnings, 0);
-  const finalNetTotal = Math.max(0, grandTotal - advanceAmount);
-  const totalPaid = entries.filter((e) => e.status === 'Paid').reduce((sum, e) => sum + e.totalEarnings, 0);
-  const totalUnpaid = entries.filter((e) => e.status === 'Unpaid').reduce((sum, e) => sum + e.totalEarnings, 0);
+  // Calculate overall totals (null-safe numeric coercion)
+  const totalParcels = entries.reduce((sum, e) => sum + (Number(e?.parcels) || 0), 0);
+  const totalBase = entries.reduce((sum, e) => sum + (Number(e?.baseAmount) || 0), 0);
+  const totalIncentive = entries.reduce((sum, e) => sum + (Number(e?.incentiveAmount) || 0), 0);
+  const grandTotal = entries.reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
+  const safeAdvance = Number(advanceAmount) || 0;
+  const finalNetTotal = Math.max(0, grandTotal - safeAdvance);
+  const totalPaid = entries.filter((e) => e?.status === 'Paid').reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
+  const totalUnpaid = entries.filter((e) => e?.status === 'Unpaid').reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
 
   // Helper to determine if a specific rider should have the "Incentive" column visible
   const shouldShowRiderIncentive = (rId?: string, rEntries: DeliveryEntry[] = []): { show: boolean; baseRate: number; incentiveRate: number } => {
@@ -232,8 +233,8 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
       : `Settlement Status: Paid Rs. ${totalPaid.toLocaleString('en-IN')}  |  Unpaid Rs. ${totalUnpaid.toLocaleString('en-IN')}  |  Total Delivery Days: ${entries.length}`;
     doc.text(statusText, 36, startY + cardH + 18);
 
-    // SORT ASCENDING CHRONOLOGICALLY: Oldest to Newest
-    const sortedEntries = [...entries].sort((a, b) => a.date.localeCompare(b.date));
+    // SORT ASCENDING CHRONOLOGICALLY: Oldest to Newest (null-safe date string)
+    const sortedEntries = [...entries].sort((a, b) => String(a?.date || '').localeCompare(String(b?.date || '')));
 
     // Dynamic Columns depending on showIncentiveCol
     let headRow: string[];
@@ -244,18 +245,22 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     if (showIncentiveCol) {
       headRow = ['#', 'Date', 'Day', 'Parcels', 'Rate', 'Base Pay', 'Incentive', 'Total Pay', 'Status'];
       tableRows = sortedEntries.map((entry, index) => {
-        const dayName = getDayOfWeek(entry.date);
-        const bRate = entry.baseRate || effBaseRate;
+        const dayName = getDayOfWeek(entry?.date || '');
+        const bRate = Number(entry?.baseRate) || effBaseRate;
+        const pCount = Number(entry?.parcels) || 0;
+        const bAmt = Number(entry?.baseAmount) || 0;
+        const iAmt = Number(entry?.incentiveAmount) || 0;
+        const tEarn = Number(entry?.totalEarnings) || 0;
         return [
           (index + 1).toString(),
-          formatDateDisplay(entry.date),
+          formatDateDisplay(entry?.date || ''),
           dayName,
-          entry.parcels.toString(),
+          pCount.toString(),
           `Rs. ${bRate}`,
-          `Rs. ${entry.baseAmount.toLocaleString('en-IN')}`,
-          entry.hasIncentive ? `+Rs. ${entry.incentiveAmount.toLocaleString('en-IN')} (Yes)` : 'Rs. 0 (No)',
-          `Rs. ${entry.totalEarnings.toLocaleString('en-IN')}`,
-          entry.status,
+          `Rs. ${bAmt.toLocaleString('en-IN')}`,
+          entry?.hasIncentive ? `+Rs. ${iAmt.toLocaleString('en-IN')} (Yes)` : 'Rs. 0 (No)',
+          `Rs. ${tEarn.toLocaleString('en-IN')}`,
+          String(entry?.status || 'Unpaid'),
         ];
       });
       footRow = [
@@ -284,17 +289,20 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
       // Incentive column completely REMOVED
       headRow = ['#', 'Date', 'Day', 'Parcels', 'Rate', 'Base Pay', 'Total Pay', 'Status'];
       tableRows = sortedEntries.map((entry, index) => {
-        const dayName = getDayOfWeek(entry.date);
-        const bRate = entry.baseRate || effBaseRate;
+        const dayName = getDayOfWeek(entry?.date || '');
+        const bRate = Number(entry?.baseRate) || effBaseRate;
+        const pCount = Number(entry?.parcels) || 0;
+        const bAmt = Number(entry?.baseAmount) || 0;
+        const tEarn = Number(entry?.totalEarnings) || 0;
         return [
           (index + 1).toString(),
-          formatDateDisplay(entry.date),
+          formatDateDisplay(entry?.date || ''),
           dayName,
-          entry.parcels.toString(),
+          pCount.toString(),
           `Rs. ${bRate}`,
-          `Rs. ${entry.baseAmount.toLocaleString('en-IN')}`,
-          `Rs. ${entry.totalEarnings.toLocaleString('en-IN')}`,
-          entry.status,
+          `Rs. ${bAmt.toLocaleString('en-IN')}`,
+          `Rs. ${tEarn.toLocaleString('en-IN')}`,
+          String(entry?.status || 'Unpaid'),
         ];
       });
       footRow = [
@@ -525,11 +533,11 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
       rosterHead = ['#', 'Rider Name', 'Phone', 'Days', 'Parcels', 'Base Pay', 'Incentives', 'Gross Total', 'Status'];
       rosterRows = distinctRiderIds.map((riderId, index) => {
         const rEntries = entries.filter((e) => e.riderId === riderId);
-        const rParcels = rEntries.reduce((sum, e) => sum + e.parcels, 0);
-        const rBase = rEntries.reduce((sum, e) => sum + e.baseAmount, 0);
-        const rInc = rEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
-        const rGross = rEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
-        const rUnpaid = rEntries.filter((e) => e.status === 'Unpaid').reduce((sum, e) => sum + e.totalEarnings, 0);
+        const rParcels = rEntries.reduce((sum, e) => sum + (Number(e?.parcels) || 0), 0);
+        const rBase = rEntries.reduce((sum, e) => sum + (Number(e?.baseAmount) || 0), 0);
+        const rInc = rEntries.reduce((sum, e) => sum + (Number(e?.incentiveAmount) || 0), 0);
+        const rGross = rEntries.reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
+        const rUnpaid = rEntries.filter((e) => e?.status === 'Unpaid').reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
 
         const rObj = riderObjMap.get(riderId);
         const rName = rObj?.name || rEntries[0]?.riderName || 'Rider';
@@ -574,10 +582,10 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
       rosterHead = ['#', 'Rider Name', 'Phone', 'Days', 'Parcels', 'Base Pay', 'Gross Total', 'Status'];
       rosterRows = distinctRiderIds.map((riderId, index) => {
         const rEntries = entries.filter((e) => e.riderId === riderId);
-        const rParcels = rEntries.reduce((sum, e) => sum + e.parcels, 0);
-        const rBase = rEntries.reduce((sum, e) => sum + e.baseAmount, 0);
-        const rGross = rEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
-        const rUnpaid = rEntries.filter((e) => e.status === 'Unpaid').reduce((sum, e) => sum + e.totalEarnings, 0);
+        const rParcels = rEntries.reduce((sum, e) => sum + (Number(e?.parcels) || 0), 0);
+        const rBase = rEntries.reduce((sum, e) => sum + (Number(e?.baseAmount) || 0), 0);
+        const rGross = rEntries.reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
+        const rUnpaid = rEntries.filter((e) => e?.status === 'Unpaid').reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
 
         const rObj = riderObjMap.get(riderId);
         const rName = rObj?.name || rEntries[0]?.riderName || 'Rider';
@@ -665,13 +673,13 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     distinctRiderIds.forEach((riderId, riderIndex) => {
       const rEntries = entries
         .filter((e) => e.riderId === riderId)
-        .sort((a, b) => a.date.localeCompare(b.date));
+        .sort((a, b) => String(a?.date || '').localeCompare(String(b?.date || '')));
 
-      const rParcels = rEntries.reduce((sum, e) => sum + e.parcels, 0);
-      const rBase = rEntries.reduce((sum, e) => sum + e.baseAmount, 0);
-      const rIncentive = rEntries.reduce((sum, e) => sum + e.incentiveAmount, 0);
-      const rGross = rEntries.reduce((sum, e) => sum + e.totalEarnings, 0);
-      const rUnpaid = rEntries.filter((e) => e.status === 'Unpaid').reduce((sum, e) => sum + e.totalEarnings, 0);
+      const rParcels = rEntries.reduce((sum, e) => sum + (Number(e?.parcels) || 0), 0);
+      const rBase = rEntries.reduce((sum, e) => sum + (Number(e?.baseAmount) || 0), 0);
+      const rIncentive = rEntries.reduce((sum, e) => sum + (Number(e?.incentiveAmount) || 0), 0);
+      const rGross = rEntries.reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
+      const rUnpaid = rEntries.filter((e) => e?.status === 'Unpaid').reduce((sum, e) => sum + (Number(e?.totalEarnings) || 0), 0);
 
       const rObj = riderObjMap.get(riderId);
       const riderName = rObj?.name || rEntries[0]?.riderName || `Rider ${riderIndex + 1}`;
@@ -710,7 +718,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(255, 255, 255);
-      doc.text(`RIDER #${riderIndex + 1} OF ${distinctRiderIds.length}: ${riderName.toUpperCase()}`, 48, currentY + 14);
+      doc.text(`RIDER #${riderIndex + 1} OF ${distinctRiderIds.length}: ${String(riderName).toUpperCase()}`, 48, currentY + 14);
 
       doc.setFontSize(7.5);
       doc.setFont('helvetica', 'normal');
@@ -739,18 +747,22 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
       if (rShowIncentive) {
         subHead = ['#', 'Date', 'Day', 'Parcels', 'Rate', 'Base Pay', 'Incentive', 'Total Pay', 'Status'];
         subRows = rEntries.map((entry, idx) => {
-          const dayName = getDayOfWeek(entry.date);
-          const bRate = entry.baseRate || rBaseRate;
+          const dayName = getDayOfWeek(entry?.date || '');
+          const bRate = Number(entry?.baseRate) || rBaseRate;
+          const pCount = Number(entry?.parcels) || 0;
+          const bAmt = Number(entry?.baseAmount) || 0;
+          const iAmt = Number(entry?.incentiveAmount) || 0;
+          const tEarn = Number(entry?.totalEarnings) || 0;
           return [
             (idx + 1).toString(),
-            formatDateDisplay(entry.date),
+            formatDateDisplay(entry?.date || ''),
             dayName,
-            entry.parcels.toString(),
+            pCount.toString(),
             `Rs. ${bRate}`,
-            `Rs. ${entry.baseAmount.toLocaleString('en-IN')}`,
-            entry.hasIncentive ? `+Rs. ${entry.incentiveAmount.toLocaleString('en-IN')} (Yes)` : 'Rs. 0 (No)',
-            `Rs. ${entry.totalEarnings.toLocaleString('en-IN')}`,
-            entry.status,
+            `Rs. ${bAmt.toLocaleString('en-IN')}`,
+            entry?.hasIncentive ? `+Rs. ${iAmt.toLocaleString('en-IN')} (Yes)` : 'Rs. 0 (No)',
+            `Rs. ${tEarn.toLocaleString('en-IN')}`,
+            String(entry?.status || 'Unpaid'),
           ];
         });
         subFoot = [
@@ -778,17 +790,20 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
       } else {
         subHead = ['#', 'Date', 'Day', 'Parcels', 'Rate', 'Base Pay', 'Total Pay', 'Status'];
         subRows = rEntries.map((entry, idx) => {
-          const dayName = getDayOfWeek(entry.date);
-          const bRate = entry.baseRate || rBaseRate;
+          const dayName = getDayOfWeek(entry?.date || '');
+          const bRate = Number(entry?.baseRate) || rBaseRate;
+          const pCount = Number(entry?.parcels) || 0;
+          const bAmt = Number(entry?.baseAmount) || 0;
+          const tEarn = Number(entry?.totalEarnings) || 0;
           return [
             (idx + 1).toString(),
-            formatDateDisplay(entry.date),
+            formatDateDisplay(entry?.date || ''),
             dayName,
-            entry.parcels.toString(),
+            pCount.toString(),
             `Rs. ${bRate}`,
-            `Rs. ${entry.baseAmount.toLocaleString('en-IN')}`,
-            `Rs. ${entry.totalEarnings.toLocaleString('en-IN')}`,
-            entry.status,
+            `Rs. ${bAmt.toLocaleString('en-IN')}`,
+            `Rs. ${tEarn.toLocaleString('en-IN')}`,
+            String(entry?.status || 'Unpaid'),
           ];
         });
         subFoot = [
@@ -929,29 +944,67 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
   }
 
   // Save / Share the PDF (Android Capacitor Native + Web Browser)
-  const cleanScope = riderFilterName.replace(/[^a-zA-Z0-9]/g, '_');
-  const filename = `Courier_Payout_${cleanScope}_${startDate}_to_${endDate}.pdf`;
+  const cleanScope = String(riderFilterName || 'All_Riders').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeStart = String(startDate || 'start').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeEnd = String(endDate || 'end').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filename = `Courier_Payout_${cleanScope}_${safeStart}_to_${safeEnd}.pdf`;
 
   if (Capacitor.isNativePlatform()) {
+    const dataUri = doc.output('datauristring');
+    const base64Data = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
+
+    const dirs: Directory[] = [Directory.Cache, Directory.Data, Directory.Documents];
+    let fileUri: string | null = null;
+    let writeErr: any = null;
+
+    for (const dir of dirs) {
+      try {
+        const fileResult = await Filesystem.writeFile({
+          path: filename,
+          data: base64Data,
+          directory: dir,
+          recursive: true,
+        });
+        if (fileResult?.uri) {
+          fileUri = fileResult.uri;
+          break;
+        }
+      } catch (err) {
+        writeErr = err;
+      }
+    }
+
+    if (!fileUri) {
+      throw new Error(`PDF सेव करने में त्रुटि हुई: ${writeErr?.message || 'Storage error'}`);
+    }
+
     try {
-      const dataUri = doc.output('datauristring');
-      const base64Data = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
-
-      const fileResult = await Filesystem.writeFile({
-        path: filename,
-        data: base64Data,
-        directory: Directory.Cache,
-      });
-
       await Share.share({
         title: 'Courier Payout Report',
-        text: `Courier Rider Payout Report for ${startDate} to ${endDate}`,
-        url: fileResult.uri,
-        dialogTitle: 'Download / Save Delivery Report',
+        text: `Courier Rider Payout Report (${startDate} to ${endDate})`,
+        url: fileUri,
+        dialogTitle: 'PDF रिपोर्ट डाउनलोड / शेयर करें',
       });
-    } catch (nativeErr: any) {
-      console.warn('Native PDF share error, falling back to doc.save:', nativeErr);
-      doc.save(filename);
+    } catch (shareErr: any) {
+      const msg = String(shareErr?.message || shareErr || '').toLowerCase();
+      if (msg.includes('cancel') || msg.includes('dismiss') || msg.includes('abort') || msg.includes('user did not share')) {
+        return;
+      }
+      try {
+        await Share.share({
+          title: 'Courier Payout Report',
+          text: `Courier Rider Payout Report (${startDate} to ${endDate})`,
+          files: [fileUri],
+          dialogTitle: 'PDF रिपोर्ट डाउनलोड / शेयर करें',
+        });
+        return;
+      } catch (retryErr: any) {
+        const rMsg = String(retryErr?.message || retryErr || '').toLowerCase();
+        if (rMsg.includes('cancel') || rMsg.includes('dismiss') || rMsg.includes('abort') || rMsg.includes('user did not share')) {
+          return;
+        }
+        throw new Error(`PDF शेयर करने में त्रुटि: ${retryErr?.message || shareErr?.message || 'Share failed'}`);
+      }
     }
   } else {
     doc.save(filename);

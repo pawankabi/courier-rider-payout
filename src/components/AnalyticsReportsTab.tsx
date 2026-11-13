@@ -63,6 +63,12 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
   };
 
   // Quick Date Range Presets
+  const handleYesterday = () => {
+    const yesterday = getDaysAgoDateString(1);
+    setStartDate(yesterday);
+    setEndDate(yesterday);
+  };
+
   const handlePresetDate = (days: number) => {
     setStartDate(getDaysAgoDateString(days - 1));
     setEndDate(getTodayDateString());
@@ -175,22 +181,26 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
     }
   };
 
-  const handleDownloadCSV = () => {
-    if (filteredEntries.length === 0) return;
+  const handleDownloadCSV = async () => {
+    if (filteredEntries.length === 0 || isExporting) return;
+    setIsExporting(true);
     try {
       const exportRiders = selectedRiderIds.length === 0
         ? riders
         : riders.filter((r) => selectedRiderIds.includes(r.id));
 
-      exportBulkRidersToCSV({
+      await exportBulkRidersToCSV({
         userName: riderFilterLabel,
         userEmail: 'Workspace Export',
         riders: exportRiders,
         entries: filteredEntries,
       });
-    } catch (err) {
+      showToast('CSV/Excel रिपोर्ट सफलतापूर्वक तैयार हुई।');
+    } catch (err: any) {
       console.error('Error generating CSV', err);
-      showToast('सीएसवी एक्सपोर्ट करने में असमर्थ। कृपया डेटा प्रविष्टियां जांचें।');
+      showToast(err?.message || 'सीएसवी एक्सपोर्ट करने में असमर्थ। कृपया डेटा प्रविष्टियां जांचें।');
+    } finally {
+      setTimeout(() => setIsExporting(false), 500);
     }
   };
 
@@ -411,6 +421,13 @@ export const AnalyticsReportsTab: React.FC<Props> = ({
           <span className="text-[11px] font-semibold text-slate-400 shrink-0 mr-1">
             Presets:
           </span>
+          <button
+            type="button"
+            onClick={handleYesterday}
+            className="px-2.5 py-1 text-xs font-bold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 shrink-0 transition cursor-pointer"
+          >
+            कल (Yesterday)
+          </button>
           {[
             { label: '7 Days', days: 7 },
             { label: '15 Days', days: 15 },

@@ -581,32 +581,40 @@ export interface CodDailyEntry {
 
   // Per-Field Discrepancy & Shortage Tracking
   company1Shortage?: number; // Short amount
+  company1Surplus?: number; // Extra/Surplus amount
   company1ActualReceived?: number; // Actual amount collected/received
   company1ShortageNotes?: string;
   company1ShortageFlaggedBy?: string;
   company1ShortageFlaggedAt?: string;
   company1SyncedToAdvance?: boolean;
+  company1SyncedToIncentive?: boolean;
 
   company2Shortage?: number;
+  company2Surplus?: number;
   company2ActualReceived?: number;
   company2ShortageNotes?: string;
   company2ShortageFlaggedBy?: string;
   company2ShortageFlaggedAt?: string;
   company2SyncedToAdvance?: boolean;
+  company2SyncedToIncentive?: boolean;
 
   cashShortage?: number;
+  cashSurplus?: number;
   cashActualReceived?: number;
   cashShortageNotes?: string;
   cashShortageFlaggedBy?: string;
   cashShortageFlaggedAt?: string;
   cashSyncedToAdvance?: boolean;
+  cashSyncedToIncentive?: boolean;
 
   onlineShortage?: number;
+  onlineSurplus?: number;
   onlineActualReceived?: number;
   onlineShortageNotes?: string;
   onlineShortageFlaggedBy?: string;
   onlineShortageFlaggedAt?: string;
   onlineSyncedToAdvance?: boolean;
+  onlineSyncedToIncentive?: boolean;
 
   status: 'draft' | 'submitted' | 'verified' | 'locked';
   submittedAt?: string;

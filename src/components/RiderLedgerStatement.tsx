@@ -23,6 +23,8 @@ import { fetchPublicRiderStatement, subscribeToPublicRiderStatement } from '../s
 import { generateStatementUrl } from '../services/smsService';
 import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
 import { calculatePureRiderLedger, UnifiedTransactionItem } from '../utils/pureLedgerEngine';
+import { shareNativeTextNotice } from '../utils/fileExporter';
+import { Capacitor } from '@capacitor/core';
 
 export type { UnifiedTransactionItem };
 
@@ -301,7 +303,16 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     }
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
+    if (Capacitor.isNativePlatform()) {
+      const rName = statement?.riderName || 'Rider';
+      await shareNativeTextNotice(
+        `${rName} - खाता विवरण (Ledger Statement)`,
+        `${rName} का लाइव खाता विवरण देखने के लिए लिंक खोलें:`,
+        statementUrl
+      );
+      return;
+    }
     try {
       window.print();
     } catch (err) {

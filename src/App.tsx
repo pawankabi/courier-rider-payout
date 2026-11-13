@@ -914,24 +914,32 @@ function MainCourierApp() {
       console.warn('COD backup export note:', err);
     }
 
-    downloadJsonBackup({
-      userEmail: currentUser?.email,
-      riders,
-      entries,
-      settlements,
-      settings: userRateConfig,
-      codSheets: codExportData.sheets,
-      codAuditLogs: codExportData.auditLogs,
-    });
+    try {
+      await downloadJsonBackup({
+        userEmail: currentUser?.email,
+        riders,
+        entries,
+        settlements,
+        settings: userRateConfig,
+        codSheets: codExportData.sheets,
+        codAuditLogs: codExportData.auditLogs,
+      });
 
-    const codNotice =
-      codExportData.sheets.length > 0
-        ? `, ${codExportData.sheets.length} दैनिक COD शीट्स (नोटों की गिनती व शॉर्टेज सहित)`
-        : '';
-    setToastMessage({
-      text: `मास्टर बैकअप डाउनलोड हुआ: ${entries.length} डिलीवरी, ${riders.length} राइडर्स, ${settlements.length} सेटलमेंट्स${codNotice} आपके डिवाइस में सुरक्षित सेव हो गए।`,
-      type: 'success',
-    });
+      const codNotice =
+        codExportData.sheets.length > 0
+          ? `, ${codExportData.sheets.length} दैनिक COD शीट्स (नोटों की गिनती व शॉर्टेज सहित)`
+          : '';
+      setToastMessage({
+        text: `मास्टर बैकअप डाउनलोड हुआ: ${entries.length} डिलीवरी, ${riders.length} राइडर्स, ${settlements.length} सेटलमेंट्स${codNotice} आपके डिवाइस में सुरक्षित सेव हो गए।`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      console.error('JSON backup export failed:', err);
+      setToastMessage({
+        text: err?.message || 'मास्टर बैकअप डाउनलोड करने में समस्या आई। कृपया डिवाइस स्टोरेज या शेयर अनुमति जांचें।',
+        type: 'error',
+      });
+    }
   };
 
   const handleDownloadExcelMasterBackup = async () => {
@@ -943,20 +951,28 @@ function MainCourierApp() {
       console.warn('COD backup export note:', err);
     }
 
-    downloadExcelMasterBackup({
-      userEmail: currentUser?.email,
-      riders,
-      entries,
-      settlements,
-      settings: userRateConfig,
-      codSheets: codExportData.sheets,
-      codAuditLogs: codExportData.auditLogs,
-    });
+    try {
+      await downloadExcelMasterBackup({
+        userEmail: currentUser?.email,
+        riders,
+        entries,
+        settlements,
+        settings: userRateConfig,
+        codSheets: codExportData.sheets,
+        codAuditLogs: codExportData.auditLogs,
+      });
 
-    setToastMessage({
-      text: `मास्टर एक्सेल (CSV) बैकअप डाउनलोड हुआ: ऑडिट ट्रेल व सभी लेजर रिकॉर्ड्स सुरक्षित सेव हो गए।`,
-      type: 'success',
-    });
+      setToastMessage({
+        text: `मास्टर एक्सेल (CSV) बैकअप डाउनलोड हुआ: ऑडिट ट्रेल व सभी लेजर रिकॉर्ड्स सुरक्षित सेव हो गए।`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      console.error('Excel backup export failed:', err);
+      setToastMessage({
+        text: err?.message || 'मास्टर एक्सेल (CSV) बैकअप डाउनलोड करने में समस्या आई। कृपया पुनः प्रयास करें।',
+        type: 'error',
+      });
+    }
   };
 
   // Direct Restore Backup handler (file picker -> load riders & entries -> sync to Firestore & local storage)
@@ -2080,8 +2096,13 @@ function MainCourierApp() {
     if (targetUid) {
       try {
         await permanentlyDeleteDeliveryFromFirestore(targetUid, entryId);
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Permanent delete delivery notice:', err);
+        setToastMessage({
+          text: 'एंट्री स्थानीय स्तर पर हटी, लेकिन क्लाउड (Firebase) में हटाने में समस्या आई। इंटरनेट चालू कर पुनः प्रयास करें।',
+          type: 'error',
+        });
+        throw err;
       }
     }
   };
@@ -2093,8 +2114,13 @@ function MainCourierApp() {
     if (targetUid) {
       try {
         await permanentlyDeleteRiderFromFirestore(targetUid, riderId);
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Permanent delete rider notice:', err);
+        setToastMessage({
+          text: 'राइडर क्लाउड (Firebase) से पूरी तरह नहीं हट सका। कृपया इंटरनेट जांचकर पुनः प्रयास करें।',
+          type: 'error',
+        });
+        throw err;
       }
     }
   };
@@ -2111,8 +2137,13 @@ function MainCourierApp() {
       const ownerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
       try {
         await permanentlyDeleteAdvanceFromFirestore(targetUid, updatedRider, advanceId, ownerEmail);
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Permanent delete advance notice:', err);
+        setToastMessage({
+          text: 'एडवांस रिकॉर्ड क्लाउड (Firebase) से हटाने में समस्या आई। कृपया पुनः प्रयास करें।',
+          type: 'error',
+        });
+        throw err;
       }
     }
   };
@@ -2124,6 +2155,20 @@ function MainCourierApp() {
     const trashedAdvances: Array<{ advanceId: string }> = [];
     const ridersWithPrunedAdvances: Rider[] = [];
 
+    // Collect deleted advances from ALL riders (including deleted riders!) BEFORE filtering deleted riders out
+    riders.forEach((r) => {
+      (r.advances || []).forEach((adv) => {
+        if (
+          r.isDeleted ||
+          adv.isDeleted ||
+          adv.status === 'DELETED' ||
+          adv.status === 'RESET_ARCHIVED'
+        ) {
+          trashedAdvances.push({ advanceId: adv.id });
+        }
+      });
+    });
+
     const nextRiders = riders
       .filter((r) => !r.isDeleted)
       .map((r) => {
@@ -2131,7 +2176,6 @@ function MainCourierApp() {
         let changed = false;
         const kept = advs.filter((adv) => {
           if (adv.isDeleted || adv.status === 'DELETED' || adv.status === 'RESET_ARCHIVED') {
-            trashedAdvances.push({ advanceId: adv.id });
             changed = true;
             return false;
           }
@@ -2163,12 +2207,17 @@ function MainCourierApp() {
           ridersWithPrunedAdvances,
           ownerEmail
         );
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Empty trash Firestore notice:', err);
+        setToastMessage({
+          text: 'फोन से कचरा पेटी साफ हुई, लेकिन Firebase क्लाउड सिंक अधूरा रहा। कृपया इंटरनेट चालू रखकर पुनः प्रयास करें।',
+          type: 'error',
+        });
+        throw err;
       }
     }
     setToastMessage({
-      text: 'कचरा पेटी पूरी तरह साफ कर दी गई। स्टोरेज खाली हुआ!',
+      text: 'कचरा पेटी फोन और Firebase दोनों जगह से पूरी तरह साफ कर दी गई!',
       type: 'success',
     });
   };

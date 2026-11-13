@@ -13,6 +13,7 @@ import { calculatePureRiderLedger, purgePhantomAdvances } from '../utils/pureLed
 import { calculateNetActiveAdvance } from '../utils/payoutCalculations';
 import { syncPublicRiderStatement } from './firestoreSync';
 import { getTodayDateString } from '../utils/formatters';
+import { exportFileNativelyOrWeb } from '../utils/fileExporter';
 import { 
   loadRidersFromStorage, 
   saveRidersToStorage, 
@@ -331,15 +332,16 @@ export function exportEmergencySafetyBackup(
       },
     };
 
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `सुरक्षा_कवच_बैकअप_${getTodayDateString()}_${Date.now()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const fileName = `suraksha_kavach_backup_${getTodayDateString()}_${Date.now()}.json`;
+    void exportFileNativelyOrWeb({
+      filename: fileName,
+      content: JSON.stringify(payload, null, 2),
+      mimeType: 'application/json;charset=utf-8;',
+      title: 'सुरक्षा कवच बैकअप',
+      text: `Emergency Safety Shield Backup (${getTodayDateString()})`,
+    }).catch((err) => {
+      console.error('Failed to export emergency backup:', err);
+    });
   } catch (err) {
     console.error('Failed to export emergency backup:', err);
   }

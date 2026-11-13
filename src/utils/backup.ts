@@ -1,5 +1,6 @@
 import { Rider, DeliveryEntry, SettlementRecord, DailyCodSheetData, CodAuditLog } from '../types';
 import { getTodayDateString } from './formatters';
+import { exportFileNativelyOrWeb } from './fileExporter';
 
 interface BackupData {
   userEmail?: string | null;
@@ -14,7 +15,7 @@ interface BackupData {
 /**
  * Generates and downloads a complete JSON backup file to the user's phone or computer.
  */
-export function downloadJsonBackup({
+export async function downloadJsonBackup({
   userEmail,
   riders,
   entries,
@@ -22,7 +23,7 @@ export function downloadJsonBackup({
   settings,
   codSheets,
   codAuditLogs,
-}: BackupData): void {
+}: BackupData): Promise<void> {
   const totalParcels = entries.reduce((sum, e) => sum + (e.parcels || 0), 0);
   const totalEarnings = entries.reduce((sum, e) => sum + (e.totalEarnings || 0), 0);
   const unpaidCount = entries.filter((e) => e.status === 'Unpaid').length;
@@ -76,35 +77,30 @@ export function downloadJsonBackup({
   };
 
   const jsonString = JSON.stringify(backupPayload, null, 2);
-  const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  
   const todayStr = getTodayDateString();
   const fileName = `courier_payout_backup_${todayStr}.json`;
 
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', fileName);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-
-  // Clean up object URL after download trigger
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  await exportFileNativelyOrWeb({
+    filename: fileName,
+    content: jsonString,
+    mimeType: 'application/json;charset=utf-8;',
+    title: 'Courier Payout Backup (JSON)',
+    text: `Complete Hub JSON Backup (${todayStr})`,
+  });
 }
 
 /**
  * Generates and downloads a complete Master Excel/CSV backup file containing all
  * Riders, Deliveries, Settlements, COD Sheets, and Full Audit Logs.
  */
-export function downloadExcelMasterBackup({
+export async function downloadExcelMasterBackup({
   userEmail,
   riders,
   entries,
   settlements,
   codSheets = [],
   codAuditLogs = [],
-}: BackupData): void {
+}: BackupData): Promise<void> {
   const lines: string[] = [];
 
   // UTF-8 BOM so Excel opens Hindi/Special chars cleanly
@@ -166,18 +162,16 @@ export function downloadExcelMasterBackup({
   });
 
   const csvContent = lines.join('\n');
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
   const todayStr = getTodayDateString();
   const fileName = `courier_master_backup_${todayStr}.csv`;
 
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', fileName);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  await exportFileNativelyOrWeb({
+    filename: fileName,
+    content: csvContent,
+    mimeType: 'text/csv;charset=utf-8;',
+    title: 'Master Excel Backup (CSV)',
+    text: `Complete Master Hub Excel Backup (${todayStr})`,
+  });
 }
 
 export interface ParsedBackupResult {

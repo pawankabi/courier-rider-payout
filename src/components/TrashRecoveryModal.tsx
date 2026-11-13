@@ -61,6 +61,7 @@ export const TrashRecoveryModal: React.FC<TrashRecoveryModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'entries' | 'advances' | 'riders'>('entries');
   const [restoredNotice, setRestoredNotice] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<ConfirmTarget | null>(null);
   const [isDeletingPermanent, setIsDeletingPermanent] = useState(false);
 
@@ -110,6 +111,7 @@ export const TrashRecoveryModal: React.FC<TrashRecoveryModalProps> = ({
   const handleConfirmPermanentDelete = async () => {
     if (!confirmTarget || isDeletingPermanent) return;
     setIsDeletingPermanent(true);
+    setDeleteError(null);
     try {
       if (confirmTarget.kind === 'entry' && onPermanentDeleteEntry) {
         await onPermanentDeleteEntry(confirmTarget.id);
@@ -124,6 +126,11 @@ export const TrashRecoveryModal: React.FC<TrashRecoveryModalProps> = ({
         await onEmptyTrash();
         showNotice(`कचरा पेटी के सभी ${totalDeletedCount} रिकॉर्ड स्थायी रूप से साफ हो गए!`);
       }
+      setConfirmTarget(null);
+    } catch (err: any) {
+      setDeleteError(
+        err?.message || 'क्लाउड सर्वर (Firebase) से डिलीट करने में समस्या आई। कृपया इंटरनेट कनेक्शन जांचकर पुनः प्रयास करें।'
+      );
       setConfirmTarget(null);
     } finally {
       setIsDeletingPermanent(false);
@@ -228,6 +235,22 @@ export const TrashRecoveryModal: React.FC<TrashRecoveryModalProps> = ({
           <div className="mx-6 mt-3 p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-semibold flex items-center gap-2 shadow-2xs">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{restoredNotice}</span>
+          </div>
+        )}
+
+        {deleteError && (
+          <div className="mx-6 mt-3 p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 shadow-2xs">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{deleteError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDeleteError(null)}
+              className="text-rose-500 hover:text-rose-700 font-bold cursor-pointer"
+            >
+              ✕
+            </button>
           </div>
         )}
 

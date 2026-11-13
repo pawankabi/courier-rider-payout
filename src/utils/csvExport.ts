@@ -1,5 +1,6 @@
 import { Rider, DeliveryEntry, SettlementRecord } from '../types';
 import { getTodayDateString, formatDateDisplay } from './formatters';
+import { exportFileNativelyOrWeb } from './fileExporter';
 
 function escapeCsvCell(cell: any): string {
   if (cell === null || cell === undefined) return '""';
@@ -10,30 +11,28 @@ function escapeCsvCell(cell: any): string {
   return `"${str}"`;
 }
 
-function triggerDownload(csvContent: string, fileName: string): void {
+async function triggerDownload(csvContent: string, fileName: string): Promise<void> {
   // \uFEFF is the UTF-8 Byte Order Mark (BOM) so Excel opens Hindi/special characters and currency cleanly
-  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', fileName);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  await exportFileNativelyOrWeb({
+    filename: fileName,
+    content: '\uFEFF' + csvContent,
+    mimeType: 'text/csv;charset=utf-8;',
+    title: fileName,
+    text: `Courier Payout Export: ${fileName}`,
+  });
 }
 
 /**
  * Bulk Download: Generates and triggers clean CSV/Excel download of all riders,
  * their performance, rates, and dues under a specific user workspace.
  */
-export function exportBulkRidersToCSV(options: {
+export async function exportBulkRidersToCSV(options: {
   userName: string;
   userEmail: string;
   riders: Rider[];
   entries: DeliveryEntry[];
   settlements?: SettlementRecord[];
-}): void {
+}): Promise<void> {
   const { userName, userEmail, riders, entries, settlements = [] } = options;
 
   const todayStr = getTodayDateString();
@@ -162,20 +161,20 @@ export function exportBulkRidersToCSV(options: {
     lines.push(row.map(escapeCsvCell).join(','));
   });
 
-  triggerDownload(lines.join('\r\n'), fileName);
+  await triggerDownload(lines.join('\r\n'), fileName);
 }
 
 /**
  * Single Rider Download: Generates and triggers clean CSV/Excel download of an
  * individual rider's full delivery breakdown, vehicle info, and payout ledger.
  */
-export function exportSingleRiderToCSV(options: {
+export async function exportSingleRiderToCSV(options: {
   userName: string;
   userEmail: string;
   rider: Rider;
   entries: DeliveryEntry[];
   settlements?: SettlementRecord[];
-}): void {
+}): Promise<void> {
   const { userName, userEmail, rider, entries } = options;
   const riderEntries = entries
     .filter((e) => e.riderId === rider.id)
@@ -258,5 +257,5 @@ export function exportSingleRiderToCSV(options: {
     lines.push(row.map(escapeCsvCell).join(','));
   });
 
-  triggerDownload(lines.join('\r\n'), fileName);
+  await triggerDownload(lines.join('\r\n'), fileName);
 }

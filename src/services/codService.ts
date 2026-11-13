@@ -6,7 +6,8 @@ import {
   CodStaffRole,
   DailyCodSheetData,
   Rider,
-  RiderAdvanceEntry
+  RiderAdvanceEntry,
+  CashWithdrawalRecord
 } from '../types';
 import { db } from '../firebase';
 import { 
@@ -37,6 +38,7 @@ import { dispatchAutomatedSms, getRiderStatementUrl } from './smsService';
 import { isNativeAndroid, sendNativeBackgroundSms } from './nativeSms';
 import { loadRidersFromStorage, saveRidersToStorage, trySetLocalStorageItem, reclaimLocalStorageSpace } from '../utils/storage';
 import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
+import { exportFileNativelyOrWeb } from '../utils/fileExporter';
 
 /**
  * Quota-safe COD localStorage writer:
@@ -225,6 +227,19 @@ export function mergeCodEntriesNonDestructively(
       baseObj.totalCod = (Number(baseObj.company1Amount) || 0) + (Number(baseObj.company2Amount) || 0);
       baseObj.totalDeposit = (Number(baseObj.cashDeposit) || 0) + (Number(baseObj.onlineDeposit) || 0);
       baseObj.balance = baseObj.totalCod - baseObj.totalDeposit;
+
+      // Sticky transfer flags: once synced to Advance/Incentive, never accidentally reset to false on merge
+      baseObj.balanceSyncedToAdvance = Boolean(incoming.balanceSyncedToAdvance || existing.balanceSyncedToAdvance);
+      baseObj.balanceSyncedToIncentive = Boolean(incoming.balanceSyncedToIncentive || existing.balanceSyncedToIncentive);
+      baseObj.syncedAdvanceId = incoming.syncedAdvanceId || existing.syncedAdvanceId;
+      baseObj.syncedIncentiveId = incoming.syncedIncentiveId || existing.syncedIncentiveId;
+      (['company1', 'company2', 'cash', 'online'] as const).forEach((f) => {
+        const advKey = `${f}SyncedToAdvance` as keyof CodDailyEntry;
+        const incKey = `${f}SyncedToIncentive` as keyof CodDailyEntry;
+        (baseObj as any)[advKey] = Boolean((incoming as any)[advKey] || (existing as any)[advKey]);
+        (baseObj as any)[incKey] = Boolean((incoming as any)[incKey] || (existing as any)[incKey]);
+      });
+
       mergedMap.set(matchedKey, baseObj);
     } else if (!incomingHasData && existingHasData) {
       // Existing has real data, incoming is empty -> NEVER OVERWRITE REAL DATA WITH BLANK ROWS!
@@ -1166,19 +1181,25 @@ export async function recordCodAuditLog(
 /**
  * 5. Excel / CSV Export
  */
-export function exportCodGridToCSV(
+export async function exportCodGridToCSV(
   date: string,
   entries: CodDailyEntry[],
   company1Name: string,
   company2Name: string,
   hubName: string = 'Saraikela Courier Hub'
-): void {
+): Promise<void> {
+  const safeDate = String(date || getTodayDateString()).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const c1Label = String(company1Name || 'Company 1').replace(/"/g, '""');
+  const c2Label = String(company2Name || 'Company 2').replace(/"/g, '""');
+  const safeHub = String(hubName || 'Courier Hub').replace(/"/g, '""');
+  const safeEntries = Array.isArray(entries) ? entries : [];
+
   const headers = [
     'Date',
     'Rider Name',
     'Phone',
-    `${company1Name} (₹)`,
-    `${company2Name} (₹)`,
+    `${c1Label} (₹)`,
+    `${c2Label} (₹)`,
     'Total COD (₹)',
     'Cash Deposit (₹)',
     'Online Deposit (₹)',
@@ -1190,46 +1211,61 @@ export function exportCodGridToCSV(
     'Notes',
   ];
 
-  const rows = entries.map((e) => {
-    const totalShort = (e.company1Shortage || 0) + (e.company2Shortage || 0) + (e.cashShortage || 0) + (e.onlineShortage || 0);
+  const rows = safeEntries.map((e) => {
+    const c1Short = Number(e?.company1Shortage) || 0;
+    const c2Short = Number(e?.company2Shortage) || 0;
+    const cashShort = Number(e?.cashShortage) || 0;
+    const onlineShort = Number(e?.onlineShortage) || 0;
+    const totalShort = c1Short + c2Short + cashShort + onlineShort;
     const shortDetails: string[] = [];
-    if (e.company1Shortage) shortDetails.push(`${company1Name}: -₹${e.company1Shortage}`);
-    if (e.company2Shortage) shortDetails.push(`${company2Name}: -₹${e.company2Shortage}`);
-    if (e.cashShortage) shortDetails.push(`Cash: -₹${e.cashShortage}`);
-    if (e.onlineShortage) shortDetails.push(`Online: -₹${e.onlineShortage}`);
-    const shortText = totalShort > 0 ? `${totalShort} (${shortDetails.join('; ')})` : 0;
+    if (c1Short > 0) shortDetails.push(`${c1Label}: -₹${c1Short}`);
+    if (c2Short > 0) shortDetails.push(`${c2Label}: -₹${c2Short}`);
+    if (cashShort > 0) shortDetails.push(`Cash: -₹${cashShort}`);
+    if (onlineShort > 0) shortDetails.push(`Online: -₹${onlineShort}`);
+    const shortText = totalShort > 0 ? `${totalShort} (${shortDetails.join('; ')})` : '0';
+
+    const c1Amt = Number(e?.company1Amount) || 0;
+    const c2Amt = Number(e?.company2Amount) || 0;
+    const cashAmt = Number(e?.cashDeposit) || 0;
+    const onlineAmt = Number(e?.onlineDeposit) || 0;
+    const totCod = Number(e?.totalCod) || (c1Amt + c2Amt);
+    const totDep = Number(e?.totalDeposit) || (cashAmt + onlineAmt);
+    const bal = e?.balance !== undefined ? Number(e.balance) || 0 : totCod - totDep;
 
     return [
-      `"${e.date}"`,
-      `"${e.riderName.replace(/"/g, '""')}"`,
-      `"${e.riderPhone || ''}"`,
-      e.company1Amount,
-      e.company2Amount,
-      e.totalCod,
-      e.cashDeposit,
-      e.onlineDeposit,
-      e.totalDeposit,
-      e.balance,
-      `"${shortText}"`,
-      `"${e.status.toUpperCase()}"`,
-      `"${(e.verifiedBy || '').replace(/"/g, '""')}"`,
-      `"${(e.notes || '').replace(/"/g, '""')}"`,
+      `"${String(e?.date || safeDate).replace(/"/g, '""')}"`,
+      `"${String(e?.riderName || 'Rider').replace(/"/g, '""')}"`,
+      `"${String(e?.riderPhone || '').replace(/"/g, '""')}"`,
+      c1Amt,
+      c2Amt,
+      totCod,
+      cashAmt,
+      onlineAmt,
+      totDep,
+      bal,
+      `"${shortText.replace(/"/g, '""')}"`,
+      `"${String(e?.status || 'draft').toUpperCase()}"`,
+      `"${String(e?.verifiedBy || '').replace(/"/g, '""')}"`,
+      `"${String(e?.notes || '').replace(/"/g, '""')}"`,
     ];
   });
 
   // Total summary footer row
-  const sumC1 = entries.reduce((s, e) => s + (e.company1Amount || 0), 0);
-  const sumC2 = entries.reduce((s, e) => s + (e.company2Amount || 0), 0);
-  const sumTotalCod = entries.reduce((s, e) => s + (e.totalCod || 0), 0);
-  const sumCash = entries.reduce((s, e) => s + (e.cashDeposit || 0), 0);
-  const sumOnline = entries.reduce((s, e) => s + (e.onlineDeposit || 0), 0);
-  const sumTotalDep = entries.reduce((s, e) => s + (e.totalDeposit || 0), 0);
-  const sumBal = entries.reduce((s, e) => s + (e.balance || 0), 0);
-  const sumShortage = entries.reduce((s, e) => s + ((e.company1Shortage || 0) + (e.company2Shortage || 0) + (e.cashShortage || 0) + (e.onlineShortage || 0)), 0);
+  const sumC1 = safeEntries.reduce((s, e) => s + (Number(e?.company1Amount) || 0), 0);
+  const sumC2 = safeEntries.reduce((s, e) => s + (Number(e?.company2Amount) || 0), 0);
+  const sumTotalCod = safeEntries.reduce((s, e) => s + (Number(e?.totalCod) || ((Number(e?.company1Amount) || 0) + (Number(e?.company2Amount) || 0))), 0);
+  const sumCash = safeEntries.reduce((s, e) => s + (Number(e?.cashDeposit) || 0), 0);
+  const sumOnline = safeEntries.reduce((s, e) => s + (Number(e?.onlineDeposit) || 0), 0);
+  const sumTotalDep = safeEntries.reduce((s, e) => s + (Number(e?.totalDeposit) || ((Number(e?.cashDeposit) || 0) + (Number(e?.onlineDeposit) || 0))), 0);
+  const sumBal = safeEntries.reduce((s, e) => s + (Number(e?.balance) || 0), 0);
+  const sumShortage = safeEntries.reduce(
+    (s, e) => s + ((Number(e?.company1Shortage) || 0) + (Number(e?.company2Shortage) || 0) + (Number(e?.cashShortage) || 0) + (Number(e?.onlineShortage) || 0)),
+    0
+  );
 
   const totalRow = [
     `"TOTALS"`,
-    `"${entries.length} Riders"`,
+    `"${safeEntries.length} Riders"`,
     `""`,
     sumC1,
     sumC2,
@@ -1245,21 +1281,20 @@ export function exportCodGridToCSV(
   ];
 
   const csvContent = [
-    `"${hubName} - Daily COD Reconciliation Sheet (${date})"`,
-    headers.join(','),
+    `"${safeHub} - Daily COD Reconciliation Sheet (${safeDate})"`,
+    headers.map((h) => `"${h.replace(/"/g, '""')}"`).join(','),
     ...rows.map((r) => r.join(',')),
     totalRow.join(','),
   ].join('\n');
 
-  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `COD-Reconciliation-${date}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  await exportFileNativelyOrWeb({
+    filename: `COD-Reconciliation-${safeDate}.csv`,
+    content: '\uFEFF' + csvContent,
+    mimeType: 'text/csv;charset=utf-8;',
+    title: `COD Sheet (${safeDate})`,
+    text: `${safeHub} - Daily COD Reconciliation Report (${safeDate})`,
+    dialogTitle: 'COD रिपोर्ट सेव या शेयर करें',
+  });
 }
 
 /**
@@ -2305,6 +2340,7 @@ export function subscribeToDailyCodSheet(
             hubName: raw.hubName,
             hubId: effectiveHubId,
             hubUpiId: raw.hubUpiId || '',
+            cashWithdrawals: Array.isArray(raw.cashWithdrawals) ? raw.cashWithdrawals : undefined,
             updatedAt: raw.updatedAt || new Date().toISOString(),
           };
           pushLatestSheetUpdate(sheetData);
@@ -2366,6 +2402,7 @@ export function subscribeToDailyCodSheet(
             hubName: raw.hubName,
             hubId: effectiveHubId,
             hubUpiId: raw.hubUpiId || '',
+            cashWithdrawals: Array.isArray(raw.cashWithdrawals) ? raw.cashWithdrawals : undefined,
             updatedAt: raw.updatedAt || new Date().toISOString(),
           };
           pushLatestSheetUpdate(sheetData);
@@ -2601,58 +2638,81 @@ export async function updateSingleRiderEntryInSheet(
         }
       }
 
-      // 3B. Atomically merge into parent daily_cod_sheets doc without overwriting other riders
+      // 3B. Atomically merge into parent daily_cod_sheets doc without overwriting other riders.
+      // If runTransaction fails (e.g. offline on Android WebView), gracefully fall back to offline-safe setDoc merge!
       const targetDocRef = doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate);
       let payloadToSave: any = null;
 
-      await runTransaction(db, async (transaction) => {
-        const snap = await transaction.get(targetDocRef);
-        let entries: CodDailyEntry[] = [];
-        let isLocked = false;
-        let company1Name = DEFAULT_COMPANY_1;
-        let company2Name = DEFAULT_COMPANY_2;
-        let hubName = '';
-        let hubUpiId = '';
+      try {
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(targetDocRef);
+          let entries: CodDailyEntry[] = [];
+          let isLocked = false;
+          let company1Name = DEFAULT_COMPANY_1;
+          let company2Name = DEFAULT_COMPANY_2;
+          let hubName = '';
+          let hubUpiId = '';
 
-        if (snap.exists()) {
-          const data = snap.data();
-          entries = extractEntriesFromSheetRaw(data, targetDate);
-          isLocked = Boolean(data.isLocked);
-          company1Name = data.company1Name || DEFAULT_COMPANY_1;
-          company2Name = data.company2Name || DEFAULT_COMPANY_2;
-          hubName = data.hubName || '';
-          hubUpiId = data.hubUpiId || '';
-        }
+          if (snap.exists()) {
+            const data = snap.data();
+            entries = extractEntriesFromSheetRaw(data, targetDate);
+            isLocked = Boolean(data.isLocked);
+            company1Name = data.company1Name || DEFAULT_COMPANY_1;
+            company2Name = data.company2Name || DEFAULT_COMPANY_2;
+            hubName = data.hubName || '';
+            hubUpiId = data.hubUpiId || '';
+          }
 
-        if (entries.length === 0) {
-          try {
-            const cachedRaw = localStorage.getItem(localCacheKey);
-            if (cachedRaw) {
-              entries = extractEntriesFromSheetRaw(JSON.parse(cachedRaw), targetDate);
-            }
-          } catch {}
-        }
+          if (entries.length === 0) {
+            try {
+              const cachedRaw = localStorage.getItem(localCacheKey);
+              if (cachedRaw) {
+                entries = extractEntriesFromSheetRaw(JSON.parse(cachedRaw), targetDate);
+              }
+            } catch {}
+          }
 
-        // Use non-destructive merge: NEVER drops or overwrites another rider's entry!
-        const mergedEntries = mergeCodEntriesNonDestructively(entries, [finalizedEntry]);
-        const entriesMap = buildEntriesMap(mergedEntries);
+          // Use non-destructive merge: NEVER drops or overwrites another rider's entry!
+          const mergedEntries = mergeCodEntriesNonDestructively(entries, [finalizedEntry]);
+          const entriesMap = buildEntriesMap(mergedEntries);
+
+          payloadToSave = cleanForFirestore({
+            date: targetDate,
+            hubId: effectiveHubId,
+            ownerUid: effectiveHubId,
+            entries: mergedEntries,
+            entriesMap,
+            isLocked,
+            company1Name,
+            company2Name,
+            hubName,
+            hubUpiId,
+            updatedAt: new Date().toISOString(),
+          });
+
+          transaction.set(targetDocRef, payloadToSave, { merge: true });
+        });
+      } catch (txErr) {
+        console.warn('Transaction unavailable (offline/flaky network), falling back to queued setDoc:', txErr);
+        let localMergedEntries: CodDailyEntry[] = [finalizedEntry];
+        try {
+          const cachedRaw = localStorage.getItem(localCacheKey) || localStorage.getItem(`cp_cod_sheet_${targetDate}`);
+          if (cachedRaw) {
+            const cachedEntries = extractEntriesFromSheetRaw(JSON.parse(cachedRaw), targetDate);
+            localMergedEntries = mergeCodEntriesNonDestructively(cachedEntries, [finalizedEntry]);
+          }
+        } catch {}
 
         payloadToSave = cleanForFirestore({
           date: targetDate,
           hubId: effectiveHubId,
           ownerUid: effectiveHubId,
-          entries: mergedEntries,
-          entriesMap,
-          isLocked,
-          company1Name,
-          company2Name,
-          hubName,
-          hubUpiId,
+          entries: localMergedEntries,
+          entriesMap: buildEntriesMap(localMergedEntries),
           updatedAt: new Date().toISOString(),
         });
-
-        transaction.set(targetDocRef, payloadToSave, { merge: true });
-      });
+        await setDoc(targetDocRef, payloadToSave, { merge: true });
+      }
 
       // Dual-write immediately to root daily_cod_sheets mirrors and audit log
       if (payloadToSave) {
@@ -3261,4 +3321,112 @@ export async function importAllCodDataFromBackup(
 
   return restoredSheetsCount;
 }
+
+/**
+ * 12. Real-Time Cloud Sync for Hub Vault Cash Withdrawals
+ */
+export async function saveCodWithdrawalsToSheet(
+  hubId: string,
+  date: string,
+  withdrawals: CashWithdrawalRecord[]
+): Promise<void> {
+  const targetDate = date || getTodayDateString();
+  const effectiveHubId = (hubId || getActiveCompanionHubId() || '').trim();
+  const safeWithdrawals = Array.isArray(withdrawals) ? withdrawals : [];
+
+  try {
+    const key = `cp_cod_withdrawals_${targetDate}_${effectiveHubId || 'default'}`;
+    trySetLocalStorageItem(key, JSON.stringify(safeWithdrawals), effectiveHubId);
+  } catch {}
+
+  if (!db || !effectiveHubId || effectiveHubId === 'guest') return;
+
+  const payload = cleanForFirestore({
+    date: targetDate,
+    hubId: effectiveHubId,
+    ownerUid: effectiveHubId,
+    cashWithdrawals: safeWithdrawals,
+    updatedAt: new Date().toISOString(),
+  });
+
+  try {
+    await Promise.all([
+      setDoc(doc(db, 'hubs', effectiveHubId, 'daily_cod_sheets', targetDate), payload, { merge: true }),
+      setDoc(doc(db, 'daily_cod_sheets', `${effectiveHubId}_${targetDate}`), payload, { merge: true }),
+    ]);
+  } catch (err) {
+    console.warn('Vault withdrawals Firestore sync notice:', err);
+  }
+}
+
+/**
+ * 13. Deterministic 0-Second Shortage / Surplus Background Retry Queue
+ * Ensures 0s UI responsiveness without ever applying premature sync locks or duplicates.
+ */
+export interface PendingCodLedgerTransfer {
+  deterministicId: string;
+  kind: 'advance' | 'incentive';
+  hubId: string;
+  date: string;
+  riderId: string;
+  riderName: string;
+  riderPhone: string;
+  field: string;
+  amount: number;
+  reason: string;
+  syncProp: string;
+  idProp: 'syncedAdvanceId' | 'syncedIncentiveId';
+  createdBy: string;
+  createdAt: string;
+}
+
+export function buildDeterministicShortageAdvId(date: string, riderId: string, field: string): string {
+  const safeRider = String(riderId || 'rider').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeDate = String(date || getTodayDateString()).replace(/[^0-9-]/g, '');
+  const safeField = String(field || 'cod').replace(/[^a-zA-Z0-9_-]/g, '');
+  return `cod_short_adv_${safeDate}_${safeRider}_${safeField}`;
+}
+
+export function buildDeterministicSurplusIncId(date: string, riderId: string, field: string): string {
+  const safeRider = String(riderId || 'rider').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeDate = String(date || getTodayDateString()).replace(/[^0-9-]/g, '');
+  const safeField = String(field || 'cod').replace(/[^a-zA-Z0-9_-]/g, '');
+  return `cod_surp_inc_${safeDate}_${safeRider}_${safeField}`;
+}
+
+function getPendingQueueKey(hubId: string): string {
+  return `cp_cod_pending_ledger_queue_${(hubId || 'default').trim()}`;
+}
+
+export function getPendingCodLedgerTransfers(hubId: string): PendingCodLedgerTransfer[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(getPendingQueueKey(hubId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function enqueuePendingCodLedgerTransfer(item: PendingCodLedgerTransfer): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getPendingCodLedgerTransfers(item.hubId);
+    const filtered = existing.filter((x) => x.deterministicId !== item.deterministicId);
+    filtered.push(item);
+    trySetLocalStorageItem(getPendingQueueKey(item.hubId), JSON.stringify(filtered.slice(-100)), item.hubId);
+  } catch {}
+}
+
+export function removePendingCodLedgerTransfer(hubId: string, deterministicId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getPendingCodLedgerTransfers(hubId);
+    const next = existing.filter((x) => x.deterministicId !== deterministicId);
+    trySetLocalStorageItem(getPendingQueueKey(hubId), JSON.stringify(next), hubId);
+  } catch {}
+}
+
 

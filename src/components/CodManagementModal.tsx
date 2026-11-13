@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   X, 
   Table, 
@@ -41,7 +41,8 @@ import {
   CodAuditLog, 
   CodSettings, 
   CodStaffRole,
-  CashDenomination
+  CashDenomination,
+  CashWithdrawalRecord
 } from '../types';
 import { CashDenominationModal } from './cod/CashDenominationModal';
 import { DailyConsolidatedDenominationSummary } from './cod/DailyConsolidatedDenominationSummary';
@@ -56,7 +57,9 @@ import {
   recordCodAuditLog, 
   exportCodGridToCSV,
   subscribeToDailyCodSheet,
-  mergeCodEntriesNonDestructively
+  mergeCodEntriesNonDestructively,
+  buildDeterministicShortageAdvId,
+  buildDeterministicSurplusIncId
 } from '../services/codService';
 import { formatINR, formatDateDisplay, getTodayDateString, getDaysAgoDateString } from '../utils/formatters';
 import { 
@@ -72,7 +75,7 @@ import {
 } from '../services/smsService';
 import { getRiderStatementUrl } from '../utils/shareLink';
 import { RiderAdvanceEntry, RiderIncentiveEntry } from '../types';
-import { purgeLegacyMockStorage } from '../utils/storage';
+import { purgeLegacyMockStorage, loadRidersFromStorage, saveRidersToStorage } from '../utils/storage';
 
 interface Props {
   isOpen: boolean;
@@ -108,8 +111,9 @@ export const CodManagementModal: React.FC<Props> = ({
   // Staff & Rider PIN Users
   const [staffUsers, setStaffUsers] = useState<CodStaffUser[]>([]);
 
-  // Daily Grid Entries
+  // Daily Grid Entries & Cloud-Synced Vault Withdrawals
   const [gridEntries, setGridEntries] = useState<CodDailyEntry[]>([]);
+  const [sheetWithdrawals, setSheetWithdrawals] = useState<CashWithdrawalRecord[] | undefined>(undefined);
 
   // Audit Logs
   const [auditLogs, setAuditLogs] = useState<CodAuditLog[]>([]);
@@ -152,6 +156,45 @@ export const CodManagementModal: React.FC<Props> = ({
 
   // PIN visibility toggle in Access Control
   const [revealedPins, setRevealedPins] = useState<Record<string, boolean>>({});
+  const syncingKeysRef = useRef<Set<string>>(new Set());
+  const sessionRidersRef = useRef<Record<string, Rider>>({});
+
+  const resolveTargetRider = (riderId: string, riderPhone?: string): Rider | undefined => {
+    if (sessionRidersRef.current[riderId]) return sessionRidersRef.current[riderId];
+    const cleanPhone = (riderPhone || '').replace(/\D/g, '').slice(-10);
+    const fromProps = riders.find(
+      (r) => r.id === riderId || (cleanPhone && (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone)
+    );
+    if (fromProps) return fromProps;
+    const stored = loadRidersFromStorage(userId);
+    return stored.find(
+      (r) => r.id === riderId || (cleanPhone && (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone)
+    );
+  };
+
+  const persistUpdatedRiderResilient = async (updatedRider: Rider) => {
+    sessionRidersRef.current[updatedRider.id] = updatedRider;
+    try {
+      const currentList = loadRidersFromStorage(userId);
+      const exists = currentList.some((r) => r.id === updatedRider.id);
+      const nextList = exists
+        ? currentList.map((r) => (r.id === updatedRider.id ? updatedRider : r))
+        : [...currentList, updatedRider];
+      saveRidersToStorage(nextList, userId);
+    } catch {}
+    if (userId && userId !== 'guest') {
+      try {
+        await saveRiderToFirestore(userId, updatedRider);
+      } catch (e) {
+        console.warn('Non-fatal rider profile Firestore sync notice:', e);
+      }
+      try {
+        await syncPublicRiderStatement(updatedRider, updatedRider.advances || []);
+      } catch (e) {
+        console.warn('Notice syncing public statement:', e);
+      }
+    }
+  };
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToastMessage({ text, type });
@@ -247,6 +290,9 @@ export const CodManagementModal: React.FC<Props> = ({
       selectedDate,
       (sheetData) => {
         if (!mounted) return;
+        if (Array.isArray(sheetData.cashWithdrawals)) {
+          setSheetWithdrawals(sheetData.cashWithdrawals);
+        }
         if (sheetData && Array.isArray(sheetData.entries) && sheetData.entries.length > 0) {
           const entryMap = new Map<string, CodDailyEntry>();
           const aliasToKey = new Map<string, string>();
@@ -394,26 +440,34 @@ export const CodManagementModal: React.FC<Props> = ({
 
   // 1-Click Transfer COD Difference / Shortage to Advances Tab (Strict Date: selectedDate)
   const handleTransferDifferenceToAdvance = async (row: CodDailyEntry, shortAmount: number) => {
-    if (!shortAmount || shortAmount <= 0) return;
+    const safeShort = Number(shortAmount) || 0;
+    if (!safeShort || safeShort <= 0) return;
     if (row.balanceSyncedToAdvance) {
-      showToast(`⚠️ यह ₹${shortAmount} शॉर्टेज पहले ही एडवांस खाते में जुड़ चुका है!`, 'info');
+      showToast(`⚠️ यह ₹${safeShort} शॉर्टेज पहले ही एडवांस खाते में जुड़ चुका है!`, 'info');
       return;
     }
 
+    const lockKey = `modal_diff_adv_${selectedDate}_${row.riderId}`;
+    if (syncingKeysRef.current.has(lockKey)) return;
+    syncingKeysRef.current.add(lockKey);
+
     const reasonText = `दैनिक COD शॉर्टेज: कम पैसा जमा किया (${selectedDate})`;
-    const targetRider = riders.find((r) => r.id === row.riderId);
+    const targetRider = resolveTargetRider(row.riderId, row.riderPhone);
+    const effectiveRiderId = targetRider?.id || row.riderId;
     const riderName = targetRider ? targetRider.name : row.riderName;
     const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
     const previousPendingAdvance = Number(targetRider?.totalAdvance) || 0;
-    const newTotalAdvance = previousPendingAdvance + shortAmount;
+    const newTotalAdvance = previousPendingAdvance + safeShort;
+    const deterministicAdvId = buildDeterministicShortageAdvId(selectedDate, effectiveRiderId, 'balance');
 
     try {
       const advId = await writeAdvanceEntryToFirestore(userId, {
-        riderId: row.riderId,
+        id: deterministicAdvId,
+        riderId: effectiveRiderId,
         riderName,
         riderPhone,
-        amount: shortAmount,
-        remainingAmount: shortAmount,
+        amount: safeShort,
+        remainingAmount: safeShort,
         date: selectedDate, // Backdated date of COD sheet!
         reason: reasonText,
         runningBalance: newTotalAdvance,
@@ -427,12 +481,13 @@ export const CodManagementModal: React.FC<Props> = ({
           riderId: targetRider.id,
           riderName: targetRider.name,
           riderPhone: targetRider.phone,
-          amount: shortAmount,
-          remainingAmount: shortAmount,
+          amount: safeShort,
+          remainingAmount: safeShort,
           date: selectedDate,
           reason: reasonText,
           runningBalance: newTotalAdvance,
           isSettled: false,
+          isDeducted: false,
           status: 'PENDING',
           createdAt: new Date().toISOString(),
           createdBy: activeUser.name,
@@ -443,12 +498,7 @@ export const CodManagementModal: React.FC<Props> = ({
           totalAdvance: newTotalAdvance,
           advances: updatedAdvances,
         };
-        await saveRiderToFirestore(userId, updatedRider);
-        try {
-          await syncPublicRiderStatement(updatedRider, updatedAdvances);
-        } catch (e) {
-          console.warn('Notice syncing statement for shortage advance:', e);
-        }
+        await persistUpdatedRiderResilient(updatedRider);
       }
 
       const updatedEntries = gridEntries.map((e) => {
@@ -464,10 +514,22 @@ export const CodManagementModal: React.FC<Props> = ({
       setGridEntries(updatedEntries);
       await saveCodDailyEntries(userId, selectedDate, updatedEntries);
 
-      const statementUrl = getRiderStatementUrl(row.riderId);
+      recordCodAuditLog(userId, {
+        changedBy: activeUser.name,
+        role: activeUser.role,
+        riderId: row.riderId,
+        riderName,
+        date: selectedDate,
+        field: 'COD Shortage → Advance',
+        previousValue: `Prev Adv: ₹${previousPendingAdvance}`,
+        newValue: `+₹${safeShort} (Total: ₹${newTotalAdvance})`,
+        notes: reasonText,
+      }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
+
+      const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
       const smsText = formatAdvanceSmsText({
         riderName,
-        amount: shortAmount,
+        amount: safeShort,
         reason: reasonText,
         totalAdvance: newTotalAdvance,
         statementUrl,
@@ -476,38 +538,48 @@ export const CodManagementModal: React.FC<Props> = ({
       dispatchAutomatedSms({
         riderName,
         riderPhone,
-        amount: shortAmount,
+        amount: safeShort,
         message: smsText,
         type: 'advance',
         statementUrl,
       }).catch((e) => console.warn('Background shortage SMS notice:', e));
 
-      showToast(`✅ ₹${shortAmount} COD शॉर्टेज दिनांक ${formatDateDisplay(selectedDate)} एडवांस टैब में जुड़ गया एवं SMS भेजा गया!`, 'success');
+      showToast(`✅ ₹${safeShort} COD शॉर्टेज दिनांक ${formatDateDisplay(selectedDate)} एडवांस टैब में जुड़ गया एवं SMS भेजा गया!`, 'success');
     } catch (err: any) {
       console.error('Error transferring difference to advance:', err);
       showToast('एडवांस खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
+    } finally {
+      syncingKeysRef.current.delete(lockKey);
     }
   };
 
   // 1-Click Transfer COD Surplus to Incentives Tab (Strict Date: selectedDate)
   const handleTransferDifferenceToIncentive = async (row: CodDailyEntry, surplusAmount: number) => {
-    if (!surplusAmount || surplusAmount <= 0) return;
+    const safeSurplus = Number(surplusAmount) || 0;
+    if (!safeSurplus || safeSurplus <= 0) return;
     if (row.balanceSyncedToIncentive) {
-      showToast(`⚠️ यह ₹${surplusAmount} अतिरिक्त राशि पहले ही इंसेंटिव खाते में जुड़ चुकी है!`, 'info');
+      showToast(`⚠️ यह ₹${safeSurplus} अतिरिक्त राशि पहले ही इंसेंटिव खाते में जुड़ चुकी है!`, 'info');
       return;
     }
 
+    const lockKey = `modal_diff_inc_${selectedDate}_${row.riderId}`;
+    if (syncingKeysRef.current.has(lockKey)) return;
+    syncingKeysRef.current.add(lockKey);
+
     const reasonText = `दैनिक COD अतिरिक्त जमा: Surplus (${selectedDate})`;
-    const targetRider = riders.find((r) => r.id === row.riderId);
+    const targetRider = resolveTargetRider(row.riderId, row.riderPhone);
+    const effectiveRiderId = targetRider?.id || row.riderId;
     const riderName = targetRider ? targetRider.name : row.riderName;
     const riderPhone = targetRider ? targetRider.phone : (row.riderPhone || '');
+    const deterministicIncId = buildDeterministicSurplusIncId(selectedDate, effectiveRiderId, 'balance');
 
     try {
       const incId = await writeIncentiveEntryToFirestore(userId, {
-        riderId: row.riderId,
+        id: deterministicIncId,
+        riderId: effectiveRiderId,
         riderName,
         riderPhone,
-        amount: surplusAmount,
+        amount: safeSurplus,
         date: selectedDate, // Backdated date of COD sheet!
         reason: reasonText,
         source: 'surplus',
@@ -516,13 +588,13 @@ export const CodManagementModal: React.FC<Props> = ({
 
       if (targetRider) {
         const prevTotal = Number(targetRider.totalIncentive) || 0;
-        const newTotalIncentive = prevTotal + surplusAmount;
+        const newTotalIncentive = prevTotal + safeSurplus;
         const newIncItem: RiderIncentiveEntry = {
           id: incId,
           riderId: targetRider.id,
           riderName: targetRider.name,
           riderPhone: targetRider.phone,
-          amount: surplusAmount,
+          amount: safeSurplus,
           date: selectedDate,
           reason: reasonText,
           source: 'surplus',
@@ -535,12 +607,7 @@ export const CodManagementModal: React.FC<Props> = ({
           totalIncentive: newTotalIncentive,
           incentives: updatedIncentives,
         };
-        await saveRiderToFirestore(userId, updatedRider);
-        try {
-          await syncPublicRiderStatement(updatedRider, updatedRider.advances || []);
-        } catch (e) {
-          console.warn('Notice syncing statement for surplus incentive:', e);
-        }
+        await persistUpdatedRiderResilient(updatedRider);
       }
 
       const updatedEntries = gridEntries.map((e) => {
@@ -556,22 +623,36 @@ export const CodManagementModal: React.FC<Props> = ({
       setGridEntries(updatedEntries);
       await saveCodDailyEntries(userId, selectedDate, updatedEntries);
 
-      const statementUrl = getRiderStatementUrl(row.riderId);
-      const smsText = `नमस्ते ${riderName}, दिनांक ${formatDateDisplay(selectedDate)} को COD में जमा की गई आपकी अतिरिक्त राशि ₹${surplusAmount} इंसेंटिव में जोड़ दी गई है। खाता विवरण: ${statementUrl}`;
+      recordCodAuditLog(userId, {
+        changedBy: activeUser.name,
+        role: activeUser.role,
+        riderId: row.riderId,
+        riderName,
+        date: selectedDate,
+        field: 'COD Surplus → Incentive',
+        previousValue: 'Unrecorded Surplus',
+        newValue: `+₹${safeSurplus} Incentive`,
+        notes: reasonText,
+      }).then(() => loadCodAuditLogs(userId).then(setAuditLogs)).catch(() => {});
+
+      const statementUrl = getRiderStatementUrl(targetRider?.id || row.riderId);
+      const smsText = `नमस्ते ${riderName}, दिनांक ${formatDateDisplay(selectedDate)} को COD में जमा की गई आपकी अतिरिक्त राशि ₹${safeSurplus} इंसेंटिव में जोड़ दी गई है। खाता विवरण: ${statementUrl}`;
 
       dispatchAutomatedSms({
         riderName,
         riderPhone,
-        amount: surplusAmount,
+        amount: safeSurplus,
         message: smsText,
         type: 'general',
         statementUrl,
       }).catch((e) => console.warn('Background surplus SMS notice:', e));
 
-      showToast(`🎉 ₹${surplusAmount} अतिरिक्त राशि दिनांक ${formatDateDisplay(selectedDate)} इंसेंटिव खाते में जुड़ गई एवं SMS भेजा गया!`, 'success');
+      showToast(`🎉 ₹${safeSurplus} अतिरिक्त राशि दिनांक ${formatDateDisplay(selectedDate)} इंसेंटिव खाते में जुड़ गई एवं SMS भेजा गया!`, 'success');
     } catch (err: any) {
       console.error('Error transferring difference to incentive:', err);
       showToast('इंसेंटिव खाते में ट्रांसफर करने में त्रुटि हुई।', 'error');
+    } finally {
+      syncingKeysRef.current.delete(lockKey);
     }
   };
 
@@ -872,15 +953,21 @@ export const CodManagementModal: React.FC<Props> = ({
     setSettings(updated);
     await saveCodSettings(userId, updated);
 
-    // Sync to Firestore hubs doc & today's sheet so all riders receive it immediately
+    // Sync to Firestore hubs doc & today's / selectedDate's sheet so all riders receive it immediately
     if (db && userId && userId !== 'guest') {
       try {
         const todayDate = getTodayDateString();
-        await Promise.all([
+        const updates: Promise<any>[] = [
           setDoc(doc(db, 'hubs', userId, 'daily_cod_sheets', todayDate), { hubUpiId: cleanUpi }, { merge: true }),
           setDoc(doc(db, 'hubs', userId), { hubUpiId: cleanUpi }, { merge: true }),
           setDoc(doc(db, 'all_users', userId), { 'rateConfig.hubUpiId': cleanUpi, hubUpiId: cleanUpi }, { merge: true }),
-        ]);
+        ];
+        if (selectedDate && selectedDate !== todayDate) {
+          updates.push(
+            setDoc(doc(db, 'hubs', userId, 'daily_cod_sheets', selectedDate), { hubUpiId: cleanUpi }, { merge: true })
+          );
+        }
+        await Promise.all(updates);
       } catch (err) {
         console.warn('Sync hubUpiId error:', err);
       }
@@ -1104,7 +1191,14 @@ export const CodManagementModal: React.FC<Props> = ({
 
             <button
               type="button"
-              onClick={() => exportCodGridToCSV(selectedDate, gridEntries, settings.company1Name, settings.company2Name, hubName)}
+              onClick={async () => {
+                try {
+                  await exportCodGridToCSV(selectedDate, gridEntries, settings.company1Name, settings.company2Name, hubName);
+                  showToast(`✅ ${formatDateDisplay(selectedDate)} की COD रिपोर्ट एक्सपोर्ट तैयार है!`, 'success');
+                } catch (err: any) {
+                  showToast(err?.message || 'COD रिपोर्ट एक्सपोर्ट करने में त्रुटि हुई।', 'error');
+                }
+              }}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold shadow transition active:scale-95"
               title="Download Excel / CSV Statement for this date"
             >
@@ -1613,6 +1707,7 @@ export const CodManagementModal: React.FC<Props> = ({
                   hubName={hubName || 'सरायकेला कूरियर हब'}
                   isDarkTheme={true}
                   hubId={userId}
+                  cloudWithdrawals={sheetWithdrawals}
                 />
               </div>
             </div>

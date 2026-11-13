@@ -220,7 +220,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
   };
 
   // Download Single Rider PDF
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (riderEntries.length === 0) {
       showToast('No delivery entries found to generate PDF.', 'error');
       return;
@@ -229,27 +229,35 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
     const startDate = dates[0] || getTodayDateString();
     const endDate = dates[dates.length - 1] || startDate;
 
-    generatePayoutPDF({
-      title: `Rider Payout Statement - ${rider.name}`,
-      riderFilterName: rider.name,
-      startDate,
-      endDate,
-      entries: riderEntries,
-      riders: [rider],
-    });
-    showToast(`PDF Statement generated for ${rider.name}!`, 'success');
+    try {
+      await generatePayoutPDF({
+        title: `Rider Payout Statement - ${rider.name}`,
+        riderFilterName: rider.name,
+        startDate,
+        endDate,
+        entries: riderEntries,
+        riders: [rider],
+      });
+      showToast(`PDF Statement generated for ${rider.name}!`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'PDF export failed.', 'error');
+    }
   };
 
   // Download Single Rider CSV/Excel
-  const handleDownloadCSV = () => {
-    exportSingleRiderToCSV({
-      userName: user.displayName || user.name || user.email,
-      userEmail: user.email,
-      rider,
-      entries: riderEntries,
-      settlements,
-    });
-    showToast(`Excel/CSV Statement downloaded for ${rider.name}!`, 'success');
+  const handleDownloadCSV = async () => {
+    try {
+      await exportSingleRiderToCSV({
+        userName: user.displayName || user.name || user.email,
+        userEmail: user.email,
+        rider,
+        entries: riderEntries,
+        settlements,
+      });
+      showToast(`Excel/CSV Statement downloaded for ${rider.name}!`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'CSV export failed.', 'error');
+    }
   };
 
   return (

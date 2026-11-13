@@ -13,6 +13,7 @@ import {
   query,
   where,
   limit,
+  arrayUnion,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { db } from '../firebase';
@@ -1729,6 +1730,161 @@ export async function ensureWorkspaceMigration(
  * Normal users NEVER see or receive other users' riders or entries!
  * Immediately purges any records created by other external accounts.
  */
+interface DeletedTombstones {
+  entryIds: string[];
+  riderIds: string[];
+  advanceIds: string[];
+}
+
+function getTombstonesStorageKey(userId: string): string {
+  return `cp_deleted_tombstones_${userId || 'guest'}`;
+}
+
+export function getLocalDeletedTombstones(userId: string): DeletedTombstones {
+  try {
+    const raw = localStorage.getItem(getTombstonesStorageKey(userId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        entryIds: Array.isArray(parsed?.entryIds) ? parsed.entryIds : [],
+        riderIds: Array.isArray(parsed?.riderIds) ? parsed.riderIds : [],
+        advanceIds: Array.isArray(parsed?.advanceIds) ? parsed.advanceIds : [],
+      };
+    }
+  } catch {}
+  return { entryIds: [], riderIds: [], advanceIds: [] };
+}
+
+function mergeLocalDeletedTombstones(
+  userId: string,
+  additions: Partial<DeletedTombstones>
+): DeletedTombstones {
+  const cur = getLocalDeletedTombstones(userId);
+  const merged: DeletedTombstones = {
+    entryIds: Array.from(new Set([...cur.entryIds, ...(additions.entryIds || [])])).slice(-2500),
+    riderIds: Array.from(new Set([...cur.riderIds, ...(additions.riderIds || [])])).slice(-1000),
+    advanceIds: Array.from(new Set([...cur.advanceIds, ...(additions.advanceIds || [])])).slice(-2500),
+  };
+  try {
+    localStorage.setItem(getTombstonesStorageKey(userId), JSON.stringify(merged));
+  } catch {}
+  return merged;
+}
+
+function scrubTombstonesFromLocalCache(userId: string, tombstones: DeletedTombstones): void {
+  if (!userId) return;
+  const entrySet = new Set(tombstones.entryIds);
+  const riderSet = new Set(tombstones.riderIds);
+  const advSet = new Set(tombstones.advanceIds);
+
+  if (entrySet.size > 0) {
+    const entryKeys = [
+      `cp_cache_deliveries_${userId}`,
+      `courier_deliveries_u_${userId}`,
+      'courier_deliveries',
+    ];
+    entryKeys.forEach((k) => {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) return;
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return;
+        const filtered = arr.filter((item: any) => item && !entrySet.has(item.id));
+        if (filtered.length !== arr.length) {
+          localStorage.setItem(k, JSON.stringify(filtered));
+        }
+      } catch {}
+    });
+  }
+
+  if (riderSet.size > 0 || advSet.size > 0) {
+    const riderKeys = [
+      `cp_cache_riders_${userId}`,
+      `courier_riders_u_${userId}`,
+      'courier_riders',
+    ];
+    riderKeys.forEach((k) => {
+      try {
+        const raw = localStorage.getItem(k);
+        if (!raw) return;
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return;
+        let changed = false;
+        const filtered = arr
+          .filter((r: any) => {
+            if (!r) return false;
+            if (riderSet.has(r.id)) {
+              changed = true;
+              return false;
+            }
+            return true;
+          })
+          .map((r: any) => {
+            if (advSet.size > 0 && Array.isArray(r.advances)) {
+              const keptAdvs = r.advances.filter((a: any) => {
+                if (!a) return false;
+                const cleanA = String(a.id || '').replace(/^adv-/, '');
+                if (advSet.has(a.id) || advSet.has(cleanA)) {
+                  changed = true;
+                  return false;
+                }
+                return true;
+              });
+              if (keptAdvs.length !== r.advances.length) {
+                return { ...r, advances: keptAdvs };
+              }
+            }
+            return r;
+          });
+        if (changed) {
+          localStorage.setItem(k, JSON.stringify(filtered));
+        }
+      } catch {}
+    });
+  }
+}
+
+async function fetchMergedDeletedTombstones(userId: string): Promise<DeletedTombstones> {
+  const local = getLocalDeletedTombstones(userId);
+  if (!userId || userId === 'guest') return local;
+  try {
+    const snap = await getDoc(doc(db, 'workspaces', userId, 'metadata', 'deleted_tombstones'));
+    if (snap.exists()) {
+      const data = snap.data() || {};
+      return mergeLocalDeletedTombstones(userId, {
+        entryIds: Array.isArray(data.entryIds) ? data.entryIds : [],
+        riderIds: Array.isArray(data.riderIds) ? data.riderIds : [],
+        advanceIds: Array.isArray(data.advanceIds) ? data.advanceIds : [],
+      });
+    }
+  } catch (err) {
+    console.warn('Notice reading deleted tombstones:', err);
+  }
+  return local;
+}
+
+async function recordDeletedTombstones(
+  userId: string,
+  additions: Partial<DeletedTombstones>
+): Promise<void> {
+  const merged = mergeLocalDeletedTombstones(userId, additions);
+  scrubTombstonesFromLocalCache(userId, merged);
+  if (!userId || userId === 'guest') return;
+
+  const docRef = doc(db, 'workspaces', userId, 'metadata', 'deleted_tombstones');
+  const payload: any = { updatedAt: new Date().toISOString() };
+  if (additions.entryIds && additions.entryIds.length > 0) {
+    payload.entryIds = arrayUnion(...additions.entryIds);
+  }
+  if (additions.riderIds && additions.riderIds.length > 0) {
+    payload.riderIds = arrayUnion(...additions.riderIds);
+  }
+  if (additions.advanceIds && additions.advanceIds.length > 0) {
+    payload.advanceIds = arrayUnion(...additions.advanceIds);
+  }
+  await setDoc(docRef, payload, { merge: true });
+}
+
 export function subscribeToUserData(
   userId: string,
   callbacks: {
@@ -1752,11 +1908,20 @@ export function subscribeToUserData(
   const settlementsMap = new Map<string, SettlementRecord>();
   const advancesMap = new Map<string, RiderAdvanceEntry>();
   const incentivesMap = new Map<string, RiderIncentiveEntry>();
+  const initialTombstones = getLocalDeletedTombstones(userId);
+  const tombstonedEntries = new Set<string>(initialTombstones.entryIds);
+  const tombstonedRiders = new Set<string>(initialTombstones.riderIds);
+  const tombstonedAdvances = new Set<string>(initialTombstones.advanceIds);
 
   const notifyRiders = () => {
     // Strictly isolate: only include riders created by or belonging to this user's workspace
-    const rawList = Array.from(ridersMap.values()).filter((r) => isEntityOwnedByUser(r, userId, effectiveEmail));
-    const allWorkspaceAdvances = Array.from(advancesMap.values());
+    const rawList = Array.from(ridersMap.values()).filter(
+      (r) => !tombstonedRiders.has(r.id) && isEntityOwnedByUser(r, userId, effectiveEmail)
+    );
+    const allWorkspaceAdvances = Array.from(advancesMap.values()).filter((a) => {
+      const cleanId = String(a.id || '').replace(/^adv-/, '');
+      return !tombstonedAdvances.has(a.id) && !tombstonedAdvances.has(cleanId);
+    });
     const allWorkspaceIncentives = Array.from(incentivesMap.values());
     let settlementsList = Array.from(settlementsMap.values());
     if (settlementsList.length === 0) {
@@ -1773,6 +1938,8 @@ export function subscribeToUserData(
       const advByKey = new Map<string, RiderAdvanceEntry>();
       (r.advances || []).forEach((a) => {
         if (!a) return;
+        const cleanId = String(a.id || '').replace(/^adv-/, '');
+        if (tombstonedAdvances.has(a.id) || tombstonedAdvances.has(cleanId)) return;
         const key = a.id || `${a.date}_${a.amount}_${a.reason}`;
         advByKey.set(key, a);
       });
@@ -1835,8 +2002,13 @@ export function subscribeToUserData(
   };
 
   const notifyDeliveries = () => {
-    const allowedRiderIds = new Set(Array.from(ridersMap.values()).map((r) => r.id));
+    const allowedRiderIds = new Set(
+      Array.from(ridersMap.values())
+        .filter((r) => !tombstonedRiders.has(r.id))
+        .map((r) => r.id)
+    );
     const list = Array.from(deliveriesMap.values()).filter((d) => {
+      if (tombstonedEntries.has(d.id)) return false;
       if (!isEntityOwnedByUser(d, userId, effectiveEmail)) return false;
       // Never hide soft-deleted Trash Bin entries or entries arriving before ridersMap hydrates
       if (d.isDeleted) return true;
@@ -1964,12 +2136,54 @@ export function subscribeToUserData(
     }
   );
 
+  const tombstonesDocRef = doc(db, 'workspaces', userId, 'metadata', 'deleted_tombstones');
+  const unsubTombstones = onSnapshot(
+    tombstonesDocRef,
+    (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data() || {};
+      const entryIds = Array.isArray(data.entryIds) ? data.entryIds : [];
+      const riderIds = Array.isArray(data.riderIds) ? data.riderIds : [];
+      const advanceIds = Array.isArray(data.advanceIds) ? data.advanceIds : [];
+      let changed = false;
+      entryIds.forEach((id: string) => {
+        if (id && !tombstonedEntries.has(id)) {
+          tombstonedEntries.add(id);
+          deliveriesMap.delete(id);
+          changed = true;
+        }
+      });
+      riderIds.forEach((id: string) => {
+        if (id && !tombstonedRiders.has(id)) {
+          tombstonedRiders.add(id);
+          ridersMap.delete(id);
+          changed = true;
+        }
+      });
+      advanceIds.forEach((id: string) => {
+        if (id && !tombstonedAdvances.has(id)) {
+          tombstonedAdvances.add(id);
+          advancesMap.delete(id);
+          changed = true;
+        }
+      });
+      if (changed) {
+        const syncedTombstones = mergeLocalDeletedTombstones(userId, { entryIds, riderIds, advanceIds });
+        scrubTombstonesFromLocalCache(userId, syncedTombstones);
+        notifyRiders();
+        notifyDeliveries();
+      }
+    },
+    () => {}
+  );
+
   return () => {
     unsubRiders();
     unsubAdvances();
     unsubIncentives();
     unsubEntries();
     unsubSettlements();
+    unsubTombstones();
   };
 }
 
@@ -2037,6 +2251,11 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
       return result;
     }
 
+    const tombstones = await fetchMergedDeletedTombstones(userId);
+    scrubTombstonesFromLocalCache(userId, tombstones);
+    const deadRiderIds = new Set(tombstones.riderIds);
+    const deadEntryIds = new Set(tombstones.entryIds);
+
     const [ridersSnap, deliveriesSnap, settlementsSnap] = await Promise.all([
       getDocs(collection(db, 'workspaces', userId, 'riders')),
       getDocs(collection(db, 'workspaces', userId, 'entries')),
@@ -2050,6 +2269,9 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
     const ops: Array<{ ref: any; data: any }> = [];
 
     localRiders.forEach((rider, idx) => {
+      if (!rider || !rider.id) return;
+      // Never resurrect permanently deleted riders or stale trashed snapshots missing from cloud
+      if (deadRiderIds.has(rider.id) || rider.isDeleted) return;
       if (!existingRiderIds.has(rider.id)) {
         const riderWithOrder: Rider = {
           ...rider,
@@ -2064,6 +2286,9 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
     });
 
     localDeliveries.forEach((entry) => {
+      if (!entry || !entry.id) return;
+      // Never resurrect permanently deleted entries or stale trashed entries missing from cloud
+      if (deadEntryIds.has(entry.id) || entry.isDeleted) return;
       if (!existingDeliveryIds.has(entry.id)) {
         ops.push({
           ref: doc(db, 'workspaces', userId, 'entries', entry.id),
@@ -2074,6 +2299,7 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
     });
 
     localSettlements.forEach((settlement) => {
+      if (!settlement || !settlement.id) return;
       if (!existingSettlementIds.has(settlement.id)) {
         ops.push({
           ref: doc(db, 'workspaces', userId, 'settlements', settlement.id),
@@ -3128,20 +3354,17 @@ export async function writeAdvanceEntryToFirestore(
     createdAt: new Date().toISOString(),
   });
 
-  try {
-    const advRef = doc(db, 'advances', advId);
-    await setDoc(advRef, advData, { merge: true });
-  } catch (err) {
-    console.warn('Direct /advances write notice:', err);
-  }
+  const rootPromise = setDoc(doc(db, 'advances', advId), advData, { merge: true });
+  const wsPromise = userId
+    ? setDoc(doc(db, 'workspaces', userId, 'advances', advId), advData, { merge: true })
+    : Promise.resolve();
 
-  if (userId) {
-    try {
-      const wsAdvRef = doc(db, 'workspaces', userId, 'advances', advId);
-      await setDoc(wsAdvRef, advData, { merge: true });
-    } catch (err) {
-      console.warn('Workspace advances write notice:', err);
-    }
+  const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
+  if (userId && wsRes.status === 'rejected') {
+    throw wsRes.reason;
+  }
+  if (!userId && rootRes.status === 'rejected') {
+    throw rootRes.reason;
   }
 
   return advId;
@@ -3265,20 +3488,17 @@ export async function writeIncentiveEntryToFirestore(
     createdAt: new Date().toISOString(),
   });
 
-  try {
-    const incRef = doc(db, 'incentives', incId);
-    await setDoc(incRef, incData, { merge: true });
-  } catch (err) {
-    console.warn('Direct /incentives write notice:', err);
-  }
+  const rootPromise = setDoc(doc(db, 'incentives', incId), incData, { merge: true });
+  const wsPromise = userId
+    ? setDoc(doc(db, 'workspaces', userId, 'incentives', incId), incData, { merge: true })
+    : Promise.resolve();
 
-  if (userId) {
-    try {
-      const wsIncRef = doc(db, 'workspaces', userId, 'incentives', incId);
-      await setDoc(wsIncRef, incData, { merge: true });
-    } catch (err) {
-      console.warn('Workspace incentives write notice:', err);
-    }
+  const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
+  if (userId && wsRes.status === 'rejected') {
+    throw wsRes.reason;
+  }
+  if (!userId && rootRes.status === 'rejected') {
+    throw rootRes.reason;
   }
 
   return incId;
@@ -3636,39 +3856,46 @@ export async function syncSettledAdvancesAndIncentivesToFirestore(
 
 /**
  * Permanently delete a single trashed Delivery Entry from Firestore (frees Firebase storage)
+ * Records a workspace tombstone so stale browser caches can never resurrect the deleted entry.
  */
 export async function permanentlyDeleteDeliveryFromFirestore(
   userId: string,
   entryId: string
 ): Promise<void> {
   if (!entryId) return;
-  const ops: Promise<any>[] = [
+  await recordDeletedTombstones(userId, { entryIds: [entryId] });
+
+  const mirrorOps: Promise<any>[] = [
     deleteDoc(doc(db, 'deliveries', entryId)).catch(() => {}),
   ];
-  if (userId) {
-    ops.push(deleteDoc(doc(db, 'workspaces', userId, 'entries', entryId)).catch(() => {}));
-    ops.push(deleteDoc(doc(db, 'users', userId, 'deliveries', entryId)).catch(() => {}));
+  if (userId && userId !== 'guest') {
+    mirrorOps.push(deleteDoc(doc(db, 'users', userId, 'deliveries', entryId)).catch(() => {}));
+    // Primary workspace document MUST delete cleanly (propagate if permission/network fails)
+    await deleteDoc(doc(db, 'workspaces', userId, 'entries', entryId));
   }
-  await Promise.all(ops);
+  await Promise.all(mirrorOps);
 }
 
 /**
  * Permanently delete a single trashed Rider from Firestore (frees Firebase storage)
+ * Records a workspace tombstone so stale browser caches can never resurrect the deleted rider.
  */
 export async function permanentlyDeleteRiderFromFirestore(
   userId: string,
   riderId: string
 ): Promise<void> {
   if (!riderId) return;
-  const ops: Promise<any>[] = [
+  await recordDeletedTombstones(userId, { riderIds: [riderId] });
+
+  const mirrorOps: Promise<any>[] = [
     deleteDoc(doc(db, 'riders', riderId)).catch(() => {}),
     deleteDoc(doc(db, 'public_statements', riderId)).catch(() => {}),
   ];
-  if (userId) {
-    ops.push(deleteDoc(doc(db, 'workspaces', userId, 'riders', riderId)).catch(() => {}));
-    ops.push(deleteDoc(doc(db, 'users', userId, 'riders', riderId)).catch(() => {}));
+  if (userId && userId !== 'guest') {
+    mirrorOps.push(deleteDoc(doc(db, 'users', userId, 'riders', riderId)).catch(() => {}));
+    await deleteDoc(doc(db, 'workspaces', userId, 'riders', riderId));
   }
-  await Promise.all(ops);
+  await Promise.all(mirrorOps);
 }
 
 /**
@@ -3682,24 +3909,30 @@ export async function permanentlyDeleteAdvanceFromFirestore(
 ): Promise<void> {
   if (!advanceId) return;
   const cleanId = advanceId.replace(/^adv-/, '');
-  const ops: Promise<any>[] = [
+  await recordDeletedTombstones(userId, { advanceIds: [advanceId, cleanId] });
+
+  const mirrorOps: Promise<any>[] = [
     deleteDoc(doc(db, 'advances', cleanId)).catch(() => {}),
   ];
   if (cleanId !== advanceId) {
-    ops.push(deleteDoc(doc(db, 'advances', advanceId)).catch(() => {}));
+    mirrorOps.push(deleteDoc(doc(db, 'advances', advanceId)).catch(() => {}));
   }
-  if (userId) {
-    ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', cleanId)).catch(() => {}));
+  if (userId && userId !== 'guest') {
+    const wsDeletes: Promise<any>[] = [
+      deleteDoc(doc(db, 'workspaces', userId, 'advances', cleanId)),
+    ];
     if (cleanId !== advanceId) {
-      ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', advanceId)).catch(() => {}));
+      wsDeletes.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', advanceId)));
     }
-    ops.push(saveRiderToFirestore(userId, updatedRider, userEmail).catch(() => {}));
+    wsDeletes.push(saveRiderToFirestore(userId, updatedRider, userEmail));
+    await Promise.all(wsDeletes);
   }
-  await Promise.all(ops);
+  await Promise.all(mirrorOps);
 }
 
 /**
  * Empty All / Auto-Purge expired trash records from Firestore cleanly in chunks
+ * Records tombstones first so Web/other devices immediately drop and never re-upload deleted data.
  */
 export async function emptyAllTrashInFirestore(
   userId: string,
@@ -3709,41 +3942,67 @@ export async function emptyAllTrashInFirestore(
   ridersWithPrunedAdvances: Rider[],
   userEmail?: string | null
 ): Promise<void> {
-  const ops: Promise<any>[] = [];
+  const allAdvIds: string[] = [];
+  trashedAdvances.forEach(({ advanceId }) => {
+    if (!advanceId) return;
+    allAdvIds.push(advanceId);
+    const clean = advanceId.replace(/^adv-/, '');
+    if (clean !== advanceId) allAdvIds.push(clean);
+  });
+
+  if (trashedEntryIds.length > 0 || trashedRiderIds.length > 0 || allAdvIds.length > 0) {
+    await recordDeletedTombstones(userId, {
+      entryIds: trashedEntryIds,
+      riderIds: trashedRiderIds,
+      advanceIds: allAdvIds,
+    });
+  }
+
+  const primaryOps: Array<() => Promise<any>> = [];
+  const mirrorOps: Promise<any>[] = [];
 
   trashedEntryIds.forEach((entryId) => {
-    ops.push(permanentlyDeleteDeliveryFromFirestore(userId, entryId));
+    mirrorOps.push(deleteDoc(doc(db, 'deliveries', entryId)).catch(() => {}));
+    if (userId && userId !== 'guest') {
+      mirrorOps.push(deleteDoc(doc(db, 'users', userId, 'deliveries', entryId)).catch(() => {}));
+      primaryOps.push(() => deleteDoc(doc(db, 'workspaces', userId, 'entries', entryId)));
+    }
   });
 
   trashedRiderIds.forEach((riderId) => {
-    ops.push(permanentlyDeleteRiderFromFirestore(userId, riderId));
+    mirrorOps.push(deleteDoc(doc(db, 'riders', riderId)).catch(() => {}));
+    mirrorOps.push(deleteDoc(doc(db, 'public_statements', riderId)).catch(() => {}));
+    if (userId && userId !== 'guest') {
+      mirrorOps.push(deleteDoc(doc(db, 'users', userId, 'riders', riderId)).catch(() => {}));
+      primaryOps.push(() => deleteDoc(doc(db, 'workspaces', userId, 'riders', riderId)));
+    }
   });
 
   trashedAdvances.forEach(({ advanceId }) => {
     const cleanId = advanceId.replace(/^adv-/, '');
-    ops.push(deleteDoc(doc(db, 'advances', cleanId)).catch(() => {}));
+    mirrorOps.push(deleteDoc(doc(db, 'advances', cleanId)).catch(() => {}));
     if (cleanId !== advanceId) {
-      ops.push(deleteDoc(doc(db, 'advances', advanceId)).catch(() => {}));
+      mirrorOps.push(deleteDoc(doc(db, 'advances', advanceId)).catch(() => {}));
     }
-    if (userId) {
-      ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', cleanId)).catch(() => {}));
+    if (userId && userId !== 'guest') {
+      primaryOps.push(() => deleteDoc(doc(db, 'workspaces', userId, 'advances', cleanId)));
       if (cleanId !== advanceId) {
-        ops.push(deleteDoc(doc(db, 'workspaces', userId, 'advances', advanceId)).catch(() => {}));
+        primaryOps.push(() => deleteDoc(doc(db, 'workspaces', userId, 'advances', advanceId)));
       }
     }
   });
 
-  if (userId) {
+  if (userId && userId !== 'guest') {
     ridersWithPrunedAdvances.forEach((r) => {
-      ops.push(saveRiderToFirestore(userId, r, userEmail).catch(() => {}));
+      primaryOps.push(() => saveRiderToFirestore(userId, r, userEmail));
     });
   }
 
-  // Process in manageable batches so mobile network never saturates
   const CHUNK_SIZE = 20;
-  for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
-    await Promise.all(ops.slice(i, i + CHUNK_SIZE));
+  for (let i = 0; i < primaryOps.length; i += CHUNK_SIZE) {
+    await Promise.all(primaryOps.slice(i, i + CHUNK_SIZE).map((fn) => fn()));
   }
+  await Promise.all(mirrorOps);
 }
 
 
