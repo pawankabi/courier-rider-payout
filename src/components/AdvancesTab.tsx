@@ -46,7 +46,7 @@ export const AdvancesTab: React.FC<Props> = ({
   onSaveAdvance,
   onDeleteAdvance,
   onViewLedger,
-  hubName = 'सरायकेला कूरियर हब',
+  hubName = 'कूरियर हब',
 }) => {
   const [selectedRiderId, setSelectedRiderId] = useState<string>('');
   const [amount, setAmount] = useState<string>('');

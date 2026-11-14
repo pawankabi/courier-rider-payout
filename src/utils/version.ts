@@ -4,6 +4,7 @@
 
 import { App } from '@capacitor/app';
 import { isNativeAndroid } from '../services/nativeSms';
+import { safeLocalStorageSet } from '../services/appStorageAndFirebaseShield';
 
 export const APP_VERSION = '1.0.58';
 export const DEFAULT_GITHUB_REPO = 'pawankabi/courier-rider-payout';
@@ -15,9 +16,7 @@ if (typeof window !== 'undefined' && isNativeAndroid()) {
   App.getInfo().then((info) => {
     if (info && info.version) {
       nativeAppVersionCache = info.version;
-      try {
-        localStorage.setItem('cp_native_android_version', info.version);
-      } catch {}
+      safeLocalStorageSet('cp_native_android_version', info.version);
     }
   }).catch(() => {});
 }
@@ -50,7 +49,7 @@ export async function fetchLatestReleaseVersion(): Promise<string> {
       const info = await App.getInfo();
       if (info && info.version) {
         nativeAppVersionCache = info.version;
-        localStorage.setItem('cp_native_android_version', info.version);
+        safeLocalStorageSet('cp_native_android_version', info.version);
         return info.version;
       }
     } catch {}
@@ -79,8 +78,8 @@ export async function fetchLatestReleaseVersion(): Promise<string> {
       const rawTag = data.tag_name || data.name || '';
       const cleanTag = rawTag.replace(/^v/i, '').trim();
       if (cleanTag) {
-        localStorage.setItem('cp_latest_github_version', cleanTag);
-        localStorage.setItem('cp_latest_github_version_time', String(now));
+        safeLocalStorageSet('cp_latest_github_version', cleanTag);
+        safeLocalStorageSet('cp_latest_github_version_time', String(now));
         return isHigherVersion(APP_VERSION, cleanTag) ? APP_VERSION : cleanTag;
       }
     }

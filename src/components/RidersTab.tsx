@@ -40,6 +40,7 @@ import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings 
 import { RiderAdvanceModal } from './RiderAdvanceModal';
 import { RiderIncentiveModal } from './RiderIncentiveModal';
 import { generateStatementUrl, formatSalarySmsText, dispatchAutomatedSms, getWhatsAppUrl, getNativeSmsUrl } from '../services/smsService';
+import { safeLocalStorageSet } from '../services/appStorageAndFirebaseShield';
 import { 
   getRiderAppUrl, 
   copyAppShareLink,
@@ -144,7 +145,7 @@ export const RidersTab: React.FC<Props> = ({
   onOpenSubscriptionModal,
   isSuperAdmin = false,
   userId = 'guest',
-  hubName = 'सरायकेला कूरियर हब',
+  hubName = 'कूरियर हब',
   onOpenCodPortal,
   onOpenCodCompanion,
   canAccessCodCompanion = false,
@@ -209,10 +210,8 @@ export const RidersTab: React.FC<Props> = ({
   });
 
   useEffect(() => {
-    try {
-      localStorage.setItem('cp_riders_status_filter', statusFilter);
-    } catch {}
-  }, [statusFilter]);
+    safeLocalStorageSet('cp_riders_status_filter', statusFilter, userId);
+  }, [statusFilter, userId]);
 
   // Full-screen in-app rendering of CodCompanionApp when opened internally without external browser
   if (isInternalCompanionOpen) {
@@ -324,11 +323,9 @@ export const RidersTab: React.FC<Props> = ({
   const [isBulkSmsModalOpen, setIsBulkSmsModalOpen] = useState(false);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('cp_riders_range_start', rangeStartDate);
-      localStorage.setItem('cp_riders_range_end', rangeEndDate);
-    } catch {}
-  }, [rangeStartDate, rangeEndDate]);
+    safeLocalStorageSet('cp_riders_range_start', rangeStartDate, userId);
+    safeLocalStorageSet('cp_riders_range_end', rangeEndDate, userId);
+  }, [rangeStartDate, rangeEndDate, userId]);
 
   const handleSetPreset = (preset: 'this_month' | 'last_7_days' | 'last_30_days' | 'today' | 'all_time') => {
     const today = getTodayDateString();
@@ -678,25 +675,28 @@ export const RidersTab: React.FC<Props> = ({
   useEffect(() => {
     try {
       if (advanceModalRider) {
-        localStorage.setItem(
+        safeLocalStorageSet(
           'cp_riders_active_modal',
-          JSON.stringify({ type: 'advance', riderId: advanceModalRider.id })
+          JSON.stringify({ type: 'advance', riderId: advanceModalRider.id }),
+          userId
         );
       } else if (editingRider) {
-        localStorage.setItem(
+        safeLocalStorageSet(
           'cp_riders_active_modal',
-          JSON.stringify({ type: 'edit', riderId: editingRider.id })
+          JSON.stringify({ type: 'edit', riderId: editingRider.id }),
+          userId
         );
       } else if (payingRiderData) {
-        localStorage.setItem(
+        safeLocalStorageSet(
           'cp_riders_active_modal',
-          JSON.stringify({ type: 'paying', riderId: payingRiderData.rider.id })
+          JSON.stringify({ type: 'paying', riderId: payingRiderData.rider.id }),
+          userId
         );
       } else {
         localStorage.removeItem('cp_riders_active_modal');
       }
     } catch {}
-  }, [advanceModalRider, editingRider, payingRiderData]);
+  }, [advanceModalRider, editingRider, payingRiderData, userId]);
 
   // Smooth Escape key handler to return smoothly without freeze
   useEffect(() => {
@@ -769,7 +769,7 @@ export const RidersTab: React.FC<Props> = ({
     const cleanPhone = cleanPhoneNumber(rider.phone);
     const grossPayout = grossWithIncentives;
     const netPayout = grossPayout - numAdvance;
-    const effectiveHub = (hubSignature || '').trim() || 'सरायकेला कूरियर हब';
+    const effectiveHub = (hubSignature || '').trim() || 'कूरियर हब';
 
     const settlementSms =
       netPayout >= 0

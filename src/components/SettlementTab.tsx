@@ -432,7 +432,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     // If Net Settlement < 0 (Overpaid / Recovery Due):
     // "नमस्ते [Rider], आपका दिनांक [From Date] से [To Date] तक का कुल पारिश्रमिक ₹[Gross] बना, जबकि आपका कुल एडवांस ₹[Advance] था। हिसाब के उपरांत आपसे ₹[Math.abs(Net)] लेना शेष है। कृपया यह राशि आज ही कार्यालय में जमा कर दें ताकि अन्य डिलीवरी साथियों को भुगतान किया जा सके। आपके सहयोग के लिए धन्यवाद - [Hub Name]"
     const cleanPhone = (selectedRider.phone || '').trim().replace(/\D/g, '').slice(-10);
-    const effectiveHubName = (hubName || '').trim() || 'सरायकेला कूरियर हब';
+    const effectiveHubName = (hubName || '').trim() || 'कूरियर हब';
 
     const settlementSms =
       netSettlement >= 0

@@ -2,6 +2,7 @@ import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firest
 import { db } from '../firebase';
 import { UserSubscription, createDefaultUserSubscription } from '../types';
 import { normalizeUserSubscription } from './firestoreSync';
+import { safeLocalStorageSet } from './appStorageAndFirebaseShield';
 
 export interface PayuConfig {
   merchantKey: string;
@@ -45,11 +46,7 @@ export function saveStoredPayuConfig(config: Partial<PayuConfig>): PayuConfig {
     environment: config.environment ?? current.environment,
     merchantName: (config.merchantName ?? current.merchantName).trim(),
   };
-  try {
-    localStorage.setItem(PAYU_CONFIG_STORAGE_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.warn('Failed to persist PayU config', e);
-  }
+  safeLocalStorageSet(PAYU_CONFIG_STORAGE_KEY, JSON.stringify(updated));
   return updated;
 }
 
@@ -223,14 +220,10 @@ export async function executePayuAutoApproval(
   };
 
   // Immediate local cache update for instant 0ms offline/freemium unlock
-  try {
-    localStorage.setItem('cp_current_is_pro', 'true');
-    localStorage.setItem(`cp_sub_${userId}`, JSON.stringify(updatedSub));
-    localStorage.setItem(`cp_is_pro_${userId}`, 'true');
-    localStorage.setItem('cp_plan_expires_at', newValidUntilIso);
-  } catch (err) {
-    console.warn('Failed to cache pro status to localStorage', err);
-  }
+  safeLocalStorageSet('cp_current_is_pro', 'true', userId);
+  safeLocalStorageSet(`cp_sub_${userId}`, JSON.stringify(updatedSub), userId);
+  safeLocalStorageSet(`cp_is_pro_${userId}`, 'true', userId);
+  safeLocalStorageSet('cp_plan_expires_at', newValidUntilIso, userId);
 
   // 1. Update user's personal doc
   try {

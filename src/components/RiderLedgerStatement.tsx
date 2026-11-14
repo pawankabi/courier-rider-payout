@@ -135,8 +135,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             riderName: localRider.name || 'कूरियर डिलीवरी राइडर',
             riderPhone: localRider.phone || '',
             vehicleType: localRider.vehicleType || 'Bike',
-            hubName: 'सरायकेला कूरियर डिलीवरी हब',
-            hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+            hubName: 'कूरियर डिलीवरी हब',
+            hubSignature: 'कूरियर डिलीवरी हब',
             totalAdvance: typeof localRider.totalAdvance === 'number' ? localRider.totalAdvance : 0,
             totalIncentive: typeof localRider.totalIncentive === 'number' ? localRider.totalIncentive : 0,
             advances: Array.isArray(localRider.advances) ? localRider.advances : [],
@@ -638,7 +638,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                 राइडर खाता बही (Rider Khatabook Ledger)
               </h1>
               <p className="text-[11px] text-slate-400 truncate">
-                {statement.riderName} • {statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}
+                {statement.riderName} • {statement.hubName || 'कूरियर डिलीवरी हब'}
               </p>
             </div>
           </div>
@@ -713,7 +713,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                   {statement.riderName}
                 </h2>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 print:bg-slate-100 print:text-slate-800">
-                  {statement.hubName || 'सरायकेला कूरियर हब'}
+                  {statement.hubName || 'कूरियर हब'}
                 </span>
               </div>
               <div className="text-xs text-slate-500 mt-1 flex items-center gap-2 flex-wrap print:text-slate-600">
@@ -974,7 +974,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
           <div className="flex justify-between items-end">
             <div>
               <p className="text-slate-600 font-sans">
-                यह <strong>{statement.hubName || 'सरायकेला कूरियर डिलीवरी हब'}</strong> द्वारा जारी किया गया आधिकारिक कंप्यूटर जनरेटेड खाता विवरण है।
+                यह <strong>{statement.hubName || 'कूरियर डिलीवरी हब'}</strong> द्वारा जारी किया गया आधिकारिक कंप्यूटर जनरेटेड खाता विवरण है।
               </p>
               <p className="text-slate-400 text-[10px] mt-1 font-mono">
                 जनरेटेड दिनांक: {formatDateDisplay(getTodayDateString())}

@@ -35,6 +35,7 @@ import {
   formatVaultSummaryShareText
 } from '../../utils/denominationUtils';
 import { saveCodWithdrawalsToSheet } from '../../services/codService';
+import { safeLocalStorageSet } from '../../services/appStorageAndFirebaseShield';
 
 export interface DailyConsolidatedDenominationSummaryProps {
   entries: CodDailyEntry[];
@@ -58,7 +59,7 @@ const QUICK_PURPOSE_OPTIONS = [
 export const DailyConsolidatedDenominationSummary: React.FC<DailyConsolidatedDenominationSummaryProps> = ({
   entries,
   selectedDate,
-  hubName = 'सरायकेला कूरियर हब',
+  hubName = 'कूरियर हब',
   isDarkTheme = false,
   hubId,
   adminName = 'हब एडमिन',
@@ -97,9 +98,7 @@ export const DailyConsolidatedDenominationSummary: React.FC<DailyConsolidatedDen
         const prevSig = prev.map((w) => `${w.id}:${w.totalAmount}`).join('|');
         const cloudSig = cloudWithdrawals.map((w) => `${w.id}:${w.totalAmount}`).join('|');
         if (prevSig === cloudSig) return prev;
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(cloudWithdrawals));
-        } catch {}
+        safeLocalStorageSet(storageKey, JSON.stringify(cloudWithdrawals), hubId);
         return cloudWithdrawals;
       });
       return;
@@ -126,11 +125,7 @@ export const DailyConsolidatedDenominationSummary: React.FC<DailyConsolidatedDen
 
   const saveWithdrawalsToStorage = (updated: CashWithdrawalRecord[]) => {
     setWithdrawals(updated);
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(updated));
-    } catch (e) {
-      console.warn('Failed to save withdrawals to storage:', e);
-    }
+    safeLocalStorageSet(storageKey, JSON.stringify(updated), hubId);
     if (hubId) {
       void saveCodWithdrawalsToSheet(hubId, selectedDate, updated);
     }

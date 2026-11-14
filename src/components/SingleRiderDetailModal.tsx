@@ -466,7 +466,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
-                    placeholder="e.g. Rahul Sharma"
+                    placeholder="e.g. Rider Full Name"
                   />
                 </div>
 
@@ -750,7 +750,7 @@ export const SingleRiderDetailModal: React.FC<SingleRiderDetailModalProps> = ({
           rider={rider}
           settlements={settlements}
           deliveries={riderEntries}
-          hubName={user.displayName || user.name || 'सरायकेला कूरियर हब'}
+          hubName={user.displayName || user.name || 'कूरियर हब'}
           hubSignature={user.hubSignature}
           onClose={() => setIsAdvanceModalOpen(false)}
           onSaveAdvance={async (updatedRider, newAdvance) => {

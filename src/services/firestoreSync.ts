@@ -48,6 +48,12 @@ import {
 } from '../utils/storage';
 import { purgePhantomAdvances } from '../utils/pureLedgerEngine';
 import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal } from '../utils/payoutCalculations';
+import {
+  enforceLocalStorageHeadroom,
+  safeLocalStorageSet,
+  isFirestoreInternalAssertionOrQuotaError,
+  handleProtectedFirestoreFailure,
+} from './appStorageAndFirebaseShield';
 
 export const SUPER_ADMIN_EMAIL = 'pawankabiseraikella@gmail.com';
 
@@ -56,7 +62,18 @@ export function isSuperAdmin(email?: string | null): boolean {
   return email.trim().toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
 }
 
+export function formatProtectedLedgerError(
+  err: unknown,
+  userId?: string | null
+): { isQuotaOrAssertion: boolean; friendlyHindiMessage: string } {
+  return handleProtectedFirestoreFailure(err, userId);
+}
+
 export function isTransientNetworkError(err: any): boolean {
+  if (isFirestoreInternalAssertionOrQuotaError(err)) {
+    handleProtectedFirestoreFailure(err);
+    return false;
+  }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     return true;
   }
@@ -1798,7 +1815,7 @@ function mergeLocalDeletedTombstones(
     advanceIds: Array.from(new Set([...cur.advanceIds, ...(additions.advanceIds || [])])).slice(-2500),
   };
   try {
-    localStorage.setItem(getTombstonesStorageKey(userId), JSON.stringify(merged));
+    safeLocalStorageSet(getTombstonesStorageKey(userId), JSON.stringify(merged), userId);
   } catch {}
   return merged;
 }
@@ -1823,7 +1840,7 @@ function scrubTombstonesFromLocalCache(userId: string, tombstones: DeletedTombst
         if (!Array.isArray(arr)) return;
         const filtered = arr.filter((item: any) => item && !entrySet.has(item.id));
         if (filtered.length !== arr.length) {
-          localStorage.setItem(k, JSON.stringify(filtered));
+          safeLocalStorageSet(k, JSON.stringify(filtered), userId);
         }
       } catch {}
     });
@@ -1869,7 +1886,7 @@ function scrubTombstonesFromLocalCache(userId: string, tombstones: DeletedTombst
             return r;
           });
         if (changed) {
-          localStorage.setItem(k, JSON.stringify(filtered));
+          safeLocalStorageSet(k, JSON.stringify(filtered), userId);
         }
       } catch {}
     });
@@ -3040,8 +3057,8 @@ export async function fetchPublicRiderStatement(
       riderName: `राइडर (${cleanId})`,
       riderPhone: '',
       vehicleType: 'Hero Splendor (Bike)',
-      hubName: 'सरायकेला कूरियर डिलीवरी हब',
-      hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+      hubName: 'कूरियर डिलीवरी हब',
+      hubSignature: 'कूरियर डिलीवरी हब',
       totalAdvance: 0,
       advances: [],
       salaries: [],
@@ -3286,8 +3303,8 @@ export async function fetchPublicRiderStatement(
       riderName: foundRider.name,
       riderPhone: foundRider.phone,
       vehicleType: foundRider.vehicleType || 'Hero Splendor (Bike)',
-      hubName: 'सरायकेला कूरियर डिलीवरी हब',
-      hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+      hubName: 'कूरियर डिलीवरी हब',
+      hubSignature: 'कूरियर डिलीवरी हब',
       totalAdvance: typeof foundRider.totalAdvance === 'number' ? foundRider.totalAdvance : 0,
       advances,
       totalIncentive: typeof foundRider.totalIncentive === 'number' ? foundRider.totalIncentive : 0,
@@ -3317,8 +3334,8 @@ export async function fetchPublicRiderStatement(
             riderName: matched.name,
             riderPhone: matched.phone,
             vehicleType: matched.vehicleType || 'Hero Splendor (Bike)',
-            hubName: 'सरायकेला कूरियर डिलीवरी हब',
-            hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+            hubName: 'कूरियर डिलीवरी हब',
+            hubSignature: 'कूरियर डिलीवरी हब',
             totalAdvance: typeof matched.totalAdvance === 'number' ? matched.totalAdvance : 0,
             advances: Array.isArray(matched.advances) ? matched.advances : [],
             salaries: [],
@@ -3334,8 +3351,8 @@ export async function fetchPublicRiderStatement(
       riderName: `राइडर (${cleanId})`,
       riderPhone: '',
       vehicleType: 'Hero Splendor (Bike)',
-      hubName: 'सरायकेला कूरियर डिलीवरी हब',
-      hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+      hubName: 'कूरियर डिलीवरी हब',
+      hubSignature: 'कूरियर डिलीवरी हब',
       totalAdvance: 0,
       advances: [],
       salaries: [],
@@ -3407,24 +3424,38 @@ export async function writeAdvanceEntryToFirestore(
     updatedAt: nowIso,
   });
 
-  const rootPromise = setDoc(doc(db, 'advances', advId), advData, { merge: true });
-  const wsPromise = !isGuest
-    ? setDoc(doc(db, 'workspaces', effectiveUserId, 'advances', advId), advData, { merge: true })
-    : Promise.resolve();
+  try {
+    const rootPromise = setDoc(doc(db, 'advances', advId), advData, { merge: true });
+    const wsPromise = !isGuest
+      ? setDoc(doc(db, 'workspaces', effectiveUserId, 'advances', advId), advData, { merge: true })
+      : Promise.resolve();
 
-  const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
-  if (!isGuest) {
-    if (wsRes.status === 'rejected') {
-      if (rootRes.status === 'rejected' || Boolean(auth?.currentUser)) {
-        throw wsRes.reason;
+    const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
+    if (!isGuest) {
+      if (wsRes.status === 'rejected') {
+        if (isFirestoreInternalAssertionOrQuotaError(wsRes.reason)) {
+          handleProtectedFirestoreFailure(wsRes.reason, effectiveUserId);
+        }
+        if (rootRes.status === 'rejected' || Boolean(auth?.currentUser)) {
+          throw wsRes.reason;
+        }
+        console.warn('Workspace advance mirror skipped in companion session:', wsRes.reason);
       }
-      console.warn('Workspace advance mirror skipped in companion session:', wsRes.reason);
+    } else if (rootRes.status === 'rejected') {
+      if (isFirestoreInternalAssertionOrQuotaError(rootRes.reason)) {
+        handleProtectedFirestoreFailure(rootRes.reason, effectiveUserId);
+      }
+      throw rootRes.reason;
     }
-  } else if (rootRes.status === 'rejected') {
-    throw rootRes.reason;
-  }
 
-  return advId;
+    return advId;
+  } catch (err) {
+    if (isFirestoreInternalAssertionOrQuotaError(err)) {
+      enforceLocalStorageHeadroom(effectiveUserId, { aggressive: true });
+      handleProtectedFirestoreFailure(err, effectiveUserId);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -3550,24 +3581,38 @@ export async function writeIncentiveEntryToFirestore(
     updatedAt: nowIso,
   });
 
-  const rootPromise = setDoc(doc(db, 'incentives', incId), incData, { merge: true });
-  const wsPromise = !isGuest
-    ? setDoc(doc(db, 'workspaces', effectiveUserId, 'incentives', incId), incData, { merge: true })
-    : Promise.resolve();
+  try {
+    const rootPromise = setDoc(doc(db, 'incentives', incId), incData, { merge: true });
+    const wsPromise = !isGuest
+      ? setDoc(doc(db, 'workspaces', effectiveUserId, 'incentives', incId), incData, { merge: true })
+      : Promise.resolve();
 
-  const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
-  if (!isGuest) {
-    if (wsRes.status === 'rejected') {
-      if (rootRes.status === 'rejected' || Boolean(auth?.currentUser)) {
-        throw wsRes.reason;
+    const [rootRes, wsRes] = await Promise.allSettled([rootPromise, wsPromise]);
+    if (!isGuest) {
+      if (wsRes.status === 'rejected') {
+        if (isFirestoreInternalAssertionOrQuotaError(wsRes.reason)) {
+          handleProtectedFirestoreFailure(wsRes.reason, effectiveUserId);
+        }
+        if (rootRes.status === 'rejected' || Boolean(auth?.currentUser)) {
+          throw wsRes.reason;
+        }
+        console.warn('Workspace incentive mirror skipped in companion session:', wsRes.reason);
       }
-      console.warn('Workspace incentive mirror skipped in companion session:', wsRes.reason);
+    } else if (rootRes.status === 'rejected') {
+      if (isFirestoreInternalAssertionOrQuotaError(rootRes.reason)) {
+        handleProtectedFirestoreFailure(rootRes.reason, effectiveUserId);
+      }
+      throw rootRes.reason;
     }
-  } else if (rootRes.status === 'rejected') {
-    throw rootRes.reason;
-  }
 
-  return incId;
+    return incId;
+  } catch (err) {
+    if (isFirestoreInternalAssertionOrQuotaError(err)) {
+      enforceLocalStorageHeadroom(effectiveUserId, { aggressive: true });
+      handleProtectedFirestoreFailure(err, effectiveUserId);
+    }
+    throw err;
+  }
 }
 
 /**

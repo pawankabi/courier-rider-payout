@@ -11,10 +11,21 @@ import {
   getFirestore, 
   Firestore,
   persistentLocalCache,
-  persistentMultipleTabManager,
+  persistentSingleTabManager,
+  memoryLocalCache,
   setLogLevel
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
+import {
+  enforceLocalStorageHeadroom,
+  shouldBootFirestoreInMemoryMode,
+  clearFirestoreMemoryFallbackFlag,
+} from './services/appStorageAndFirebaseShield';
+
+// Run pre-boot storage safety shield BEFORE Firestore initializes so old WebStorage bloat never triggers QuotaExceededError/b815
+if (typeof window !== 'undefined') {
+  enforceLocalStorageHeadroom();
+}
 
 // Silence internal connection retry warnings so harmless transient reconnects do not trigger alerts
 try {
@@ -35,26 +46,33 @@ if (typeof window !== 'undefined') {
 // Permanent Single Source of Truth for Firestore Database Instance
 export const UNIFIED_FIRESTORE_DATABASE_ID = 'ai-studio-courierriderpayo-41843168-17ea-4603-a026-a68d04853b7c';
 
-// Use initializeFirestore with experimentalAutoDetectLongPolling & persistentLocalCache
-// to reliably connect through proxies, sandboxed iframes & mobile connections while enabling offline capability
+// Use single-tab IndexedDB persistence (zero localStorage firestore_clients_* writes) with memoryLocalCache safety fallback
 let firestoreDb: Firestore;
+const useSafeMemoryBoot = shouldBootFirestoreInMemoryMode();
 try {
   firestoreDb = initializeFirestore(
     app,
     {
       experimentalAutoDetectLongPolling: true,
-      localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager(),
-      }),
+      localCache: useSafeMemoryBoot
+        ? memoryLocalCache()
+        : persistentLocalCache({
+            tabManager: persistentSingleTabManager({ forceOwnership: true }),
+          }),
     },
     UNIFIED_FIRESTORE_DATABASE_ID
   );
+  if (useSafeMemoryBoot) {
+    // Once safely booted after recovery, allow normal single-tab persistence on subsequent cold boots
+    clearFirestoreMemoryFallbackFlag();
+  }
 } catch {
   try {
     firestoreDb = initializeFirestore(
       app,
       {
         experimentalAutoDetectLongPolling: true,
+        localCache: memoryLocalCache(),
       },
       UNIFIED_FIRESTORE_DATABASE_ID
     );

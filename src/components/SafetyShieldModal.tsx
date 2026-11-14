@@ -311,7 +311,7 @@ export const SafetyShieldModal: React.FC<SafetyShieldModalProps> = ({
 
         {/* Modal Footer */}
         <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
-          <span>सरायकेला कूरियर डिलीवरी हब • सुरक्षा कवच v2.5</span>
+          <span>कूरियर डिलीवरी हब • सुरक्षा कवच v2.5</span>
           <button
             type="button"
             onClick={onClose}

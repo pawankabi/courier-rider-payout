@@ -36,25 +36,28 @@ import {
 import { getTodayDateString, formatINR } from '../utils/formatters';
 import { dispatchAutomatedSms, getRiderStatementUrl } from './smsService';
 import { isNativeAndroid, sendNativeBackgroundSms } from './nativeSms';
-import { loadRidersFromStorage, saveRidersToStorage, trySetLocalStorageItem, reclaimLocalStorageSpace } from '../utils/storage';
+import { loadRidersFromStorage, saveRidersToStorage } from '../utils/storage';
 import { calculateActiveAdvanceTotal } from '../utils/payoutCalculations';
 import { exportFileNativelyOrWeb } from '../utils/fileExporter';
+import {
+  safeLocalStorageSet,
+  enforceLocalStorageHeadroom,
+  handleProtectedFirestoreFailure,
+  isFirestoreInternalAssertionOrQuotaError,
+} from './appStorageAndFirebaseShield';
 
 /**
  * Quota-safe COD localStorage writer:
- * Automatically prunes redundant/old COD date caches (>45 distinct dates) if browser/WebView quota is tight.
+ * Stores ONLY canonical scoped keys via the unified shield (`safeLocalStorageSet`)
+ * and triggers headroom cleanup automatically before Chromium/WebView 5MB quota is reached.
  */
 export function saveCodCacheSafely(entriesToSave: Array<[string, string]>, hubId?: string): void {
   if (typeof window === 'undefined') return;
   for (const [k, v] of entriesToSave) {
-    const ok = trySetLocalStorageItem(k, v, hubId);
+    const ok = safeLocalStorageSet(k, v, hubId);
     if (!ok) {
-      reclaimLocalStorageSpace(hubId);
-      try {
-        localStorage.setItem(k, v);
-      } catch {
-        // Non-fatal: Firestore remains the primary source of truth
-      }
+      enforceLocalStorageHeadroom(hubId, { aggressive: true });
+      safeLocalStorageSet(k, v, hubId);
     }
   }
 }
@@ -250,9 +253,7 @@ export function mergeCodEntriesNonDestructively(
     }
   });
 
-  return Array.from(mergedMap.values()).filter(
-    (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
-  );
+  return Array.from(mergedMap.values());
 }
 
 export const DEFAULT_COD_SETTINGS: CodSettings = {
@@ -308,7 +309,7 @@ export async function loadCodSettings(userId: string): Promise<CodSettings> {
             companies: companies,
             updatedAt: new Date().toISOString(),
           };
-          localStorage.setItem(localKey, JSON.stringify(assignedSettings));
+          safeLocalStorageSet(localKey, JSON.stringify(assignedSettings), userId);
           return assignedSettings;
         }
       }
@@ -317,7 +318,7 @@ export async function loadCodSettings(userId: string): Promise<CodSettings> {
       const snap = await getDoc(docRef);
       if (snap.exists()) {
         const firestoreData = snap.data() as CodSettings;
-        localStorage.setItem(localKey, JSON.stringify(firestoreData));
+        safeLocalStorageSet(localKey, JSON.stringify(firestoreData), userId);
         return firestoreData;
       }
     } catch (err) {
@@ -334,9 +335,7 @@ export async function saveCodSettings(userId: string, settings: CodSettings): Pr
     updatedAt: new Date().toISOString(),
   };
   const localKey = getSettingsStorageKey(userId);
-  try {
-    localStorage.setItem(localKey, JSON.stringify(updated));
-  } catch {}
+  safeLocalStorageSet(localKey, JSON.stringify(updated), userId);
 
   if (db && userId && userId !== 'guest') {
     try {
@@ -367,7 +366,7 @@ export async function loadCodStaffUsers(userId: string, riders: Rider[]): Promis
       const snaps = await getDocs(colRef);
       if (!snaps.empty) {
         existingStaff = snaps.docs.map((d) => d.data() as CodStaffUser);
-        localStorage.setItem(localKey, JSON.stringify(existingStaff));
+        safeLocalStorageSet(localKey, JSON.stringify(existingStaff), userId);
       }
     } catch (err) {
       console.warn('COD staff firestore fetch error:', err);
@@ -422,9 +421,7 @@ export async function loadCodStaffUsers(userId: string, riders: Rider[]): Promis
 
   const mergedList = Array.from(staffMap.values());
   if (modified) {
-    try {
-      localStorage.setItem(localKey, JSON.stringify(mergedList));
-    } catch {}
+    safeLocalStorageSet(localKey, JSON.stringify(mergedList), userId);
   }
 
   return mergedList;
@@ -432,10 +429,9 @@ export async function loadCodStaffUsers(userId: string, riders: Rider[]): Promis
 
 export async function saveCodStaffUsers(userId: string, staffList: CodStaffUser[]): Promise<void> {
   const localKey = getStaffStorageKey(userId);
-  try {
-    localStorage.setItem(localKey, JSON.stringify(staffList));
-    localStorage.setItem('cp_cod_staff_pins_cache', JSON.stringify(staffList));
-  } catch {}
+  const rawStaff = JSON.stringify(staffList);
+  safeLocalStorageSet(localKey, rawStaff, userId);
+  safeLocalStorageSet('cp_cod_staff_pins_cache', rawStaff, userId);
 
   if (db) {
     try {
@@ -767,7 +763,7 @@ export async function loadCodDailyEntries(
         }
       }
 
-      // 1a-2. Check DEFAULT_PRIMARY_HUB_ID (Saraikela Courier Hub) if different from effectiveUserId
+      // 1a-2. Check DEFAULT_PRIMARY_HUB_ID (Primary Courier Hub) if different from effectiveUserId
       if (savedEntries.filter(hasRecordedData).length === 0 && effectiveUserId !== DEFAULT_PRIMARY_HUB_ID) {
         try {
           const primaryHubSnap = await getDoc(doc(db, 'hubs', DEFAULT_PRIMARY_HUB_ID, 'daily_cod_sheets', targetDate));
@@ -886,11 +882,10 @@ export async function loadCodDailyEntries(
       }
 
       if (savedEntries.length > 0) {
-        try {
-          localStorage.setItem(localKey, JSON.stringify(savedEntries));
-          localStorage.setItem(`cp_cod_sheet_${effectiveUserId}_${targetDate}`, JSON.stringify({ entries: savedEntries }));
-          localStorage.setItem(`cp_cod_sheet_${targetDate}`, JSON.stringify({ entries: savedEntries }));
-        } catch {}
+        saveCodCacheSafely(
+          [[`cp_cod_sheet_${effectiveUserId}_${targetDate}`, JSON.stringify({ date: targetDate, entries: savedEntries })]],
+          effectiveUserId
+        );
       }
     } catch (err) {
       console.warn('daily_cod_sheets direct fetch notice:', err);
@@ -927,9 +922,10 @@ export async function loadCodDailyEntries(
           .filter((e) => e.date === targetDate);
         if (allDateEntries.length > 0) {
           savedEntries = allDateEntries;
-          try {
-            localStorage.setItem(localKey, JSON.stringify(savedEntries));
-          } catch {}
+          saveCodCacheSafely(
+            [[`cp_cod_sheet_${userId}_${targetDate}`, JSON.stringify({ date: targetDate, entries: savedEntries })]],
+            userId
+          );
         }
       }
     } catch (err) {
@@ -937,16 +933,11 @@ export async function loadCodDailyEntries(
     }
   }
 
-  // Populate/reconcile with active riders (strictly filtered by clean memory filter)
-  const cleanRiders = (riders || []).filter(
-    (r) => (r.name || '').trim().toLowerCase() !== 'akash mahato' && (r.phone || '').trim().replace(/\D/g, '') !== '6207262418'
-  );
+  const cleanRiders = riders || [];
 
   const entryMap = new Map<string, CodDailyEntry>();
   savedEntries.forEach((e) => {
-    const name = (e.riderName || '').trim().toLowerCase();
     const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-    if (name === 'akash mahato' || cleanPhone === '6207262418') return;
     if (e.riderId) entryMap.set(e.riderId, e);
     if (cleanPhone) entryMap.set(cleanPhone, e);
   });
@@ -1017,24 +1008,11 @@ export async function saveCodDailyEntries(
   entries: CodDailyEntry[]
 ): Promise<void> {
   const targetDate = date || getTodayDateString();
-  const localKey = getEntriesStorageKey(userId, targetDate);
-  const cleanEntries = (entries || []).filter(
-    (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
-  );
+  const cleanEntries = entries || [];
   try {
-    // Dual phone memory backup with quota guard: Array entries key and full sheet key
-    const entriesJson = JSON.stringify(cleanEntries);
-    const sheetJson = JSON.stringify({ date: targetDate, entries: cleanEntries });
-    const cachePairs: Array<[string, string]> = [
-      [localKey, entriesJson],
-      [`cod_entries_${targetDate}`, entriesJson],
-      [`cp_cod_sheet_${targetDate}`, sheetJson],
-    ];
-    if (userId) {
-      cachePairs.push([`cod_entries_${userId}_${targetDate}`, entriesJson]);
-      cachePairs.push([`cp_cod_sheet_${userId}_${targetDate}`, sheetJson]);
-    }
-    saveCodCacheSafely(cachePairs, userId);
+    const effectiveHub = (userId || getActiveCompanionHubId() || 'default').trim();
+    const sheetJson = JSON.stringify({ date: targetDate, entries: cleanEntries, hubId: effectiveHub });
+    saveCodCacheSafely([[`cp_cod_sheet_${effectiveHub}_${targetDate}`, sheetJson]], effectiveHub);
   } catch {}
 
   if (db) {
@@ -1141,7 +1119,7 @@ export async function loadCodAuditLogs(userId: string): Promise<CodAuditLog[]> {
       if (!snaps.empty) {
         logs = snaps.docs.map((d) => d.data() as CodAuditLog);
         logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        localStorage.setItem(localKey, JSON.stringify(logs));
+        safeLocalStorageSet(localKey, JSON.stringify(logs.slice(0, 50)), userId);
       }
     } catch (err) {
       console.warn('COD audit firestore fetch error:', err);
@@ -1164,8 +1142,8 @@ export async function recordCodAuditLog(
   const localKey = getAuditStorageKey(userId);
   try {
     const current = await loadCodAuditLogs(userId);
-    const updated = [newLog, ...current].slice(0, 300); // keep recent 300 audit events
-    localStorage.setItem(localKey, JSON.stringify(updated));
+    const updated = [newLog, ...current].slice(0, 50); // keep recent 50 locally; Firestore holds full history
+    safeLocalStorageSet(localKey, JSON.stringify(updated), userId);
   } catch {}
 
   if (db && userId && userId !== 'guest') {
@@ -1186,7 +1164,7 @@ export async function exportCodGridToCSV(
   entries: CodDailyEntry[],
   company1Name: string,
   company2Name: string,
-  hubName: string = 'Saraikela Courier Hub'
+  hubName: string = 'Courier Hub'
 ): Promise<void> {
   const safeDate = String(date || getTodayDateString()).replace(/[^a-zA-Z0-9_-]/g, '_');
   const c1Label = String(company1Name || 'Company 1').replace(/"/g, '""');
@@ -1775,14 +1753,14 @@ export async function authenticateCodStaffCompanion(
 
   // 6. SAVE ISOLATED COMPANION SESSION (localStorage: active_hub_id & active_companion_hub_id)
   try {
-    localStorage.setItem('active_hub_id', finalHubId);
+    safeLocalStorageSet('active_hub_id', finalHubId, finalHubId);
     sessionStorage.setItem('active_hub_id', finalHubId);
-    localStorage.setItem('active_companion_hub_id', finalHubId);
+    safeLocalStorageSet('active_companion_hub_id', finalHubId, finalHubId);
     sessionStorage.setItem('active_companion_hub_id', finalHubId);
-    localStorage.setItem('cp_authenticated_hub_id', finalHubId);
+    safeLocalStorageSet('cp_authenticated_hub_id', finalHubId, finalHubId);
     sessionStorage.setItem('cp_authenticated_hub_id', finalHubId);
     sessionStorage.setItem('cp_cod_companion_user', JSON.stringify(matchedUser));
-    localStorage.setItem('cp_cod_companion_user', JSON.stringify(matchedUser));
+    safeLocalStorageSet('cp_cod_companion_user', JSON.stringify(matchedUser), finalHubId);
   } catch {}
 
   return {
@@ -1947,11 +1925,8 @@ export async function getAllActiveRidersForCod(authenticatedHubId?: string | nul
     return owner && owner === hubId;
   });
 
-  // Strict clean memory filter: exclude any mock/alien rider completely
-  const cleanRiders = result.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
-
-  console.log(`🔒 [Hub Isolation] Hub: ${hubId.substring(0, 8)} resolved ${cleanRiders.length} active riders`);
-  return cleanRiders;
+  console.log(`🔒 [Hub Isolation] Hub: ${hubId.substring(0, 8)} resolved ${result.length} active riders`);
+  return result;
 }
 
 /**
@@ -2024,11 +1999,8 @@ export function subscribeToHubRiders(
           const owner = (r.workspaceId || r.hubId || r.userId || r.ownerUid || r.createdBy || '').trim();
           return owner && owner === targetHubId;
         });
-        const cleanRiders = filtered.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
-        try {
-          localStorage.setItem(`cp_cache_riders_${targetHubId}`, JSON.stringify(cleanRiders));
-        } catch {}
-        onRidersUpdate(cleanRiders);
+        safeLocalStorageSet(`cp_cache_riders_${targetHubId}`, JSON.stringify(filtered), targetHubId);
+        onRidersUpdate(filtered);
       }
     };
 
@@ -2233,15 +2205,7 @@ export function subscribeToDailyCodSheet(
           hubId: effectiveHubId,
         };
         activeSheetInMemory = enriched;
-        try {
-          saveCodCacheSafely(
-            [
-              [localCacheKey, JSON.stringify(enriched)],
-              [`cod_entries_${effectiveHubId}_${targetDate}`, JSON.stringify(defaultEntries)],
-            ],
-            effectiveHubId
-          );
-        } catch {}
+        saveCodCacheSafely([[localCacheKey, JSON.stringify(enriched)]], effectiveHubId);
         onUpdate(enriched);
         return;
       }
@@ -2304,18 +2268,8 @@ export function subscribeToDailyCodSheet(
     const pushLatestSheetUpdate = (updatedSheet: DailyCodSheetData) => {
       activeSheetInMemory = updatedSheet;
       try {
-        // Dual Backup in phone memory with quota guard: full sheet and dedicated entries array
-        const sheetJson = JSON.stringify(updatedSheet);
-        const cachePairs: Array<[string, string]> = [
-          [localCacheKey, sheetJson],
-          [`cp_cod_sheet_${targetDate}`, sheetJson],
-        ];
-        if (updatedSheet.entries && updatedSheet.entries.length > 0) {
-          const entriesJson = JSON.stringify(updatedSheet.entries);
-          cachePairs.push([`cod_entries_${effectiveHubId}_${targetDate}`, entriesJson]);
-          cachePairs.push([`cod_entries_${targetDate}`, entriesJson]);
-        }
-        saveCodCacheSafely(cachePairs, effectiveHubId);
+        // Store single canonical hub+date sheet key via Storage Shield (prevents 5MB quota bloat)
+        saveCodCacheSafely([[localCacheKey, JSON.stringify(updatedSheet)]], effectiveHubId);
       } catch {}
       onUpdate(updatedSheet);
     };
@@ -2326,12 +2280,9 @@ export function subscribeToDailyCodSheet(
         const raw = snap.data();
         const docEntries = extractEntriesFromSheetRaw(raw, targetDate);
         if (docEntries.length > 0) {
-          const cleanDocEntries = docEntries.filter(
-            (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
-          );
           const sheetData: DailyCodSheetData = {
             date: targetDate,
-            entries: cleanDocEntries,
+            entries: docEntries,
             isLocked: Boolean(raw.isLocked),
             lockedBy: raw.lockedBy,
             lockedAt: raw.lockedAt,
@@ -2387,13 +2338,9 @@ export function subscribeToDailyCodSheet(
             }
           }
 
-          const cleanFinalEntries = finalEntries.filter(
-            (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
-          );
-
           const sheetData: DailyCodSheetData = {
             date: targetDate,
-            entries: cleanFinalEntries,
+            entries: finalEntries,
             isLocked: Boolean(raw.isLocked),
             lockedBy: raw.lockedBy,
             lockedAt: raw.lockedAt,
@@ -2454,9 +2401,7 @@ export function subscribeToDailyCodSheet(
 
           // Automatically pull active riders strictly for this hub
           const activeRiders = await getAllActiveRidersForCod(effectiveHubId);
-          const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders).filter(
-            (e) => (e.riderName || '').trim().toLowerCase() !== 'akash mahato' && (e.riderPhone || '').trim().replace(/\D/g, '') !== '6207262418'
-          );
+          const defaultEntries = buildDefaultCodEntriesForRiders(targetDate, activeRiders);
           const defaultSheet: DailyCodSheetData = {
             date: targetDate,
             entries: defaultEntries,
@@ -2589,16 +2534,7 @@ export async function updateSingleRiderEntryInSheet(
       updatedAt: new Date().toISOString(),
     };
     const sheetJson = JSON.stringify(updatedSheet);
-    const entriesJson = JSON.stringify(currentEntries);
-    saveCodCacheSafely(
-      [
-        [localCacheKey, sheetJson],
-        [`cp_cod_sheet_${targetDate}`, sheetJson],
-        [`cod_entries_${effectiveHubId}_${targetDate}`, entriesJson],
-        [`cod_entries_${targetDate}`, entriesJson],
-      ],
-      effectiveHubId
-    );
+    saveCodCacheSafely([[localCacheKey, sheetJson]], effectiveHubId);
   } catch {}
 
   // 2. Audit Trail Log: Record edit history with previousValue, updatedValue, editedAt
@@ -2621,7 +2557,7 @@ export async function updateSingleRiderEntryInSheet(
     const localAuditKey = `cp_cod_audit_logs_${effectiveHubId}`;
     const rawAudit = localStorage.getItem(localAuditKey);
     const existingLogs: CodAuditLog[] = rawAudit ? JSON.parse(rawAudit) : [];
-    localStorage.setItem(localAuditKey, JSON.stringify([auditLog, ...existingLogs].slice(0, 500)));
+    safeLocalStorageSet(localAuditKey, JSON.stringify([auditLog, ...existingLogs].slice(0, 50)), effectiveHubId);
   } catch {}
 
   // 3. Commit immediately to Firestore (Zero Polling, Immediate Save)
@@ -3271,10 +3207,7 @@ export async function importAllCodDataFromBackup(
     if (!sheet.date) continue;
     const dateStr = sheet.date;
     const localKey = `cp_cod_sheet_${effectiveHubId}_${dateStr}`;
-    try {
-      localStorage.setItem(localKey, JSON.stringify(sheet));
-      localStorage.setItem(getEntriesStorageKey(effectiveHubId, dateStr), JSON.stringify(sheet.entries || []));
-    } catch {}
+    saveCodCacheSafely([[localKey, JSON.stringify(sheet)]], effectiveHubId);
 
     if (db && effectiveHubId !== 'guest') {
       try {
@@ -3301,9 +3234,7 @@ export async function importAllCodDataFromBackup(
   // Restore audit logs
   if (Array.isArray(codAuditLogs) && codAuditLogs.length > 0) {
     const localAuditKey = getAuditStorageKey(effectiveHubId);
-    try {
-      localStorage.setItem(localAuditKey, JSON.stringify(codAuditLogs));
-    } catch {}
+    safeLocalStorageSet(localAuditKey, JSON.stringify(codAuditLogs.slice(0, 50)), effectiveHubId);
 
     if (db && effectiveHubId !== 'guest') {
       try {
@@ -3336,7 +3267,7 @@ export async function saveCodWithdrawalsToSheet(
 
   try {
     const key = `cp_cod_withdrawals_${targetDate}_${effectiveHubId || 'default'}`;
-    trySetLocalStorageItem(key, JSON.stringify(safeWithdrawals), effectiveHubId);
+    safeLocalStorageSet(key, JSON.stringify(safeWithdrawals), effectiveHubId);
   } catch {}
 
   if (!db || !effectiveHubId || effectiveHubId === 'guest') return;
@@ -3457,7 +3388,7 @@ export function enqueuePendingCodLedgerTransfer(item: PendingCodLedgerTransfer):
     const existing = getPendingCodLedgerTransfers(item.hubId);
     const filtered = existing.filter((x) => x.deterministicId !== item.deterministicId);
     filtered.push(item);
-    trySetLocalStorageItem(getPendingQueueKey(item.hubId), JSON.stringify(filtered.slice(-100)), item.hubId);
+    safeLocalStorageSet(getPendingQueueKey(item.hubId), JSON.stringify(filtered.slice(-100)), item.hubId);
     dispatchCodQueueChanged(item.hubId);
   } catch {}
 }
@@ -3467,7 +3398,7 @@ export function removePendingCodLedgerTransfer(hubId: string, deterministicId: s
   try {
     const existing = getPendingCodLedgerTransfers(hubId);
     const next = existing.filter((x) => x.deterministicId !== deterministicId);
-    trySetLocalStorageItem(getPendingQueueKey(hubId), JSON.stringify(next), hubId);
+    safeLocalStorageSet(getPendingQueueKey(hubId), JSON.stringify(next), hubId);
     dispatchCodQueueChanged(hubId);
   } catch {}
 }

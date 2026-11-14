@@ -130,7 +130,7 @@ export class AppErrorBoundary extends Component<Props, State> {
             {/* Footer Trust note */}
             <div className="pt-2 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span>सरायकेला कूरियर डिलीवरी हब • बैंक-ग्रेड हिसाब-किताब सुरक्षा लॉक</span>
+              <span>कूरियर डिलीवरी हब • बैंक-ग्रेड हिसाब-किताब सुरक्षा लॉक</span>
             </div>
           </div>
         </div>

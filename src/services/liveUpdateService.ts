@@ -15,6 +15,11 @@ import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { APP_VERSION } from '../utils/version';
 import { getTodayDateString } from '../utils/formatters';
+import {
+  safeLocalStorageSet,
+  isFirestoreInternalAssertionOrQuotaError,
+  handleProtectedFirestoreFailure,
+} from './appStorageAndFirebaseShield';
 
 export const CURRENT_LOCAL_BUILD_TIME = 1794291636154;
 export const CURRENT_LOCAL_VERSION = APP_VERSION;
@@ -70,7 +75,11 @@ class LiveUpdateService {
               }
             }
           },
-          () => {}
+          (err) => {
+            if (isFirestoreInternalAssertionOrQuotaError(err)) {
+              handleProtectedFirestoreFailure(err);
+            }
+          }
         );
       } catch {}
 
@@ -197,7 +206,7 @@ class LiveUpdateService {
     this.clearUpdateAvailable();
     try {
       const todayDate = getTodayDateString();
-      localStorage.setItem('cp_dismissed_update_date', todayDate);
+      safeLocalStorageSet('cp_dismissed_update_date', todayDate);
     } catch {}
   }
 
@@ -281,11 +290,11 @@ class LiveUpdateService {
     const targetVersion = this.latestManifest ? this.latestManifest.version : CURRENT_LOCAL_VERSION;
 
     try {
-      localStorage.setItem('cp_active_build_time', String(targetBuildTime));
-      localStorage.setItem('cp_active_version', targetVersion);
-      localStorage.setItem('cp_applied_version', targetVersion);
+      safeLocalStorageSet('cp_active_build_time', String(targetBuildTime));
+      safeLocalStorageSet('cp_active_version', targetVersion);
+      safeLocalStorageSet('cp_applied_version', targetVersion);
       localStorage.removeItem('cp_dismissed_update_date');
-      localStorage.setItem('cp_streamed_live', 'true');
+      safeLocalStorageSet('cp_streamed_live', 'true');
     } catch {}
 
     // Immediately remove banner from the UI so it never lingers

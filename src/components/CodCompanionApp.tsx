@@ -87,7 +87,9 @@ import {
   saveRiderToFirestore,
   syncPublicRiderStatement,
   isTransientNetworkError,
+  formatProtectedLedgerError,
 } from '../services/firestoreSync';
+import { safeLocalStorageSet } from '../services/appStorageAndFirebaseShield';
 import { liveUpdateService, CURRENT_LOCAL_VERSION } from '../services/liveUpdateService';
 import { getCachedReleaseVersion, fetchLatestReleaseVersion } from '../utils/version';
 import { launchUpiPayment, generateUpiQrCodeDataUrl } from '../services/upiLauncher';
@@ -134,10 +136,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       resolveHubIdFromPhone(clean).then((hub) => {
         if (hub) {
           setResolvedPreviewHub(hub);
-          try {
-            localStorage.setItem('active_hub_id', hub);
-            localStorage.setItem('active_companion_hub_id', hub);
-          } catch {}
+          safeLocalStorageSet('active_hub_id', hub);
+          safeLocalStorageSet('active_companion_hub_id', hub);
         }
       }).finally(() => {
         setIsResolvingHub(false);
@@ -413,11 +413,10 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       authenticatedHubId,
       (riders) => {
         const cleanRiders = (riders || []).filter(
-          (r) => r.name !== 'Akash Mahato' && 
-                 r.phone !== '6207262418' && 
-                 (r.status ? r.status === 'active' : r.active !== false) && 
-                 r.status !== 'inactive' && 
-                 r.active !== false
+          (r) =>
+            (r.status ? r.status === 'active' : r.active !== false) &&
+            r.status !== 'inactive' &&
+            r.active !== false
         );
         setHubRiders(cleanRiders);
       },
@@ -782,11 +781,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
         // Save resolved hubId in companion app session (localStorage: active_hub_id & active_companion_hub_id)
         try {
-          localStorage.setItem('active_hub_id', finalHubId);
+          safeLocalStorageSet('active_hub_id', finalHubId);
           sessionStorage.setItem('active_hub_id', finalHubId);
-          localStorage.setItem('active_companion_hub_id', finalHubId);
+          safeLocalStorageSet('active_companion_hub_id', finalHubId);
           sessionStorage.setItem('active_companion_hub_id', finalHubId);
-          localStorage.setItem('cp_authenticated_hub_id', finalHubId);
+          safeLocalStorageSet('cp_authenticated_hub_id', finalHubId);
           sessionStorage.setItem('cp_authenticated_hub_id', finalHubId);
         } catch {}
 
@@ -1286,19 +1285,14 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         entries: nextEntries,
         updatedAt: new Date().toISOString(),
       };
-      // Dual Backup in Phone Memory with Quota Guard:
+      // Single canonical cache key in Phone Memory with Quota Shield:
       try {
         const sheetJson = JSON.stringify(updatedSheet);
-        const entriesJson = JSON.stringify(nextEntries);
-        const pairs: Array<[string, string]> = [
-          [`cp_cod_sheet_${selectedDate}`, sheetJson],
-          [`cod_entries_${selectedDate}`, entriesJson],
-        ];
-        if (currentHubId) {
-          pairs.unshift([`cod_entries_${currentHubId}_${selectedDate}`, entriesJson]);
-          pairs.unshift([`cp_cod_sheet_${currentHubId}_${selectedDate}`, sheetJson]);
-        }
-        saveCodCacheSafely(pairs, currentHubId || undefined);
+        const effectiveHub = currentHubId || 'default';
+        saveCodCacheSafely(
+          [[`cp_cod_sheet_${effectiveHub}_${selectedDate}`, sheetJson]],
+          currentHubId || undefined
+        );
       } catch {}
       return updatedSheet;
     });
@@ -1748,7 +1742,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 showToast('नेटवर्क कमज़ोर होने से एडवांस एंट्री सुरक्षित कतार में रखी गई — इंटरनेट आते ही अपने आप जुड़ जाएगी।', 'info');
               } else {
                 console.error('Companion advance transfer failed:', wErr);
-                showToast(`❌ एडवांस ट्रांसफर असफल रहा (${wErr?.code || 'error'}): ${wErr?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+                showToast(formatProtectedLedgerError(wErr, activeHub).friendlyHindiMessage, 'error');
               }
             }
           }
@@ -1858,7 +1852,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 showToast('नेटवर्क कमज़ोर होने से इंसेंटिव एंट्री सुरक्षित कतार में रखी गई — इंटरनेट आते ही जुड़ जाएगी।', 'info');
               } else {
                 console.error('Companion incentive transfer failed:', wErr);
-                showToast(`❌ इंसेंटिव ट्रांसफर असफल रहा (${wErr?.code || 'error'}): ${wErr?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+                showToast(formatProtectedLedgerError(wErr, activeHub).friendlyHindiMessage, 'error');
               }
             }
           }
@@ -1883,7 +1877,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         displayEntries,
         sheetData.company1Name || 'Valmo COD',
         sheetData.company2Name || 'Xpressbees COD',
-        sheetData.hubName || currentHubId || 'Saraikela Courier Hub'
+        sheetData.hubName || currentHubId || 'Courier Hub'
       );
       showToast(`✅ दिनांक ${selectedDate} की COD रिपोर्ट तैयार हो गई!`, 'success');
     } catch (err: any) {
@@ -2022,7 +2016,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               onClick={() => {
                 setLoginPortalMode('rider');
                 setLoginError('');
-                try { localStorage.setItem('cp_login_portal_mode', 'rider'); } catch {}
+                safeLocalStorageSet('cp_login_portal_mode', 'rider');
               }}
               className={`py-2.5 px-3 rounded-xl font-extrabold text-xs sm:text-sm transition flex items-center justify-center gap-2 cursor-pointer ${
                 !isStaffPortal
@@ -2039,7 +2033,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               onClick={() => {
                 setLoginPortalMode('staff');
                 setLoginError('');
-                try { localStorage.setItem('cp_login_portal_mode', 'staff'); } catch {}
+                safeLocalStorageSet('cp_login_portal_mode', 'staff');
               }}
               className={`py-2.5 px-3 rounded-xl font-extrabold text-xs sm:text-sm transition flex items-center justify-center gap-2 cursor-pointer ${
                 isStaffPortal
@@ -3631,7 +3625,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             <DailyConsolidatedDenominationSummary
               entries={filteredEntries}
               selectedDate={selectedDate}
-              hubName={currentHubId || 'सरायकेला कूरियर हब'}
+              hubName={currentHubId || 'कूरियर हब'}
               isDarkTheme={false}
               hubId={currentHubId}
               adminName={authUser?.name || 'हब एडमिन'}

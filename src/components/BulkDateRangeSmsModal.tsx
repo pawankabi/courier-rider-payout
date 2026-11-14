@@ -48,7 +48,7 @@ export const BulkDateRangeSmsModal: React.FC<Props> = ({
   endDate,
   riders,
   entries,
-  hubSignature = 'Saraikela Courier Team',
+  hubSignature = 'Courier Delivery Team',
   onSuccess,
 }) => {
   const [isSending, setIsSending] = useState(false);
@@ -100,7 +100,7 @@ export const BulkDateRangeSmsModal: React.FC<Props> = ({
   // Format sample SMS message
   const startStr = formatDateDisplay(startDate) || startDate;
   const endStr = formatDateDisplay(endDate) || endDate;
-  const effectiveHubName = (hubSignature || 'Saraikela Courier Team').trim();
+  const effectiveHubName = (hubSignature || 'Courier Delivery Team').trim();
 
   const getSmsText = (riderName: string, parcels: number, earnings: number) => {
     return `Namaste ${riderName}, your earnings from ${startStr} to ${endStr} for ${parcels} parcels is Rs. ${earnings}. - ${effectiveHubName}`;

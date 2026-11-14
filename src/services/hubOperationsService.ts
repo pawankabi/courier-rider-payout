@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { getTodayDateString } from '../utils/formatters';
 import { cleanForFirestore } from './firestoreSync';
+import { safeLocalStorageSet } from './appStorageAndFirebaseShield';
 
 const LOCAL_ATTENDANCE_KEY = 'cp_hub_attendance_';
 const LOCAL_EXPENSES_KEY = 'cp_hub_expenses_';
@@ -38,7 +39,7 @@ export async function saveRiderAttendance(
     } else {
       list.push(record);
     }
-    localStorage.setItem(storageKey, JSON.stringify(list));
+    safeLocalStorageSet(storageKey, JSON.stringify(list), effectiveHubId);
   } catch {}
 
   // Firestore
@@ -114,7 +115,7 @@ export async function saveHubExpense(
     } else {
       list.push(expense);
     }
-    localStorage.setItem(storageKey, JSON.stringify(list));
+    safeLocalStorageSet(storageKey, JSON.stringify(list), effectiveHubId);
   } catch {}
 
   // Firestore
@@ -145,7 +146,7 @@ export async function deleteHubExpense(
     if (raw) {
       let list: HubDailyExpenseRecord[] = JSON.parse(raw);
       list = list.filter((e) => e.id !== expenseId);
-      localStorage.setItem(storageKey, JSON.stringify(list));
+      safeLocalStorageSet(storageKey, JSON.stringify(list), effectiveHubId);
     }
   } catch {}
 

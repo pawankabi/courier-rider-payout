@@ -31,6 +31,7 @@ import { EditEntryModal } from './EditEntryModal';
 import { getFestivalAlert } from '../data/festivals';
 import { FestivalGreetingsModal } from './FestivalGreetingsModal';
 import { InstantShareSuccessModal } from './InstantShareSuccessModal';
+import { safeLocalStorageSet } from '../services/appStorageAndFirebaseShield';
 
 const DAILY_ENTRY_DRAFT_KEY = 'courier_daily_entry_draft_v1';
 
@@ -142,11 +143,7 @@ export const DailyEntryTab: React.FC<Props> = ({
       savedAt: Date.now(),
     };
 
-    try {
-      localStorage.setItem(DAILY_ENTRY_DRAFT_KEY, JSON.stringify(draft));
-    } catch (e) {
-      console.warn('Failed to write in-progress draft to localStorage', e);
-    }
+    safeLocalStorageSet(DAILY_ENTRY_DRAFT_KEY, JSON.stringify(draft));
   }, [selectedRiderId, date, parcels, hasIncentive, notes]);
 
   // Ensure draft is saved if user receives a phone call, minimizes, or switches apps
@@ -161,7 +158,7 @@ export const DailyEntryTab: React.FC<Props> = ({
           notes,
           savedAt: Date.now(),
         };
-        localStorage.setItem(DAILY_ENTRY_DRAFT_KEY, JSON.stringify(draft));
+        safeLocalStorageSet(DAILY_ENTRY_DRAFT_KEY, JSON.stringify(draft));
       } catch (err) {}
     };
 

@@ -74,7 +74,8 @@ import {
   writeIncentiveEntryToFirestore, 
   saveRiderToFirestore, 
   syncPublicRiderStatement,
-  isTransientNetworkError
+  isTransientNetworkError,
+  formatProtectedLedgerError
 } from '../services/firestoreSync';
 import { 
   formatAdvanceSmsText, 
@@ -99,7 +100,7 @@ export const CodManagementModal: React.FC<Props> = ({
   riders,
   userId,
   isSuperAdmin,
-  hubName = 'सरायकेला कूरियर हब',
+  hubName = 'कूरियर हब',
 }) => {
   // Navigation Tabs: 'grid' | 'access_control' | 'audit_logs'
   const [activeTab, setActiveTab] = useState<'grid' | 'access_control' | 'audit_logs'>('grid');
@@ -251,12 +252,10 @@ export const CodManagementModal: React.FC<Props> = ({
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Strict Multi-Tenant Rider Isolation & Clean Memory Filter:
-  // Add a clean memory filter:
-  // const cleanRiders = riders.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
+  // Strict Multi-Tenant Rider Isolation:
   const cleanRiders = useMemo(() => {
     if (!riders || !Array.isArray(riders)) return [];
-    return riders.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
+    return riders;
   }, [riders]);
 
   // The riders displayed in this COD sheet MUST be 100% IDENTICAL to the riders list in the Main App's "Riders" tab.
@@ -843,7 +842,7 @@ export const CodManagementModal: React.FC<Props> = ({
           if (targetRider) {
             persistUpdatedRiderLocalOnly(targetRider);
           }
-          showToast(`❌ एडवांस ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+          showToast(formatProtectedLedgerError(err, userId).friendlyHindiMessage, 'error');
         }
       } finally {
         markTransferInFlight(flightKey, false);
@@ -1000,7 +999,7 @@ export const CodManagementModal: React.FC<Props> = ({
           if (targetRider) {
             persistUpdatedRiderLocalOnly(targetRider);
           }
-          showToast(`❌ इंसेंटिव ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+          showToast(formatProtectedLedgerError(err, userId).friendlyHindiMessage, 'error');
         }
       } finally {
         markTransferInFlight(flightKey, false);
@@ -2073,7 +2072,7 @@ export const CodManagementModal: React.FC<Props> = ({
                 <DailyConsolidatedDenominationSummary
                   entries={filteredRows}
                   selectedDate={selectedDate}
-                  hubName={hubName || 'सरायकेला कूरियर हब'}
+                  hubName={hubName || 'कूरियर हब'}
                   isDarkTheme={true}
                   hubId={userId}
                   cloudWithdrawals={sheetWithdrawals}

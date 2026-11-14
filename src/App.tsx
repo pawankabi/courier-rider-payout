@@ -70,6 +70,7 @@ import {
   formatIncentiveSmsText, 
   dispatchAutomatedSms 
 } from './services/smsService';
+import { safeLocalStorageSet } from './services/appStorageAndFirebaseShield';
 import { 
   Rider, 
   DeliveryEntry, 
@@ -421,9 +422,7 @@ function MainCourierApp() {
 
   // Persist activeTab across refreshes, app switching, and lock/unlock
   useEffect(() => {
-    try {
-      localStorage.setItem('cp_active_tab', activeTab);
-    } catch {}
+    safeLocalStorageSet('cp_active_tab', activeTab);
   }, [activeTab]);
 
   // Session Stability: Keep active tab in localStorage so screen lock or incoming phone calls do not force a hard reload
@@ -776,13 +775,13 @@ function MainCourierApp() {
   useEffect(() => {
     if (isSubscribedHub) {
       try {
-        localStorage.setItem('cp_subscribed', 'true');
-        localStorage.setItem('isPro', 'true');
-        localStorage.setItem('subscriptionStatus', 'active');
-        localStorage.setItem('cp_current_is_pro', 'true');
+        safeLocalStorageSet('cp_subscribed', 'true', currentUser?.uid);
+        safeLocalStorageSet('isPro', 'true', currentUser?.uid);
+        safeLocalStorageSet('subscriptionStatus', 'active', currentUser?.uid);
+        safeLocalStorageSet('cp_current_is_pro', 'true', currentUser?.uid);
         if (currentUser?.uid) {
-          localStorage.setItem(`cp_subscribed_${currentUser.uid}`, 'true');
-          localStorage.setItem(`cp_is_pro_${currentUser.uid}`, 'true');
+          safeLocalStorageSet(`cp_subscribed_${currentUser.uid}`, 'true', currentUser.uid);
+          safeLocalStorageSet(`cp_is_pro_${currentUser.uid}`, 'true', currentUser.uid);
         }
       } catch (e) {
         console.warn('Storage sync error', e);
@@ -849,7 +848,14 @@ function MainCourierApp() {
       '';
     const trimmed = (raw || '').trim();
     if (!isSuperAdminUser) {
-      if (!trimmed || trimmed === 'सरायकेला कूरियर हब' || trimmed === 'सरायकेला कूरियर डिलीवरी हब' || trimmed === 'Rider Hub') {
+      if (
+        !trimmed ||
+        trimmed === 'सरायकेला कूरियर हब' ||
+        trimmed === 'सरायकेला कूरियर डिलीवरी हब' ||
+        trimmed === 'कूरियर हब' ||
+        trimmed === 'कूरियर डिलीवरी हब' ||
+        trimmed === 'Rider Hub'
+      ) {
         return '(कोरियर हब)';
       }
       return trimmed;
@@ -1391,14 +1397,10 @@ function MainCourierApp() {
           }
 
           if (isDocPro) {
-            try {
-              localStorage.setItem('cp_subscribed', 'true');
-              localStorage.setItem(`cp_subscribed_${user.uid}`, 'true');
-              localStorage.setItem('isPro', 'true');
-              localStorage.setItem(`cp_is_pro_${user.uid}`, 'true');
-            } catch (e) {
-              console.warn(e);
-            }
+            safeLocalStorageSet('cp_subscribed', 'true', user.uid);
+            safeLocalStorageSet(`cp_subscribed_${user.uid}`, 'true', user.uid);
+            safeLocalStorageSet('isPro', 'true', user.uid);
+            safeLocalStorageSet(`cp_is_pro_${user.uid}`, 'true', user.uid);
           }
 
           if (docData.isPending) {
@@ -1452,7 +1454,7 @@ function MainCourierApp() {
 
           if (profileResult.appLockEnabled === true) {
             try {
-              localStorage.setItem('cp_app_lock_enabled', 'true');
+              safeLocalStorageSet('cp_app_lock_enabled', 'true', user.uid);
               window.dispatchEvent(
                 new CustomEvent('courier-payout:app-lock-changed', {
                   detail: { enabled: true },
@@ -1462,14 +1464,10 @@ function MainCourierApp() {
           }
 
           if (isProfilePro) {
-            try {
-              localStorage.setItem('cp_subscribed', 'true');
-              localStorage.setItem(`cp_subscribed_${user.uid}`, 'true');
-              localStorage.setItem('isPro', 'true');
-              localStorage.setItem(`cp_is_pro_${user.uid}`, 'true');
-            } catch (e) {
-              console.warn(e);
-            }
+            safeLocalStorageSet('cp_subscribed', 'true', user.uid);
+            safeLocalStorageSet(`cp_subscribed_${user.uid}`, 'true', user.uid);
+            safeLocalStorageSet('isPro', 'true', user.uid);
+            safeLocalStorageSet(`cp_is_pro_${user.uid}`, 'true', user.uid);
           }
 
           if (profileResult.subscription) {
@@ -1802,7 +1800,7 @@ function MainCourierApp() {
       targetRider.advances || [],
       settlements,
       nextEntries,
-      userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+      userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
       userRateConfig.hubSignature
     ).catch(() => {});
   };
@@ -2395,7 +2393,7 @@ function MainCourierApp() {
           updatedRider.advances || [],
           updatedSettlements,
           updated,
-          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+          userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
           userRateConfig.hubSignature
         ).catch(() => {});
       } else {
@@ -2407,7 +2405,7 @@ function MainCourierApp() {
             currentRider.advances || [],
             updatedSettlements,
             updated,
-            userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+            userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
             userRateConfig.hubSignature
           ).catch(() => {});
         }
@@ -2472,7 +2470,7 @@ function MainCourierApp() {
         updatedRider.advances || [],
         settlements,
         entries,
-        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
         userRateConfig.hubSignature
       );
     } catch (err) {
@@ -2521,7 +2519,7 @@ function MainCourierApp() {
           updatedRider.advances || [],
           settlements,
           entries,
-          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+          userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
           userRateConfig.hubSignature
         );
       } catch (err) {
@@ -2629,7 +2627,7 @@ function MainCourierApp() {
         updatedRider.advances || [],
         settlements,
         entries,
-        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
         userRateConfig.hubSignature
       );
     } catch (err) {
@@ -2712,7 +2710,7 @@ function MainCourierApp() {
         updatedRider.advances || [],
         settlements,
         entries,
-        userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
         userRateConfig.hubSignature
       );
     } catch (err) {
@@ -2775,7 +2773,7 @@ function MainCourierApp() {
           [],
           settlements,
           entries,
-          userRateConfig.hubSignature || 'सरायकेला कूरियर डिलीवरी हब',
+          userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
           userRateConfig.hubSignature
         );
       } catch (err) {
@@ -3716,9 +3714,9 @@ function MainCourierApp() {
                   <div className="w-14 h-14 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center justify-center mx-auto text-2xl">
                     🪔
                   </div>
-                  <h2 className="text-lg sm:text-xl font-black text-white">सरायकेला व राष्ट्रीय पावन पर्व शुभकामना केंद्र</h2>
+                  <h2 className="text-lg sm:text-xl font-black text-white">राष्ट्रीय व लोक पर्व शुभकामना केंद्र</h2>
                   <p className="text-xs sm:text-sm text-slate-300 max-w-xl mx-auto">
-                    सरायकेला और कोल्हान के सभी पारंपरिक लोक पर्वों तथा राष्ट्रीय उत्सवों पर अपने कर्मठ कूरियर राइडर्स को एक क्लिक में व्यक्तिगत WhatsApp एवं SMS संदेश भेजें।
+                    सभी पारंपरिक लोक पर्वों तथा राष्ट्रीय उत्सवों पर अपने कर्मठ कूरियर राइडर्स को एक क्लिक में व्यक्तिगत WhatsApp एवं SMS संदेश भेजें।
                   </p>
                   <div className="pt-2">
                     <button
@@ -4013,9 +4011,7 @@ function MainCourierApp() {
             if (updated.paymentStatus === 'active') {
               setIsPending(false);
               setIsDeactivated(false);
-              try {
-                localStorage.setItem('cp_current_is_pro', 'true');
-              } catch (e) {}
+              safeLocalStorageSet('cp_current_is_pro', 'true', currentUser?.uid);
               if (currentUser) {
                 setSyncStatus('syncing');
                 migrateLocalStorageToFirestore(currentUser.uid)

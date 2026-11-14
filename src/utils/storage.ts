@@ -1,4 +1,10 @@
 import { Rider, DeliveryEntry, SettlementRecord } from '../types';
+import {
+  enforceLocalStorageHeadroom,
+  safeLocalStorageSet,
+  saveBlobToIndexedDB,
+  isQuotaExceededError,
+} from '../services/appStorageAndFirebaseShield';
 
 export const LAST_AUTH_UID_KEY = 'cp_last_auth_uid';
 
@@ -15,7 +21,7 @@ export function setCachedAuthUserId(uid: string | null): void {
   if (typeof window === 'undefined') return;
   try {
     if (uid) {
-      localStorage.setItem(LAST_AUTH_UID_KEY, uid);
+      safeLocalStorageSet(LAST_AUTH_UID_KEY, uid, uid);
     } else {
       localStorage.removeItem(LAST_AUTH_UID_KEY);
     }
@@ -47,132 +53,22 @@ const IDB_NAME = 'cp_offline_cache_v1';
 const IDB_STORE = 'kv';
 
 function saveToIndexedDB(key: string, value: unknown): void {
-  if (typeof window === 'undefined' || !('indexedDB' in window)) return;
-  try {
-    const req = window.indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE);
-      }
-    };
-    req.onsuccess = () => {
-      try {
-        const db = req.result;
-        const tx = db.transaction(IDB_STORE, 'readwrite');
-        tx.objectStore(IDB_STORE).put(value, key);
-        tx.oncomplete = () => db.close();
-        tx.onerror = () => db.close();
-      } catch {
-        // Ignore non-fatal IDB errors
-      }
-    };
-  } catch {
-    // Ignore IDB unavailability (e.g. restricted private browsing)
-  }
+  saveBlobToIndexedDB(key, value);
 }
 
-function isQuotaError(err: unknown): boolean {
-  if (!err) return false;
-  if (err instanceof DOMException) {
-    return (
-      err.name === 'QuotaExceededError' ||
-      err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
-      err.code === 22 ||
-      err.code === 1014
-    );
-  }
-  const msg = String((err as any)?.message || err).toLowerCase();
-  return msg.includes('quota');
-}
-
-/**
- * Frees localStorage space safely without deleting active user data:
- * 1. Removes redundant legacy duplicate keys (`courier_riders_u_*`, `courier_deliveries_u_*`, etc.)
- * 2. Removes redundant rolling snapshot (`cp_safety_shield_snapshot_v1`)
- * 3. Removes stale guest caches when a real authenticated uid is active
- * 4. Prunes oldest COD daily sheet duplicates beyond the newest 45 distinct days while preserving recent sheets
- */
 export function reclaimLocalStorageSpace(activeUid?: string | null): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const keysToRemove: string[] = [];
-    const datedCodKeys: Array<{ key: string; date: string }> = [];
-
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k) continue;
-
-      // Legacy duplicate copies (superseded by cp_cache_*)
-      if (
-        k.startsWith('courier_riders_u_') ||
-        k.startsWith('courier_deliveries_u_') ||
-        k.startsWith('courier_settlements_u_') ||
-        k === 'courier_riders' ||
-        k === 'courier_deliveries' ||
-        k === 'courier_settlements' ||
-        k === 'cp_safety_shield_snapshot_v1'
-      ) {
-        keysToRemove.push(k);
-        continue;
-      }
-
-      // Stale guest caches when authenticated
-      if (
-        activeUid &&
-        activeUid !== 'guest' &&
-        (k === 'cp_cache_deliveries_guest' ||
-          k === 'cp_cache_riders_guest' ||
-          k === 'cp_cache_settlements_guest')
-      ) {
-        keysToRemove.push(k);
-        continue;
-      }
-
-      // Collect dated COD sheet caches so oldest duplicates (>45 days) can be trimmed if needed
-      const dateMatch = k.match(/(?:cp_cod_sheet_|cod_entries_|cp_cod_archived_sheet_).*(\d{4}-\d{2}-\d{2})$/);
-      if (dateMatch) {
-        datedCodKeys.push({ key: k, date: dateMatch[1] });
-      }
-    }
-
-    keysToRemove.forEach((k) => {
-      try {
-        localStorage.removeItem(k);
-      } catch {}
-    });
-
-    // Prune older COD sheet local caches beyond newest 45 distinct calendar dates
-    const distinctDates = Array.from(new Set(datedCodKeys.map((d) => d.date))).sort();
-    if (distinctDates.length > 45) {
-      const keepDates = new Set(distinctDates.slice(-45));
-      for (const item of datedCodKeys) {
-        if (!keepDates.has(item.date)) {
-          try {
-            localStorage.removeItem(item.key);
-          } catch {}
-        }
-      }
-    }
-  } catch {
-    // Ignore storage iteration failures
-  }
+  enforceLocalStorageHeadroom(activeUid, { aggressive: false });
 }
 
 export function trySetLocalStorageItem(key: string, jsonValue: string, activeUid?: string | null): boolean {
-  if (typeof window === 'undefined') return false;
   try {
-    localStorage.setItem(key, jsonValue);
-    return true;
+    return safeLocalStorageSet(key, jsonValue, activeUid);
   } catch (err) {
-    if (!isQuotaError(err)) return false;
-    reclaimLocalStorageSpace(activeUid);
-    try {
-      localStorage.setItem(key, jsonValue);
-      return true;
-    } catch {
-      return false;
+    if (isQuotaExceededError(err)) {
+      enforceLocalStorageHeadroom(activeUid, { aggressive: true });
+      return safeLocalStorageSet(key, jsonValue, activeUid);
     }
+    return false;
   }
 }
 
@@ -219,106 +115,42 @@ export const INITIAL_RIDERS: Rider[] = [];
  */
 function isSampleRider(r: any): boolean {
   if (!r) return false;
-  const name = (r.name || '').trim().toLowerCase();
-  const phone = (r.phone || '').trim().replace(/\D/g, '');
   return (
     r.id === 'rider_1' ||
     r.id === 'rider_2' ||
     r.id === 'rider_3' ||
-    r.name === 'Rahul Sharma' ||
-    r.name === 'Amit Kumar' ||
-    r.name === 'Priya Singh' ||
-    name === 'akash mahato' ||
-    phone === '6207262418' ||
-    phone.endsWith('6207262418')
+    Boolean(r.isMockData) ||
+    Boolean(r.isSampleData)
   );
 }
 
 function isSampleDelivery(d: any): boolean {
   if (!d) return false;
-  const riderName = (d.riderName || '').trim().toLowerCase();
-  const riderPhone = (d.riderPhone || '').trim().replace(/\D/g, '');
   const id = typeof d.id === 'string' ? d.id.trim() : '';
   return (
     id === 'del_1' ||
     id === 'del_2' ||
     id === 'del_3' ||
-    d.riderName === 'Rahul Sharma' ||
-    d.riderName === 'Amit Kumar' ||
-    d.riderName === 'Priya Singh' ||
-    riderName === 'akash mahato' ||
-    riderPhone === '6207262418'
+    Boolean(d.isMockData) ||
+    Boolean(d.isSampleData)
   );
 }
 
 /**
- * Purges any legacy cached keys or mock data in localStorage/sessionStorage related to mock riders on app init.
+ * Purges any legacy cached synthetic mock keys in localStorage on app init
+ * without filtering any real rider names or phone numbers.
  */
 export function purgeLegacyMockStorage(): void {
   if (typeof window === 'undefined') return;
   try {
-    // 1. Scan and purge or sanitize localStorage keys
-    for (let i = 0; i < localStorage.length; i++) {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
       if (!key) continue;
-
       if (key.includes('sample') || key.includes('mock_rider')) {
         localStorage.removeItem(key);
-        continue;
-      }
-
-      if (key.includes('riders') || key.includes('cod') || key.includes('deliveries') || key.includes('courier')) {
-        const val = localStorage.getItem(key);
-        if (val && (val.toLowerCase().includes('akash mahato') || val.includes('6207262418'))) {
-          try {
-            const parsed = JSON.parse(val);
-            if (Array.isArray(parsed)) {
-              const cleaned = parsed.filter((item: any) => {
-                const name = (item.name || item.riderName || '').trim().toLowerCase();
-                const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
-                return name !== 'akash mahato' && phone !== '6207262418';
-              });
-              trySetLocalStorageItem(key, JSON.stringify(cleaned));
-            } else if (parsed && typeof parsed === 'object') {
-              if (Array.isArray(parsed.entries)) {
-                parsed.entries = parsed.entries.filter((item: any) => {
-                  const name = (item.name || item.riderName || '').trim().toLowerCase();
-                  const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
-                  return name !== 'akash mahato' && phone !== '6207262418';
-                });
-                trySetLocalStorageItem(key, JSON.stringify(parsed));
-              }
-            }
-          } catch {
-            localStorage.removeItem(key);
-          }
-        }
       }
     }
-
-    // 2. Scan and purge sessionStorage
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const key = sessionStorage.key(i);
-      if (!key) continue;
-      const val = sessionStorage.getItem(key);
-      if (val && (val.toLowerCase().includes('akash mahato') || val.includes('6207262418'))) {
-        try {
-          const parsed = JSON.parse(val);
-          if (Array.isArray(parsed)) {
-            const cleaned = parsed.filter((item: any) => {
-              const name = (item.name || item.riderName || '').trim().toLowerCase();
-              const phone = (item.phone || item.riderPhone || '').trim().replace(/\D/g, '');
-              return name !== 'akash mahato' && phone !== '6207262418';
-            });
-            sessionStorage.setItem(key, JSON.stringify(cleaned));
-          } else {
-            sessionStorage.removeItem(key);
-          }
-        } catch {
-          sessionStorage.removeItem(key);
-        }
-      }
-    }
+    enforceLocalStorageHeadroom(getCachedAuthUserId(), { aggressive: false });
   } catch (err) {
     console.warn('Notice during purgeLegacyMockStorage:', err);
   }
@@ -625,9 +457,11 @@ export function loadSettingsFromStorage(userId?: string): any {
 export function saveSettingsToStorage(settings: any, userId?: string): void {
   try {
     if (!settings) return;
-    localStorage.setItem(getSettingsKey(userId), JSON.stringify(settings));
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-    localStorage.setItem('courier_user_rate_config', JSON.stringify(settings));
+    const raw = JSON.stringify(settings);
+    const uid = userId || getCachedAuthUserId();
+    safeLocalStorageSet(getSettingsKey(userId), raw, uid);
+    safeLocalStorageSet(SETTINGS_STORAGE_KEY, raw, uid);
+    safeLocalStorageSet('courier_user_rate_config', raw, uid);
   } catch (err) {
     console.error('Error saving settings to storage', err);
   }
@@ -657,7 +491,7 @@ export function loadFestivalGreetingSentRecords(): FestivalGreetingSentRecord[] 
       (r) => r && r.riderId && r.festivalId && now - (r.sentAt || 0) < FESTIVAL_SENT_EXPIRY_MS
     );
     if (active.length !== parsed.length) {
-      localStorage.setItem(FESTIVAL_SENT_STORAGE_KEY, JSON.stringify(active));
+      safeLocalStorageSet(FESTIVAL_SENT_STORAGE_KEY, JSON.stringify(active), getCachedAuthUserId());
     }
     return active;
   } catch (err) {
@@ -680,7 +514,7 @@ export function saveFestivalGreetingSentRecord(
       ...filtered,
       { riderId, festivalId, sentAt: now },
     ];
-    localStorage.setItem(FESTIVAL_SENT_STORAGE_KEY, JSON.stringify(updated));
+    safeLocalStorageSet(FESTIVAL_SENT_STORAGE_KEY, JSON.stringify(updated), getCachedAuthUserId());
     return updated;
   } catch (err) {
     console.error('Error saving festival greeting sent record', err);
@@ -720,8 +554,8 @@ export function saveQuickStatsSummary(summary: QuickStatsSummary, userId?: strin
   try {
     const uid = userId || getCachedAuthUserId() || 'guest';
     const payload = JSON.stringify({ ...summary, lastUpdated: Date.now() });
-    localStorage.setItem(`cp_stats_summary_${uid}`, payload);
-    localStorage.setItem('cp_stats_summary_latest', payload);
+    safeLocalStorageSet(`cp_stats_summary_${uid}`, payload, uid);
+    safeLocalStorageSet('cp_stats_summary_latest', payload, uid);
   } catch (err) {
     console.warn('Notice saving quick stats summary:', err);
   }

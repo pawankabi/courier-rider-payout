@@ -53,7 +53,7 @@ const PRESET_REASONS = [
 
 export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
   rider,
-  hubName = 'सरायकेला कूरियर हब',
+  hubName = 'कूरियर हब',
   hubSignature,
   onClose,
   onSaveIncentive,

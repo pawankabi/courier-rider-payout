@@ -232,7 +232,7 @@ export interface UserRateConfig {
   defaultIncentiveRate: number; // e.g. 2
   incentivesEnabled: boolean; // toggle incentive system on/off for user
   minParcelThreshold?: number; // parcel minimum for incentive (e.g. 0 or 80)
-  hubSignature?: string; // Custom Hub / Business Signature (e.g. "सरायकेला कूरियर डिलीवरी टीम")
+  hubSignature?: string; // Custom Hub / Business Signature (e.g. "कूरियर डिलीवरी टीम")
   hubUpiId?: string; // Custom Hub UPI ID for direct rider GPay / PhonePe / Paytm online collection (e.g. "hub@okaxis" or "9876543210@ybl")
   companyRatePerParcel?: number; // Company contract payout per parcel (e.g. ₹18) for P&L calculations
   masterSecurityPin?: string; // Master Security PIN for sensitive financial operations (default '8409')

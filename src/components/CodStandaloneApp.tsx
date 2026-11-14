@@ -85,7 +85,8 @@ import {
   writeIncentiveEntryToFirestore, 
   saveRiderToFirestore, 
   syncPublicRiderStatement,
-  isTransientNetworkError
+  isTransientNetworkError,
+  formatProtectedLedgerError
 } from '../services/firestoreSync';
 import { 
   formatAdvanceSmsText, 
@@ -117,7 +118,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
   riders,
   userId,
   isSuperAdmin,
-  hubName = 'सरायकेला कूरियर हब',
+  hubName = 'कूरियर हब',
 }) => {
   // Dedicated Bottom Navigation Tabs: 'grid' | 'access_control' | 'audit_logs' | 'settings'
   const [activeTab, setActiveTab] = useState<'grid' | 'access_control' | 'audit_logs' | 'settings'>('grid');
@@ -127,21 +128,10 @@ export const CodStandaloneApp: React.FC<Props> = ({
     purgeLegacyMockStorage();
   }, []);
 
-  // Strict Clean Memory Filter:
-  // Add a clean memory filter:
-  // const cleanRiders = riders.filter(r => r.name !== "Akash Mahato" && r.phone !== "6207262418");
+  // Sanitized riders array (all real riders belong exclusively to the signed-in hub)
   const cleanRiders = useMemo(() => {
     if (!riders || !Array.isArray(riders)) return [];
-    return riders.filter((r) => {
-      const name = (r.name || '').trim();
-      const phone = (r.phone || '').trim().replace(/\D/g, '');
-      return (
-        name !== 'Akash Mahato' &&
-        name.toLowerCase() !== 'akash mahato' &&
-        phone !== '6207262418' &&
-        !phone.endsWith('6207262418')
-      );
-    });
+    return riders;
   }, [riders]);
 
   // Strict Multi-Tenant Rider Isolation & Strict Active Status Filter:
@@ -1416,7 +1406,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
           if (targetRider) {
             persistUpdatedRiderLocalOnly(targetRider);
           }
-          showToast(`❌ एडवांस ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+          showToast(formatProtectedLedgerError(err, userId).friendlyHindiMessage, 'error');
         }
       } finally {
         markTransferInFlight(flightKey, false);
@@ -1608,7 +1598,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
           if (targetRider) {
             persistUpdatedRiderLocalOnly(targetRider);
           }
-          showToast(`❌ इंसेंटिव ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+          showToast(formatProtectedLedgerError(err, userId).friendlyHindiMessage, 'error');
         }
       } finally {
         markTransferInFlight(flightKey, false);
@@ -1779,7 +1769,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
           if (targetRider) {
             persistUpdatedRiderLocalOnly(targetRider);
           }
-          showToast(`❌ एडवांस ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+          showToast(formatProtectedLedgerError(err, userId).friendlyHindiMessage, 'error');
         }
       } finally {
         markTransferInFlight(flightKey, false);
@@ -1938,7 +1928,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
           if (targetRider) {
             persistUpdatedRiderLocalOnly(targetRider);
           }
-          showToast(`❌ इंसेंटिव ट्रांसफर असफल रहा (${err?.code || 'error'}): ${err?.message || 'कृपया पुनः प्रयास करें।'}`, 'error');
+          showToast(formatProtectedLedgerError(err, userId).friendlyHindiMessage, 'error');
         }
       } finally {
         markTransferInFlight(flightKey, false);
@@ -3575,7 +3565,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
               <DailyConsolidatedDenominationSummary
                 entries={filteredRows}
                 selectedDate={selectedDate}
-                hubName={hubName || (settings.company1Name ? `${settings.company1Name} Hub` : 'सरायकेला कूरियर हब')}
+                hubName={hubName || (settings.company1Name ? `${settings.company1Name} Hub` : 'कूरियर हब')}
                 isDarkTheme={true}
                 hubId={userId}
                 adminName={activeUser?.name || 'हब एडमिन'}

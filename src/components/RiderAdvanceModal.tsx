@@ -32,6 +32,7 @@ import {
 } from '../services/smsService';
 import { InstantShareSuccessModal } from './InstantShareSuccessModal';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
+import { safeLocalStorageSet } from '../services/appStorageAndFirebaseShield';
 
 interface RiderAdvanceModalProps {
   rider: Rider;
@@ -110,7 +111,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     if (editingAdvance) return;
     try {
       if (amount || date || reason) {
-        localStorage.setItem(
+        safeLocalStorageSet(
           draftKey,
           JSON.stringify({
             amount,

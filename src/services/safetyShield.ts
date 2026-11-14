@@ -22,6 +22,7 @@ import {
   loadSettlementsFromStorage, 
   saveSettlementsToStorage 
 } from '../utils/storage';
+import { saveBlobToIndexedDB, safeLocalStorageSet } from './appStorageAndFirebaseShield';
 
 export interface LedgerAuditIssue {
   riderId: string;
@@ -89,16 +90,22 @@ export function takeSafetySnapshot(
 ): void {
   if (typeof window === 'undefined') return;
   try {
+    const timestamp = new Date().toISOString();
     const payload = {
-      timestamp: new Date().toISOString(),
+      timestamp,
       ridersCount: riders.length,
       settlementsCount: settlements.length,
       deliveriesCount: deliveries ? deliveries.length : 0,
       riders,
       settlements,
     };
-    localStorage.setItem(SAFETY_SNAPSHOT_KEY, JSON.stringify(payload));
-    localStorage.setItem(LAST_SNAPSHOT_TIME_KEY, payload.timestamp);
+    // Store heavy backup snapshot in IndexedDB (never bloat 5MB localStorage quota)
+    saveBlobToIndexedDB(SAFETY_SNAPSHOT_KEY, payload);
+    try {
+      localStorage.removeItem(SAFETY_SNAPSHOT_KEY);
+      localStorage.removeItem('cp_safety_shield_snapshots_v1');
+    } catch {}
+    safeLocalStorageSet(LAST_SNAPSHOT_TIME_KEY, timestamp);
   } catch (err) {
     console.warn('Safety shield snapshot notice (non-fatal):', err);
   }
@@ -133,8 +140,7 @@ export const safeStorage = {
   set(key: string, value: any): boolean {
     if (typeof window === 'undefined') return false;
     try {
-      localStorage.setItem(key, JSON.stringify(value));
-      return true;
+      return safeLocalStorageSet(key, JSON.stringify(value));
     } catch (e) {
       console.warn(`Storage quota exceeded or private mode error for key: ${key}`, e);
       return false;
@@ -188,8 +194,8 @@ export async function auditAndHealAllRiderLedgers(
       riderName: rider.name,
       riderPhone: rider.phone,
       vehicleType: rider.vehicleType || 'Bike',
-      hubName: 'सरायकेला कूरियर डिलीवरी हब',
-      hubSignature: 'सरायकेला कूरियर डिलीवरी हब',
+      hubName: 'कूरियर डिलीवरी हब',
+      hubSignature: 'कूरियर डिलीवरी हब',
       totalAdvance: rider.totalAdvance || 0,
       totalIncentive: rider.totalIncentive || 0,
       advances: rider.advances || [],
@@ -321,7 +327,7 @@ export function exportEmergencySafetyBackup(
       app: 'Courier Rider Payout & Ledger',
       exportType: 'EMERGENCY_SAFETY_SHIELD_BACKUP',
       exportedAt: new Date().toISOString(),
-      hub: 'सरायकेला कूरियर डिलीवरी हब',
+      hub: 'कूरियर डिलीवरी हब',
       totalRiders: riders.length,
       totalSettlements: settlements.length,
       totalDeliveries: deliveries.length,
@@ -404,22 +410,10 @@ export function initAutonomousSafetySentinel(
     sentinelTimer = null;
   }
 
-  // Purge any temporary local operational logs older than 2 years (Permanent retention for deliveries & riders)
+  // Remove legacy bloated localStorage snapshot arrays (now stored safely in IndexedDB)
   try {
-    const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    const snapKey = 'cp_safety_shield_snapshots_v1';
-    const rawSnaps = localStorage.getItem(snapKey);
-    if (rawSnaps) {
-      const parsedSnaps = JSON.parse(rawSnaps);
-      if (Array.isArray(parsedSnaps)) {
-        const retainedSnaps = parsedSnaps.filter((s: any) => {
-          const t = new Date(s.timestamp).getTime();
-          return !isNaN(t) && (now - t) < TWO_YEARS_MS;
-        });
-        localStorage.setItem(snapKey, JSON.stringify(retainedSnaps));
-      }
-    }
+    localStorage.removeItem('cp_safety_shield_snapshots_v1');
+    localStorage.removeItem(SAFETY_SNAPSHOT_KEY);
   } catch {}
 
   return () => {

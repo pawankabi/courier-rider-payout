@@ -1570,7 +1570,7 @@ export const UserManagementModal: React.FC<Props> = ({
                   <input
                     id={`input-hub-sig-${user.uid}`}
                     type="text"
-                    placeholder="e.g. पवन कबी / सरायकेला हब प्रबंधन (Pawan Kabi / Seraikella Hub Management)"
+                    placeholder="e.g. आपका हब नाम / प्रबंधन (Your Hub Name / Management)"
                     value={rateConfig.hubSignature || ''}
                     onChange={(e) =>
                       setRateConfig((prev) => ({

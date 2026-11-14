@@ -255,7 +255,7 @@ export function calculateMasterSettlement(
   advances: RiderAdvanceEntry[] = [],
   incentives: RiderIncentiveEntry[] = [],
   settlements: SettlementRecord[] = [],
-  hubName: string = 'सरायकेला कूरियर डिलीवरी हब'
+  hubName: string = 'कूरियर डिलीवरी हब'
 ): MasterSettlementResult {
   // 1. Delivery parcels & operational earnings strictly within [startDate, endDate]
   const periodEntries = entries.filter((e) => {

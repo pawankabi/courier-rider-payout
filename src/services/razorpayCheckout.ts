@@ -2,6 +2,7 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { UserSubscription, createDefaultUserSubscription } from '../types';
 import { normalizeUserSubscription } from './firestoreSync';
+import { safeLocalStorageSet } from './appStorageAndFirebaseShield';
 
 export interface RazorpayPlan {
   id: 'plan_test_1day' | 'starter' | 'growth' | 'enterprise' | string;
@@ -123,11 +124,7 @@ export function getRazorpayKeyId(): string {
 }
 
 export function setStoredRazorpayKeyId(key: string): void {
-  try {
-    localStorage.setItem(RAZORPAY_KEY_STORAGE_KEY, key.trim());
-  } catch (e) {
-    console.warn('Failed to save Razorpay key to localStorage', e);
-  }
+  safeLocalStorageSet(RAZORPAY_KEY_STORAGE_KEY, key.trim());
 }
 
 export interface RazorpaySuccessResponse {
@@ -255,7 +252,7 @@ export async function openRazorpayCheckout({
         amountInPaise: plan.amountInPaise,
         initiatedAt: Date.now(),
       };
-      localStorage.setItem('cp_pending_checkout', JSON.stringify(pendingData));
+      safeLocalStorageSet('cp_pending_checkout', JSON.stringify(pendingData), resolvedUserId);
       console.log('Persisted pending checkout state before launching Razorpay:', pendingData);
     } catch (e) {
       console.warn('Could not save pending checkout state to localStorage', e);
@@ -462,15 +459,15 @@ export async function activateUserPlanImmediately(
   // 1. Immediately update localStorage with all standard keys so app state never gets locked out
   if (typeof window !== 'undefined') {
     try {
-      localStorage.setItem('isPro', 'true');
-      localStorage.setItem('subscriptionStatus', 'active');
-      localStorage.setItem('cp_current_is_pro', 'true');
-      localStorage.setItem(`cp_is_pro_${effectiveUserId}`, 'true');
-      localStorage.setItem(`cp_sub_${effectiveUserId}`, JSON.stringify(updatedSub));
-      localStorage.setItem('cp_plan_expires_at', finalExpiresAt);
-      localStorage.setItem('cp_user_status', 'approved');
-      localStorage.setItem('cp_last_plan', matchedPlan.name);
-      localStorage.setItem('cp_last_payment_id', paymentId);
+      safeLocalStorageSet('isPro', 'true', effectiveUserId);
+      safeLocalStorageSet('subscriptionStatus', 'active', effectiveUserId);
+      safeLocalStorageSet('cp_current_is_pro', 'true', effectiveUserId);
+      safeLocalStorageSet(`cp_is_pro_${effectiveUserId}`, 'true', effectiveUserId);
+      safeLocalStorageSet(`cp_sub_${effectiveUserId}`, JSON.stringify(updatedSub), effectiveUserId);
+      safeLocalStorageSet('cp_plan_expires_at', finalExpiresAt, effectiveUserId);
+      safeLocalStorageSet('cp_user_status', 'approved', effectiveUserId);
+      safeLocalStorageSet('cp_last_plan', matchedPlan.name, effectiveUserId);
+      safeLocalStorageSet('cp_last_payment_id', paymentId, effectiveUserId);
 
       const txRecord: RazorpayTransactionRecord = {
         paymentId: paymentId,
@@ -482,8 +479,8 @@ export async function activateUserPlanImmediately(
       };
       const rawHistory = localStorage.getItem('cp_razorpay_transactions');
       const txHistory = rawHistory ? JSON.parse(rawHistory) : [];
-      localStorage.setItem('cp_razorpay_transactions', JSON.stringify([txRecord, ...txHistory]));
-      localStorage.setItem('cp_last_razorpay_tx', JSON.stringify(txRecord));
+      safeLocalStorageSet('cp_razorpay_transactions', JSON.stringify([txRecord, ...txHistory].slice(0, 50)), effectiveUserId);
+      safeLocalStorageSet('cp_last_razorpay_tx', JSON.stringify(txRecord), effectiveUserId);
       localStorage.removeItem('cp_pending_checkout');
 
       // Dispatch global state sync
@@ -736,10 +733,10 @@ export async function manualInstantUnlock(
     console.error('Error in manualInstantUnlock:', err);
     // Local fallback
     if (typeof window !== 'undefined') {
-      localStorage.setItem('isPro', 'true');
-      localStorage.setItem('subscriptionStatus', 'active');
-      localStorage.setItem('cp_current_is_pro', 'true');
-      localStorage.setItem(`cp_is_pro_${effectiveUserId}`, 'true');
+      safeLocalStorageSet('isPro', 'true', effectiveUserId);
+      safeLocalStorageSet('subscriptionStatus', 'active', effectiveUserId);
+      safeLocalStorageSet('cp_current_is_pro', 'true', effectiveUserId);
+      safeLocalStorageSet(`cp_is_pro_${effectiveUserId}`, 'true', effectiveUserId);
     }
     return {
       success: true,
@@ -817,12 +814,12 @@ export async function reconcilePendingCheckoutOnResume(
     if (activeDoc) {
       console.log('User document is already active in Firestore on resume!');
       localStorage.removeItem('cp_pending_checkout');
-      localStorage.setItem('isPro', 'true');
-      localStorage.setItem('subscriptionStatus', 'active');
-      localStorage.setItem('cp_current_is_pro', 'true');
-      localStorage.setItem(`cp_is_pro_${targetUserId}`, 'true');
+      safeLocalStorageSet('isPro', 'true', targetUserId);
+      safeLocalStorageSet('subscriptionStatus', 'active', targetUserId);
+      safeLocalStorageSet('cp_current_is_pro', 'true', targetUserId);
+      safeLocalStorageSet(`cp_is_pro_${targetUserId}`, 'true', targetUserId);
       if (activeDoc.validUntil || activeDoc.planExpiresAt) {
-        localStorage.setItem('cp_plan_expires_at', activeDoc.planExpiresAt || activeDoc.validUntil);
+        safeLocalStorageSet('cp_plan_expires_at', activeDoc.planExpiresAt || activeDoc.validUntil, targetUserId);
       }
       return {
         reconciled: true,

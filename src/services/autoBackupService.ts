@@ -16,6 +16,7 @@ import {
 import { getTodayDateString } from '../utils/formatters';
 import { cleanForFirestore } from './firestoreSync';
 import { exportAllCodDataForBackup } from './codService';
+import { saveBlobToIndexedDB, safeLocalStorageSet } from './appStorageAndFirebaseShield';
 
 const LOCAL_AUTO_BACKUP_KEY_PREFIX = 'cp_auto_backup_hub_';
 
@@ -71,10 +72,13 @@ export async function createAutoCloudBackup(
     settings: settings || null,
   };
 
-  // 1. Save to local storage for instant offline access
-  try {
-    localStorage.setItem(`${LOCAL_AUTO_BACKUP_KEY_PREFIX}${effectiveHubId}_${todayStr}`, JSON.stringify(snapshot));
-  } catch {}
+  // 1. Save full snapshot to IndexedDB (unlimited quota) + lightweight summary to localStorage via shield
+  saveBlobToIndexedDB(`${LOCAL_AUTO_BACKUP_KEY_PREFIX}${effectiveHubId}_${todayStr}`, snapshot);
+  safeLocalStorageSet(
+    `${LOCAL_AUTO_BACKUP_KEY_PREFIX}${effectiveHubId}_latest_meta`,
+    JSON.stringify({ id: backupId, date: todayStr, summary: snapshot.summary, createdAt: snapshot.createdAt }),
+    effectiveHubId
+  );
 
   // 2. Commit to Firestore
   if (db) {

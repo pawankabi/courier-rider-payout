@@ -7,7 +7,7 @@
  * - Net Balance = sum(Delivery Earnings + Bonuses) - sum(Advances + Fuel Cashouts + Settlements Paid)
  * 
  * Contextual Hindi Labels:
- * Case 1: Rider Owes Hub (Advances > Earnings, e.g. Lakhindar Mahato: Advances ₹11,445 - Salary Payout ₹8,810 = ₹2,635):
+ * Case 1: Rider Owes Hub (Advances > Earnings, e.g. Sample Rider: Advances ₹11,445 - Salary Payout ₹8,810 = ₹2,635):
  *   - Admin: 🔴 राइडर से ₹2,635 पाना बाकी है
  *   - Rider: 🔴 आपसे हब ₹2,635 पाएगा
  * 
@@ -609,7 +609,7 @@ export function calculatePureRiderLedger(
   let riderBalanceLabel = '⚪ हिसाब चुकता: ₹0';
 
   if (finalDifference < -0.01) {
-    // CASE 1: Rider Owes Hub (Advances > Earnings, e.g. Lakhindar Mahato: Advances ₹11,445 - Salary Payout ₹8,810 = ₹2,635)
+    // CASE 1: Rider Owes Hub (Advances > Earnings, e.g. Sample Rider: Advances ₹11,445 - Salary Payout ₹8,810 = ₹2,635)
     balanceStatus = 'rider_due';
     adminBalanceLabel = `🔴 राइडर से ${formatINR(netBalance)} पाना बाकी है`;
     riderBalanceLabel = `🔴 आपसे हब ${formatINR(netBalance)} पाएगा`;

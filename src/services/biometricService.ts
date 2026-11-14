@@ -7,6 +7,7 @@ import {
 import { doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { isNativeAndroid } from './nativeSms';
+import { safeLocalStorageSet } from './appStorageAndFirebaseShield';
 
 export const APP_LOCK_STORAGE_KEY = 'cp_app_lock_enabled';
 export const APP_LOCK_LAST_ACTIVE_KEY = 'cp_app_lock_last_active';
@@ -53,7 +54,7 @@ export function isAppLockEnabled(): boolean {
 export async function setAppLockEnabled(enabled: boolean, userId?: string): Promise<void> {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(APP_LOCK_STORAGE_KEY, enabled ? 'true' : 'false');
+    safeLocalStorageSet(APP_LOCK_STORAGE_KEY, enabled ? 'true' : 'false');
     if (enabled) {
       recordUserActivity(true);
     } else {
@@ -100,7 +101,7 @@ export function recordUserActivity(forceImmediate = false): void {
   // Throttle localStorage updates to at most once every 5 seconds
   if (forceImmediate || now - lastStorageWriteTime >= 5000) {
     try {
-      localStorage.setItem(APP_LOCK_LAST_ACTIVE_KEY, String(now));
+      safeLocalStorageSet(APP_LOCK_LAST_ACTIVE_KEY, String(now));
       lastStorageWriteTime = now;
     } catch {}
   }
@@ -114,8 +115,8 @@ export function recordAppBackground(): void {
   if (typeof window === 'undefined') return;
   try {
     const now = Date.now();
-    localStorage.setItem(APP_LOCK_BG_TIME_KEY, String(now));
-    localStorage.setItem(APP_LOCK_LAST_ACTIVE_KEY, String(now));
+    safeLocalStorageSet(APP_LOCK_BG_TIME_KEY, String(now));
+    safeLocalStorageSet(APP_LOCK_LAST_ACTIVE_KEY, String(now));
   } catch {}
 }
 
@@ -128,7 +129,7 @@ export function recordAppUnlock(): void {
   try {
     const now = Date.now();
     memoryLastActive = now;
-    localStorage.setItem(APP_LOCK_LAST_ACTIVE_KEY, String(now));
+    safeLocalStorageSet(APP_LOCK_LAST_ACTIVE_KEY, String(now));
     localStorage.removeItem(APP_LOCK_BG_TIME_KEY);
     sessionStorage.setItem('cp_unlocked_this_session', 'true');
   } catch {}
