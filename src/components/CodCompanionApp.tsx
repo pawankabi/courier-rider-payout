@@ -75,7 +75,9 @@ import {
   enqueuePendingCodLedgerTransfer,
   getPendingCodLedgerTransfers,
   removePendingCodLedgerTransfer,
-  withTransientAckTimeout
+  withTransientAckTimeout,
+  hasRealRecordedCodData,
+  isRiderEligibleForCod
 } from '../services/codService';
 import { getTodayDateString, getDaysAgoDateString, formatINR } from '../utils/formatters';
 import { purgeLegacyMockStorage } from '../utils/storage';
@@ -102,7 +104,11 @@ interface CodCompanionAppProps {
 export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionAppProps) {
   // Authentication State
   const [authUser, setAuthUser] = useState<CodStaffUser | null>(() => getStoredCodCompanionUser());
-  const [authenticatedHubId, setAuthenticatedHubId] = useState<string | null>(() => getActiveCompanionHubId());
+  const [authenticatedHubId, setAuthenticatedHubId] = useState<string | null>(() => {
+    const storedUser = getStoredCodCompanionUser();
+    if (!storedUser) return null;
+    return (storedUser.hubId || storedUser.workspaceId || storedUser.ownerUid || getActiveCompanionHubId() || '').trim() || null;
+  });
   const [loginPortalMode, setLoginPortalMode] = useState<'rider' | 'staff'>(() => {
     try {
       const saved = localStorage.getItem('cp_login_portal_mode');
@@ -114,7 +120,6 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const [pinInput, setPinInput] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [showDemoLogins, setShowDemoLogins] = useState(false);
   const [hubRiders, setHubRiders] = useState<Rider[]>([]);
   const [resolvedPreviewHub, setResolvedPreviewHub] = useState<string | null>(null);
   const [isResolvingHub, setIsResolvingHub] = useState(false);
@@ -128,17 +133,13 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
   }, [initialPhone]);
 
-  // Instant Hub Resolution as soon as 10 valid digits are typed/pasted
+  // Instant Hub Resolution preview as soon as 10 valid digits are typed/pasted (does NOT commit active_hub_id until PIN auth succeeds)
   useEffect(() => {
     const clean = normalizePhoneNumber(phoneInput);
     if (clean.length === 10) {
       setIsResolvingHub(true);
       resolveHubIdFromPhone(clean).then((hub) => {
-        if (hub) {
-          setResolvedPreviewHub(hub);
-          safeLocalStorageSet('active_hub_id', hub);
-          safeLocalStorageSet('active_companion_hub_id', hub);
-        }
+        setResolvedPreviewHub(hub || null);
       }).finally(() => {
         setIsResolvingHub(false);
       });
@@ -277,6 +278,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
   };
   const [isRealtimeConnected, setIsRealtimeConnected] = useState<boolean>(true);
+  const [hasLoadedHubRiders, setHasLoadedHubRiders] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>('0s पहले');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
@@ -412,13 +414,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     const unsubscribeRiders = subscribeToHubRiders(
       authenticatedHubId,
       (riders) => {
-        const cleanRiders = (riders || []).filter(
-          (r) =>
-            (r.status ? r.status === 'active' : r.active !== false) &&
-            r.status !== 'inactive' &&
-            r.active !== false
-        );
+        const cleanRiders = (riders || []).filter(isRiderEligibleForCod);
         setHubRiders(cleanRiders);
+        setHasLoadedHubRiders(true);
       },
       (err) => {
         console.warn('Realtime hub riders notice:', err);
@@ -1016,7 +1014,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         }
       }
 
-      // CRITICAL FIX: Retain and display any entry from rawSheetEntries not in hubRiders (e.g. past dates)
+      // Retain unmatched entry ONLY if it has genuine recorded COD financial data
       const processedIds = new Set(merged.map((m) => m.riderId));
       const processedPhones = new Set(
         merged.map((m) => (m.riderPhone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
@@ -1027,7 +1025,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
         const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
           (cleanPhone && processedPhones.has(cleanPhone));
-        if (!isProcessed) {
+        if (!isProcessed && hasRealRecordedCodData(e)) {
           merged.push(e);
           if (e.riderId) processedIds.add(e.riderId);
           if (cleanPhone) processedPhones.add(cleanPhone);
@@ -1050,9 +1048,13 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       return merged;
     }
 
-    // Fallback if hubRiders is loading: Return all hub entries strictly for selected date, prioritizing own entry
+    // Fallback if hubRiders is loading: once loaded with 0 active riders, never resurrect 0-value deleted/phantom rows
     if (rawSheetEntries && rawSheetEntries.length > 0) {
-      const validEntries = rawSheetEntries.filter((e) => !e.date || e.date === selectedDate);
+      const validEntries = rawSheetEntries.filter((e) => {
+        if (!e || (e.date && e.date !== selectedDate)) return false;
+        if (!hasLoadedHubRiders) return true;
+        return hasRealRecordedCodData(e) || (isRider && isMatchingRiderRow(e));
+      });
       if (isRider && authUser) {
         return [...validEntries].sort((a, b) => {
           const aIsMe = isMatchingRiderRow(a);
@@ -1066,7 +1068,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     }
 
     return [];
-  }, [currentHubId, hubRiders, sheetData.date, sheetData.entries, selectedDate, isRider, authUser]);
+  }, [currentHubId, hubRiders, hasLoadedHubRiders, sheetData.date, sheetData.entries, selectedDate, isRider, authUser]);
 
   const myRiderRow = useMemo(() => {
     if (!isRider) return null;

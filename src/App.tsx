@@ -71,6 +71,7 @@ import {
   dispatchAutomatedSms 
 } from './services/smsService';
 import { safeLocalStorageSet } from './services/appStorageAndFirebaseShield';
+import { cleanupDeletedRiderInCodSystem } from './services/codService';
 import { 
   Rider, 
   DeliveryEntry, 
@@ -2012,11 +2013,17 @@ function MainCourierApp() {
         if (affectedEntries.length > 0) {
           await batchUpdateDeliveriesAndSettlement(targetUid, affectedEntries, undefined, currentOwnerEmail);
         }
-        setSyncStatus('synced');
+      if (riderWithOwnership.active === false || riderWithOwnership.status === 'inactive' || riderWithOwnership.isDeleted) {
+        cleanupDeletedRiderInCodSystem(targetUid || 'guest', riderWithOwnership.id, riderWithOwnership.phone, { permanent: false }).catch(() => {});
+      }
+      setSyncStatus('synced');
       } catch (err) {
         console.error('Error updating rider in Firestore', err);
       }
     } else {
+      if (riderWithOwnership.active === false || riderWithOwnership.status === 'inactive' || riderWithOwnership.isDeleted) {
+        cleanupDeletedRiderInCodSystem('guest', riderWithOwnership.id, riderWithOwnership.phone, { permanent: false }).catch(() => {});
+      }
       setSyncStatus('local');
     }
   };
@@ -2024,6 +2031,7 @@ function MainCourierApp() {
   // Soft-Delete Rider (Zero Data Loss) - Protected by Master PIN
   const handleDeleteRider = async (id: string): Promise<void> => {
     return executeWithPinVerification(async () => {
+      const deletedRider = riders.find((r) => r.id === id);
       const updated = riders.map((r) =>
         r.id === id ? { ...r, isDeleted: true, deletedAt: new Date().toISOString(), active: false, status: 'inactive' as const } : r
       );
@@ -2038,6 +2046,7 @@ function MainCourierApp() {
           console.error('Error soft-deleting rider from Firestore', err);
         }
       } else {
+        cleanupDeletedRiderInCodSystem('guest', id, deletedRider?.phone, { permanent: false }).catch(() => {});
         setSyncStatus('local');
       }
       setToastMessage({
@@ -2126,6 +2135,7 @@ function MainCourierApp() {
 
   // Permanent Delete Single Rider from Trash Bin
   const handlePermanentDeleteRider = async (riderId: string) => {
+    const removedRider = riders.find((r) => r.id === riderId);
     const nextRiders = riders.filter((r) => r.id !== riderId);
     updateRiders(nextRiders);
     if (targetUid) {
@@ -2139,6 +2149,8 @@ function MainCourierApp() {
         });
         throw err;
       }
+    } else {
+      cleanupDeletedRiderInCodSystem('guest', riderId, removedRider?.phone, { permanent: true }).catch(() => {});
     }
   };
 
@@ -2231,6 +2243,11 @@ function MainCourierApp() {
           type: 'error',
         });
         throw err;
+      }
+    } else if (trashedRiderIds.length > 0) {
+      for (const trashedId of trashedRiderIds) {
+        const trashedRider = riders.find((r) => r.id === trashedId);
+        cleanupDeletedRiderInCodSystem('guest', trashedId, trashedRider?.phone, { permanent: true }).catch(() => {});
       }
     }
     setToastMessage({
@@ -2862,7 +2879,7 @@ function MainCourierApp() {
   // ONLY display data that belongs to the currently authenticated user (or currently inspected user in Admin mode).
   // Immediately hides and purges any riders or entries created by other external Gmail accounts!
   const dashboardRiders = useMemo(() => {
-    if (isSuperAdminUser || (!currentUser && !inspectedUser)) {
+    if (!currentUser && !inspectedUser) {
       return riders.filter((r) => !r.isDeleted);
     }
 
@@ -2870,11 +2887,11 @@ function MainCourierApp() {
     const currentOwnerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
 
     return riders.filter((rider) => !rider.isDeleted && isEntityOwnedByUser(rider, currentOwnerId, currentOwnerEmail));
-  }, [riders, currentUser, inspectedUser, isSuperAdminUser]);
+  }, [riders, currentUser, inspectedUser]);
 
   // Ensure entries on the main dashboard only belong to visible dashboard riders and user ownership
   const dashboardEntries = useMemo(() => {
-    if (isSuperAdminUser || (!currentUser && !inspectedUser)) {
+    if (!currentUser && !inspectedUser) {
       return entries.filter((e) => !e.isDeleted);
     }
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
@@ -2888,11 +2905,11 @@ function MainCourierApp() {
       }
       return isEntityOwnedByUser(e, currentOwnerId, currentOwnerEmail);
     });
-  }, [entries, dashboardRiders, currentUser, inspectedUser, isSuperAdminUser]);
+  }, [entries, dashboardRiders, currentUser, inspectedUser]);
 
   // Ensure settlements on the main dashboard only belong to visible dashboard riders and user ownership
   const dashboardSettlements = useMemo(() => {
-    if (isSuperAdminUser || (!currentUser && !inspectedUser)) {
+    if (!currentUser && !inspectedUser) {
       return settlements.filter((s) => !s.isDeleted);
     }
     const currentOwnerId = inspectedUser ? inspectedUser.uid : currentUser!.uid;
@@ -2906,7 +2923,7 @@ function MainCourierApp() {
       }
       return isEntityOwnedByUser(s, currentOwnerId, currentOwnerEmail);
     });
-  }, [settlements, dashboardRiders, currentUser, inspectedUser, isSuperAdminUser]);
+  }, [settlements, dashboardRiders, currentUser, inspectedUser]);
 
   // Total count of deleted items in Recycle Bin (Zero Data Loss)
   const totalTrashCount = useMemo(() => {

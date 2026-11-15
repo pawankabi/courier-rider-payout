@@ -31,6 +31,7 @@ import {
   LogOut,
   Smartphone,
   Banknote,
+  Trash2,
 } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -65,11 +66,17 @@ import {
   getPendingCodLedgerTransfers,
   removePendingCodLedgerTransfer,
   withTransientAckTimeout,
-  PendingCodLedgerTransfer
+  PendingCodLedgerTransfer,
+  hasRealRecordedCodData,
+  isRiderEligibleForCod,
+  removeEntryAndRiderFromCodSystem,
+  deleteCodStaffMember,
+  cleanupDeletedRiderInCodSystem
 } from '../services/codService';
 import { formatINR, formatDateDisplay, getTodayDateString, getDaysAgoDateString } from '../utils/formatters';
 import { 
   isEntityOwnedByUser,
+  SUPER_ADMIN_EMAIL,
   writeAdvanceEntryToFirestore, 
   writeIncentiveEntryToFirestore, 
   saveRiderToFirestore, 
@@ -164,6 +171,14 @@ export const CodManagementModal: React.FC<Props> = ({
 
   // PIN visibility toggle in Access Control
   const [revealedPins, setRevealedPins] = useState<Record<string, boolean>>({});
+
+  // In-app delete confirmation modal state for unlisted COD rows & Staff/Rider PINs
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<
+    | { kind: 'cod_row'; row: CodDailyEntry; isUnlisted: boolean }
+    | { kind: 'staff'; staff: CodStaffUser }
+    | null
+  >(null);
+  const [isRemovingTarget, setIsRemovingTarget] = useState<boolean>(false);
   const syncingKeysRef = useRef<Set<string>>(new Set());
   const isFlushingRef = useRef<boolean>(false);
   const [pendingTransfers, setPendingTransfers] = useState<PendingCodLedgerTransfer[]>(() =>
@@ -179,7 +194,7 @@ export const CodManagementModal: React.FC<Props> = ({
       (r) => r.id === riderId || (cleanPhone && (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone)
     );
     if (fromProps) return fromProps;
-    const stored = loadRidersFromStorage(userId);
+    const stored = loadRidersFromStorage(userId).filter(isRiderEligibleForCod);
     return stored.find(
       (r) => r.id === riderId || (cleanPhone && (r.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone)
     );
@@ -262,17 +277,70 @@ export const CodManagementModal: React.FC<Props> = ({
   const activeTenantRiders = useMemo(() => {
     if (!cleanRiders || !Array.isArray(cleanRiders)) return [];
     const cleanUid = (userId || '').trim();
-    if (!cleanUid || cleanUid === 'guest') {
-      return cleanRiders.filter((r) => !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest');
-    }
     return cleanRiders.filter((r) => {
+      if (!isRiderEligibleForCod(r)) return false;
+      if (!cleanUid || cleanUid === 'guest') {
+        return !r.createdBy || r.createdBy === 'guest' || r.workspaceId === 'guest';
+      }
       const owner = (r.workspaceId || r.userId || r.hubId || r.ownerUid || r.createdBy || '').trim();
       if (owner) {
         return owner === cleanUid;
       }
-      return isEntityOwnedByUser(r, cleanUid);
+      return isEntityOwnedByUser(r, cleanUid, isSuperAdmin ? SUPER_ADMIN_EMAIL : undefined);
     });
-  }, [cleanRiders, userId]);
+  }, [cleanRiders, userId, isSuperAdmin]);
+
+  const handleConfirmDeleteTarget = async () => {
+    if (!confirmDeleteTarget || isRemovingTarget) return;
+    setIsRemovingTarget(true);
+    try {
+      if (confirmDeleteTarget.kind === 'cod_row') {
+        const { row, isUnlisted } = confirmDeleteTarget;
+        await removeEntryAndRiderFromCodSystem(userId, row, selectedDate, {
+          purgeRiderRecordAlso: isUnlisted,
+        });
+        setGridEntries((prev) =>
+          prev.filter((e) => {
+            if (e.riderId === row.riderId) return false;
+            const ep = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+            const rp = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
+            return !(rp && ep && rp === ep);
+          })
+        );
+        if (isUnlisted) {
+          const rp = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
+          setStaffUsers((prev) =>
+            prev.filter((s) => {
+              if (s.riderId === row.riderId || s.id === row.riderId) return false;
+              const sp = (s.phone || '').replace(/\D/g, '').slice(-10);
+              return !(rp && sp && rp === sp);
+            })
+          );
+        }
+        showToast(
+          isUnlisted
+            ? `🗑️ "${row.riderName}" की एंट्री और पुराना रिकॉर्ड सिस्टम से हमेशा के लिए हटा दिया गया!`
+            : `🗑️ "${row.riderName}" की ${formatDateDisplay(selectedDate)} की एंट्री शीट से हटा दी गई!`,
+          'success'
+        );
+      } else {
+        const { staff } = confirmDeleteTarget;
+        await deleteCodStaffMember(userId, staff);
+        if (staff.role === 'rider') {
+          const cleanPhone = (staff.phone || '').replace(/\D/g, '').slice(-10);
+          await cleanupDeletedRiderInCodSystem(userId, staff.riderId || staff.id, cleanPhone, { permanent: false });
+        }
+        setStaffUsers((prev) => prev.filter((s) => s.id !== staff.id));
+        showToast(`🗑️ "${staff.name}" का PIN और एक्सेस रिकॉर्ड हटा दिया गया!`, 'success');
+      }
+      setConfirmDeleteTarget(null);
+    } catch (err) {
+      console.error('Delete target error:', err);
+      showToast('हटाने में त्रुटि हुई, कृपया पुनः प्रयास करें।', 'error');
+    } finally {
+      setIsRemovingTarget(false);
+    }
+  };
 
   const activeTenantRidersRef = useRef<Rider[]>(activeTenantRiders);
   activeTenantRidersRef.current = activeTenantRiders;
@@ -324,6 +392,19 @@ export const CodManagementModal: React.FC<Props> = ({
       mounted = false;
     };
   }, [isOpen, userId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    loadCodStaffUsers(userId, activeTenantRiders)
+      .then((syncedStaff) => {
+        if (!cancelled) setStaffUsers(syncedStaff);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, userId, activeTenantRiders]);
 
   // 2. Real-Time bi-directional synchronization on daily_cod_sheets/{selectedDate}
   useEffect(() => {
@@ -427,7 +508,7 @@ export const CodManagementModal: React.FC<Props> = ({
             };
           });
 
-          // CRITICAL FIX: Retain and display any entry from sheetData.entries not in latestRiders (Zero Data Loss)
+          // Retain unmatched entry ONLY if it has genuine recorded COD financial data
           const processedIds = new Set(latestRiders.map((r) => r.id));
           const processedPhones = new Set(
             latestRiders.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
@@ -437,7 +518,7 @@ export const CodManagementModal: React.FC<Props> = ({
             const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
             const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
               (cleanPhone && processedPhones.has(cleanPhone));
-            if (!isProcessed) {
+            if (!isProcessed && hasRealRecordedCodData(e)) {
               merged.push(e);
               if (e.riderId) processedIds.add(e.riderId);
               if (cleanPhone) processedPhones.add(cleanPhone);
@@ -1706,11 +1787,18 @@ export const CodManagementModal: React.FC<Props> = ({
                           (activeUser.role === 'owner' || isSuperAdmin || isSelfRider) &&
                           (!isDayLocked || activeUser.role === 'owner' || isSuperAdmin);
 
+                        const cleanRowPhone = (row.riderPhone || '').replace(/\D/g, '').slice(-10);
+                        const isListedInHubRiders = activeTenantRiders.some((r) => {
+                          if (r.id === row.riderId) return true;
+                          const rp = (r.phone || '').replace(/\D/g, '').slice(-10);
+                          return Boolean(cleanRowPhone && rp && cleanRowPhone === rp);
+                        });
+
                         return (
                           <tr
                             key={row.riderId}
                             className={`transition hover:bg-slate-800/40 ${
-                              isSelfRider ? 'bg-emerald-950/20 ring-1 ring-emerald-500/30' : ''
+                              isSelfRider ? 'bg-emerald-950/20 ring-1 ring-emerald-500/30' : !isListedInHubRiders ? 'bg-rose-950/15' : ''
                             }`}
                           >
                             {/* 1. Rider Name */}
@@ -1720,11 +1808,19 @@ export const CodManagementModal: React.FC<Props> = ({
                                   {row.riderName.charAt(0).toUpperCase()}
                                 </div>
                                 <div className="min-w-0">
-                                  <div className="font-bold text-white truncate text-xs flex items-center gap-1.5">
+                                  <div className="font-bold text-white truncate text-xs flex items-center gap-1.5 flex-wrap">
                                     <span>{row.riderName}</span>
                                     {isSelfRider && (
                                       <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-extrabold">
                                         YOU
+                                      </span>
+                                    )}
+                                    {!isListedInHubRiders && (
+                                      <span
+                                        className="text-[9px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold"
+                                        title="यह राइडर Riders टैब में सक्रिय नहीं है (लिस्ट से बाहर)"
+                                      >
+                                        लिस्ट से बाहर
                                       </span>
                                     )}
                                   </div>
@@ -1959,6 +2055,22 @@ export const CodManagementModal: React.FC<Props> = ({
                                     title="Verify collection numbers"
                                   >
                                     Verify
+                                  </button>
+                                )}
+
+                                {(activeUser.role === 'owner' || activeUser.role === 'hub_incharge' || isSuperAdmin) && (!isListedInHubRiders || (!isDayLocked && row.status !== 'locked')) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteTarget({ kind: 'cod_row', row, isUnlisted: !isListedInHubRiders })}
+                                    className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 border transition cursor-pointer ${
+                                      !isListedInHubRiders
+                                        ? 'bg-rose-600/25 hover:bg-rose-600 text-rose-200 hover:text-white border-rose-500/60'
+                                        : 'bg-slate-800 hover:bg-rose-950/70 text-slate-400 hover:text-rose-300 border-slate-700 hover:border-rose-500/40'
+                                    }`}
+                                    title={!isListedInHubRiders ? 'लिस्ट से बाहर वाले इस राइडर को हमेशा के लिए हटाएं' : 'इस तारीख की शीट से एंट्री हटाएं'}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    {!isListedInHubRiders && <span>हटाएं</span>}
                                   </button>
                                 )}
                               </div>
@@ -2242,6 +2354,18 @@ export const CodManagementModal: React.FC<Props> = ({
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
                         </button>
+
+                        {/* Remove Staff / Rider PIN */}
+                        {(activeUser.role === 'owner' || activeUser.role === 'hub_incharge' || isSuperAdmin) && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteTarget({ kind: 'staff', staff })}
+                            className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/80 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/50 transition cursor-pointer"
+                            title="इस स्टाफ/राइडर PIN को हटाएं"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -2497,6 +2621,65 @@ export const CodManagementModal: React.FC<Props> = ({
           date={auditDenomRider.date || selectedDate}
           readOnly={true}
         />
+      )}
+
+      {/* IN-APP DELETE / PURGE CONFIRMATION MODAL */}
+      {confirmDeleteTarget && (
+        <div className="fixed inset-0 z-[130] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-500/50 w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-black text-white">
+                  {confirmDeleteTarget.kind === 'cod_row'
+                    ? confirmDeleteTarget.isUnlisted
+                      ? 'अनलिस्टेड राइडर हमेशा के लिए हटाएं?'
+                      : 'शीट से एंट्री हटाएं?'
+                    : 'स्टाफ / राइडर PIN हटाएं?'}
+                </h3>
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  {confirmDeleteTarget.kind === 'cod_row' ? (
+                    confirmDeleteTarget.isUnlisted ? (
+                      <>
+                        <strong>{confirmDeleteTarget.row.riderName}</strong> ({confirmDeleteTarget.row.riderPhone || 'No Phone'}) वर्तमान Riders लिस्ट में नहीं हैं। हटाने पर इनकी यह एंट्री और पुराना रिकॉर्ड सिस्टम से हमेशा के लिए साफ़ हो जाएगा।
+                      </>
+                    ) : (
+                      <>
+                        क्या आप वाकई <strong>{confirmDeleteTarget.row.riderName}</strong> की {formatDateDisplay(selectedDate)} की COD एंट्री को इस शीट से हटाना चाहते हैं?
+                      </>
+                    )
+                  ) : (
+                    <>
+                      क्या आप वाकई <strong>{confirmDeleteTarget.staff.name}</strong> ({confirmDeleteTarget.staff.phone || 'No Phone'}) का 4-अंकीय PIN और एक्सेस हमेशा के लिए हटाना चाहते हैं?
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                disabled={isRemovingTarget}
+                onClick={() => setConfirmDeleteTarget(null)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                रद्द करें
+              </button>
+              <button
+                type="button"
+                disabled={isRemovingTarget}
+                onClick={handleConfirmDeleteTarget}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isRemovingTarget ? 'हटाया जा रहा है...' : 'हाँ, हटाएं'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

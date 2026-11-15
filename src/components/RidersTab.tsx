@@ -1410,33 +1410,68 @@ export const RidersTab: React.FC<Props> = ({
               <span>Add First Rider</span>
             </button>
           </div>
-        ) : sortedFilteredRiders.length === 0 ? (
-          <div className="bg-slate-850 border border-slate-755 rounded-2xl p-8 text-center text-slate-400 text-sm">
-            {statusFilter === 'unpaid' ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-3">
-                <CheckCircle2 className="w-9 h-9 text-emerald-400 mb-1" />
-                <span className="font-bold text-emerald-300 text-base">
-                  0 Unpaid - इस समय सीमा के सभी भुगतान पूर्ण हैं
-                </span>
-                <span className="text-xs text-slate-400 max-w-md">
-                  चुनी गई तारीख रेंज ({rangeStartDate ? formatDateDisplay(rangeStartDate) : 'प्रारंभ'} से {rangeEndDate ? formatDateDisplay(rangeEndDate) : 'आज'}) के सभी राइडर्स का भुगतान पूर्ण हो चुका है।
-                </span>
-              </div>
-            ) : statusFilter === 'paid' ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-3">
-                <AlertCircle className="w-9 h-9 text-sky-400 mb-1" />
-                <span className="font-bold text-sky-300 text-base">
-                  0 Paid - इस समय सीमा में कोई चुकता राइडर नहीं है
-                </span>
-                <span className="text-xs text-slate-400 max-w-md">
-                  इस समय सीमा के सभी राइडर्स का पे-आउट अभी बाकी (Unpaid) है।
-                </span>
-              </div>
-            ) : (
-              'No riders match the current filter or search query.'
-            )}
-          </div>
-        ) : (
+        ) : sortedFilteredRiders.length === 0 ? (() => {
+          const cleanSearch = searchQuery.trim().toLowerCase();
+          const hiddenMatchesCount = cleanSearch
+            ? riders.filter(
+                (r) =>
+                  r.name.toLowerCase().includes(cleanSearch) ||
+                  (r.phone || '').includes(cleanSearch)
+              ).length
+            : 0;
+
+          return (
+            <div className="bg-slate-850 border border-slate-755 rounded-2xl p-8 text-center text-slate-400 text-sm">
+              {hiddenMatchesCount > 0 && statusFilter !== 'all' ? (
+                <div className="flex flex-col items-center justify-center gap-2.5 py-2">
+                  <Search className="w-8 h-8 text-amber-400" />
+                  <span className="font-bold text-amber-300 text-base">
+                    "{searchQuery.trim()}" अभी चुने हुए ({statusFilter.toUpperCase()}) फ़िल्टर में नहीं, बल्कि सभी राइडर्स में मौजूद है ({hiddenMatchesCount})
+                  </span>
+                  <span className="text-xs text-slate-400 max-w-md">
+                    ₹0 बैलेंस या Inactive होने के कारण यह नाम छिपा था — नीचे बटन दबाकर इसे तुरंत देख और डिलीट कर सकते हैं।
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter('all')}
+                    className="mt-1 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow cursor-pointer transition"
+                  >
+                    सभी (All) में देखें ({hiddenMatchesCount})
+                  </button>
+                </div>
+              ) : statusFilter === 'unpaid' ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-3">
+                  <CheckCircle2 className="w-9 h-9 text-emerald-400 mb-1" />
+                  <span className="font-bold text-emerald-300 text-base">
+                    0 Unpaid - इस समय सीमा के सभी भुगतान पूर्ण हैं
+                  </span>
+                  <span className="text-xs text-slate-400 max-w-md">
+                    चुनी गई तारीख रेंज ({rangeStartDate ? formatDateDisplay(rangeStartDate) : 'प्रारंभ'} से {rangeEndDate ? formatDateDisplay(rangeEndDate) : 'आज'}) के सभी राइडर्स का भुगतान पूर्ण हो चुका है।
+                  </span>
+                </div>
+              ) : statusFilter === 'paid' ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-3">
+                  <AlertCircle className="w-9 h-9 text-sky-400 mb-1" />
+                  <span className="font-bold text-sky-300 text-base">
+                    0 Paid - इस समय सीमा में कोई चुकता राइडर नहीं है
+                  </span>
+                  <span className="text-xs text-slate-400 max-w-md">
+                    इस समय सीमा के सभी राइडर्स का पे-आउट अभी बाकी (Unpaid) है।
+                  </span>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center gap-1.5 py-2">
+                  <span>वर्तमान फ़िल्टर या सर्च में कोई राइडर नहीं मिला।</span>
+                  {cleanSearch && (
+                    <span className="text-xs text-slate-500">
+                      यदि आप किसी पुराने या डिलीट किए गए राइडर को खोज रहे हैं, तो <strong>Admin Tools → कचरा पेटी (Recycle Bin)</strong> या <strong>COD शीट / PIN लिस्ट</strong> में देखें।
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })() : (
           sortedFilteredRiders.map((rider, index) => {
             const stats = getRiderStats(rider.id);
             const rangeStats = getRiderRangeStats(rider.id);

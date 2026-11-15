@@ -147,50 +147,47 @@ export function isEntityOwnedByUser(
   const targetUid = userUid.trim();
   const targetEmail = (userEmail || '').trim().toLowerCase();
 
-  // Master Super Admin has full ownership & visibility across all hub workspaces
-  if (targetEmail === SUPER_ADMIN_EMAIL.toLowerCase() || isSuperAdmin(targetUid)) {
-    return true;
-  }
-
-  // 1. Strict Negative Check: Purge all external Gmail accounts
-  if (entity.createdByEmail) {
-    const email = entity.createdByEmail.trim().toLowerCase();
-    if (targetEmail && email !== targetEmail) {
-      return false; // Created by an external email!
-    }
-  }
-
-  if (entity.createdBy && entity.createdBy.includes('@')) {
-    const email = entity.createdBy.trim().toLowerCase();
-    if (targetEmail && email !== targetEmail) {
-      return false; // Created by an external email!
-    }
-  }
-
-  // Strict Negative Check: Purge foreign UIDs
-  if (entity.createdBy && !entity.createdBy.includes('@') && entity.createdBy !== 'guest') {
-    if (entity.createdBy !== targetUid) {
-      return false; // Belongs to a different UID!
-    }
+  // 1. Strict Negative Checks First (Applies equally to Super Admin workspace & regular hubs):
+  // NEVER permit records explicitly belonging to a DIFFERENT workspace or user UID!
+  if (entity.workspaceId && entity.workspaceId !== 'guest' && entity.workspaceId !== targetUid) {
+    return false;
   }
 
   if (entity.userId && entity.userId !== 'guest' && entity.userId !== targetUid) {
     return false;
   }
 
-  if (entity.workspaceId && entity.workspaceId !== 'guest' && entity.workspaceId !== targetUid) {
+  if (entity.createdBy && !entity.createdBy.includes('@') && entity.createdBy !== 'guest' && entity.createdBy !== targetUid) {
     return false;
   }
 
+  const explicitlyBoundToTargetWorkspace =
+    entity.workspaceId === targetUid || entity.userId === targetUid || entity.createdBy === targetUid;
+
+  if (entity.createdByEmail) {
+    const email = entity.createdByEmail.trim().toLowerCase();
+    const isAdminEditedInTargetWs = isSuperAdmin(email) && explicitlyBoundToTargetWorkspace;
+    if (targetEmail && email !== targetEmail && !isAdminEditedInTargetWs) {
+      return false;
+    }
+  }
+
+  if (entity.createdBy && entity.createdBy.includes('@')) {
+    const email = entity.createdBy.trim().toLowerCase();
+    const isAdminEditedInTargetWs = isSuperAdmin(email) && explicitlyBoundToTargetWorkspace;
+    if (targetEmail && email !== targetEmail && !isAdminEditedInTargetWs) {
+      return false;
+    }
+  }
+
   // 2. Positive Match Check:
-  // Match either auth.currentUser.uid or auth.currentUser.email
   if (entity.createdBy === targetUid) return true;
   if (targetEmail && entity.createdBy && entity.createdBy.trim().toLowerCase() === targetEmail) return true;
   if (targetEmail && entity.createdByEmail && entity.createdByEmail.trim().toLowerCase() === targetEmail) return true;
   if (entity.workspaceId === targetUid) return true;
   if (entity.userId === targetUid) return true;
 
-  // If untagged legacy item, only allow if running in local guest mode
+  // 3. Untagged legacy items: only allow in local guest mode (NEVER bleed untagged legacy items into cloud workspaces)
   if (!entity.createdBy && !entity.createdByEmail && !entity.userId && !entity.workspaceId) {
     return !targetUid || targetUid === 'guest';
   }
@@ -1662,16 +1659,16 @@ export async function ensureWorkspaceMigration(
       });
     }
 
-    // Also check local storage for this user or generic legacy
-    const rawRiders = localStorage.getItem(`cp_cache_riders_${userId}`) || localStorage.getItem(`courier_riders_u_${userId}`) || localStorage.getItem('courier_riders');
-    const rawDeliveries = localStorage.getItem(`cp_cache_deliveries_${userId}`) || localStorage.getItem(`courier_deliveries_u_${userId}`) || localStorage.getItem('courier_deliveries');
-    const rawSettlements = localStorage.getItem(`cp_cache_settlements_${userId}`) || localStorage.getItem(`courier_settlements_u_${userId}`) || localStorage.getItem('courier_settlements');
+    // Check ONLY user-scoped localStorage caches so un-scoped browser keys NEVER leak into cloud workspaces
+    const rawRiders = localStorage.getItem(`cp_cache_riders_${userId}`) || localStorage.getItem(`courier_riders_u_${userId}`);
+    const rawDeliveries = localStorage.getItem(`cp_cache_deliveries_${userId}`) || localStorage.getItem(`courier_deliveries_u_${userId}`);
+    const rawSettlements = localStorage.getItem(`cp_cache_settlements_${userId}`) || localStorage.getItem(`courier_settlements_u_${userId}`);
 
     if (rawRiders) {
       try {
         const parsed: Rider[] = JSON.parse(rawRiders);
         parsed.forEach((r) => {
-          if (!ridersToCopy.some((existing) => existing.id === r.id)) {
+          if (r && !r.isDeleted && !ridersToCopy.some((existing) => existing.id === r.id)) {
             ridersToCopy.push(r);
           }
         });
@@ -1682,7 +1679,7 @@ export async function ensureWorkspaceMigration(
       try {
         const parsed: DeliveryEntry[] = JSON.parse(rawDeliveries);
         parsed.forEach((e) => {
-          if (!entriesToCopy.some((existing) => existing.id === e.id)) {
+          if (e && !e.isDeleted && !entriesToCopy.some((existing) => existing.id === e.id)) {
             entriesToCopy.push(e);
           }
         });
@@ -1693,7 +1690,7 @@ export async function ensureWorkspaceMigration(
       try {
         const parsed: SettlementRecord[] = JSON.parse(rawSettlements);
         parsed.forEach((s) => {
-          if (!settlementsToCopy.some((existing) => existing.id === s.id)) {
+          if (s && !settlementsToCopy.some((existing) => existing.id === s.id)) {
             settlementsToCopy.push(s);
           }
         });
@@ -1893,7 +1890,7 @@ function scrubTombstonesFromLocalCache(userId: string, tombstones: DeletedTombst
   }
 }
 
-async function fetchMergedDeletedTombstones(userId: string): Promise<DeletedTombstones> {
+export async function fetchMergedDeletedTombstones(userId: string): Promise<DeletedTombstones> {
   const local = getLocalDeletedTombstones(userId);
   if (!userId || userId === 'guest') return local;
   try {
@@ -1912,7 +1909,7 @@ async function fetchMergedDeletedTombstones(userId: string): Promise<DeletedTomb
   return local;
 }
 
-async function recordDeletedTombstones(
+export async function recordDeletedTombstones(
   userId: string,
   additions: Partial<DeletedTombstones>
 ): Promise<void> {
@@ -2095,12 +2092,19 @@ export function subscribeToUserData(
   const workspaceAdvancesRef = collection(db, 'workspaces', userId, 'advances');
   const workspaceIncentivesRef = collection(db, 'workspaces', userId, 'incentives');
 
+  const normalizeWorkspaceDoc = <T extends Record<string, any>>(data: T): T => {
+    if (!data.createdBy && !data.createdByEmail && !data.userId && !data.workspaceId) {
+      return { ...data, workspaceId: userId, userId };
+    }
+    return data;
+  };
+
   const unsubRiders = onSnapshot(
     workspaceRidersRef,
     (snapshot) => {
       ridersMap.clear();
       snapshot.forEach((docSnap) => {
-        const r = docSnap.data() as Rider;
+        const r = normalizeWorkspaceDoc(docSnap.data() as Rider);
         if (!isEntityOwnedByUser(r, userId, effectiveEmail)) {
           return;
         }
@@ -2151,7 +2155,7 @@ export function subscribeToUserData(
     (snapshot) => {
       deliveriesMap.clear();
       snapshot.forEach((docSnap) => {
-        const e = docSnap.data() as DeliveryEntry;
+        const e = normalizeWorkspaceDoc(docSnap.data() as DeliveryEntry);
         if (!isEntityOwnedByUser(e, userId, effectiveEmail)) {
           return;
         }
@@ -2170,7 +2174,7 @@ export function subscribeToUserData(
     (snapshot) => {
       settlementsMap.clear();
       snapshot.forEach((docSnap) => {
-        const s = docSnap.data() as SettlementRecord;
+        const s = normalizeWorkspaceDoc(docSnap.data() as SettlementRecord);
         if (!isEntityOwnedByUser(s, userId, effectiveEmail)) {
           return;
         }
@@ -2288,9 +2292,10 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
   };
 
   try {
-    const rawRiders = localStorage.getItem(`cp_cache_riders_${userId}`) || localStorage.getItem(`courier_riders_u_${userId}`) || localStorage.getItem('courier_riders');
-    const rawDeliveries = localStorage.getItem(`cp_cache_deliveries_${userId}`) || localStorage.getItem(`courier_deliveries_u_${userId}`) || localStorage.getItem('courier_deliveries');
-    const rawSettlements = localStorage.getItem(`cp_cache_settlements_${userId}`) || localStorage.getItem(`courier_settlements_u_${userId}`) || localStorage.getItem('courier_settlements');
+    // Strictly read ONLY user-scoped local caches (NEVER pull unscoped browser-global courier_riders keys)
+    const rawRiders = localStorage.getItem(`cp_cache_riders_${userId}`) || localStorage.getItem(`courier_riders_u_${userId}`);
+    const rawDeliveries = localStorage.getItem(`cp_cache_deliveries_${userId}`) || localStorage.getItem(`courier_deliveries_u_${userId}`);
+    const rawSettlements = localStorage.getItem(`cp_cache_settlements_${userId}`) || localStorage.getItem(`courier_settlements_u_${userId}`);
 
     const localRiders: Rider[] = rawRiders ? JSON.parse(rawRiders) : [];
     const localDeliveries: DeliveryEntry[] = rawDeliveries ? JSON.parse(rawDeliveries) : [];
@@ -2319,11 +2324,16 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
 
     localRiders.forEach((rider, idx) => {
       if (!rider || !rider.id) return;
-      // Never resurrect permanently deleted riders or stale trashed snapshots missing from cloud
+      // Never resurrect permanently deleted riders, stale trashed snapshots, or foreign-owned items
       if (deadRiderIds.has(rider.id) || rider.isDeleted) return;
+      const explicitOwner = (rider.workspaceId || rider.userId || (rider as any).hubId || '').trim();
+      if (explicitOwner && explicitOwner !== 'guest' && explicitOwner !== userId) return;
       if (!existingRiderIds.has(rider.id)) {
         const riderWithOrder: Rider = {
           ...rider,
+          workspaceId: rider.workspaceId || userId,
+          userId: rider.userId || userId,
+          createdBy: rider.createdBy || userId,
           order: typeof rider.order === 'number' ? rider.order : idx,
         };
         ops.push({
@@ -2336,12 +2346,18 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
 
     localDeliveries.forEach((entry) => {
       if (!entry || !entry.id) return;
-      // Never resurrect permanently deleted entries or stale trashed entries missing from cloud
       if (deadEntryIds.has(entry.id) || entry.isDeleted) return;
+      const explicitOwner = (entry.workspaceId || entry.userId || '').trim();
+      if (explicitOwner && explicitOwner !== 'guest' && explicitOwner !== userId) return;
       if (!existingDeliveryIds.has(entry.id)) {
         ops.push({
           ref: doc(db, 'workspaces', userId, 'entries', entry.id),
-          data: entry,
+          data: {
+            ...entry,
+            workspaceId: entry.workspaceId || userId,
+            userId: entry.userId || userId,
+            createdBy: entry.createdBy || userId,
+          },
         });
         result.migratedDeliveries++;
       }
@@ -2349,10 +2365,17 @@ export async function migrateLocalStorageToFirestore(userId: string): Promise<Mi
 
     localSettlements.forEach((settlement) => {
       if (!settlement || !settlement.id) return;
+      const explicitOwner = (settlement.workspaceId || settlement.userId || '').trim();
+      if (explicitOwner && explicitOwner !== 'guest' && explicitOwner !== userId) return;
       if (!existingSettlementIds.has(settlement.id)) {
         ops.push({
           ref: doc(db, 'workspaces', userId, 'settlements', settlement.id),
-          data: settlement,
+          data: {
+            ...settlement,
+            workspaceId: settlement.workspaceId || userId,
+            userId: settlement.userId || userId,
+            createdBy: settlement.createdBy || userId,
+          },
         });
         result.migratedSettlements++;
       }
@@ -2412,6 +2435,14 @@ export async function saveRiderToFirestore(
  */
 export async function deleteRiderFromFirestore(userId: string, riderId: string): Promise<void> {
   if (!userId || !riderId) return;
+  let riderPhone = '';
+  try {
+    const snap = await getDoc(doc(db, 'workspaces', userId, 'riders', riderId));
+    if (snap.exists()) {
+      riderPhone = snap.data()?.phone || '';
+    }
+  } catch {}
+
   const softDeletePayload = {
     isDeleted: true,
     deletedAt: new Date().toISOString(),
@@ -2430,6 +2461,11 @@ export async function deleteRiderFromFirestore(userId: string, riderId: string):
   } catch (err) {
     console.warn('Root rider soft-delete notice:', err);
   }
+  // Deactivate COD companion PIN & prune blank today's COD ghost row immediately
+  try {
+    const { cleanupDeletedRiderInCodSystem } = await import('./codService');
+    await cleanupDeletedRiderInCodSystem(userId, riderId, riderPhone, { permanent: false });
+  } catch {}
 }
 
 /**
@@ -4000,6 +4036,24 @@ export async function permanentlyDeleteRiderFromFirestore(
   riderId: string
 ): Promise<void> {
   if (!riderId) return;
+
+  // Lookup phone before deleting so cod_staff_pins and today's unlocked COD sheets can be purged too
+  let riderPhone = '';
+  try {
+    if (userId && userId !== 'guest') {
+      const wsSnap = await getDoc(doc(db, 'workspaces', userId, 'riders', riderId)).catch(() => null);
+      if (wsSnap && wsSnap.exists()) {
+        riderPhone = wsSnap.data()?.phone || '';
+      }
+    }
+    if (!riderPhone) {
+      const rootSnap = await getDoc(doc(db, 'riders', riderId)).catch(() => null);
+      if (rootSnap && rootSnap.exists()) {
+        riderPhone = rootSnap.data()?.phone || '';
+      }
+    }
+  } catch {}
+
   await recordDeletedTombstones(userId, { riderIds: [riderId] });
 
   const mirrorOps: Promise<any>[] = [
@@ -4011,6 +4065,48 @@ export async function permanentlyDeleteRiderFromFirestore(
     await deleteDoc(doc(db, 'workspaces', userId, 'riders', riderId));
   }
   await Promise.all(mirrorOps);
+
+  // Also purge any duplicate-ID stale mirrors sharing the same phone strictly inside userId's legacy collections
+  const cleanPhone = (riderPhone || '').replace(/\D/g, '').slice(-10);
+  if (cleanPhone && userId && userId !== 'guest') {
+    const duplicateIdsToTombstone: string[] = [];
+    try {
+      const [uSnap, rWsSnap, rHubSnap, rUserSnap] = await Promise.all([
+        getDocs(collection(db, 'users', userId, 'riders')).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('workspaceId', '==', userId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('hubId', '==', userId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('userId', '==', userId))).catch(() => null),
+      ]);
+      const delPromises: Promise<any>[] = [];
+      const inspectMirrorSnap = (snap: any, isRoot: boolean) => {
+        if (!snap || !snap.docs) return;
+        snap.docs.forEach((d: any) => {
+          const data = d.data() || {};
+          const dPhone = String(data.phone || '').replace(/\D/g, '').slice(-10);
+          if (dPhone === cleanPhone) {
+            duplicateIdsToTombstone.push(d.id);
+            delPromises.push(deleteDoc(d.ref).catch(() => {}));
+            if (isRoot) {
+              delPromises.push(deleteDoc(doc(db, 'users', userId, 'riders', d.id)).catch(() => {}));
+            }
+          }
+        });
+      };
+      inspectMirrorSnap(uSnap, false);
+      inspectMirrorSnap(rWsSnap, true);
+      inspectMirrorSnap(rHubSnap, true);
+      inspectMirrorSnap(rUserSnap, true);
+      if (duplicateIdsToTombstone.length > 0) {
+        await recordDeletedTombstones(userId, { riderIds: duplicateIdsToTombstone }).catch(() => {});
+      }
+      await Promise.all(delPromises);
+    } catch {}
+  }
+
+  try {
+    const { cleanupDeletedRiderInCodSystem } = await import('./codService');
+    await cleanupDeletedRiderInCodSystem(userId, riderId, riderPhone, { permanent: true });
+  } catch {}
 }
 
 /**
@@ -4066,6 +4162,21 @@ export async function emptyAllTrashInFirestore(
     if (clean !== advanceId) allAdvIds.push(clean);
   });
 
+  // Fetch rider phones before deleting rider docs so COD staff PINs & sheets are purged cleanly too
+  const riderPhones = new Map<string, string>();
+  if (trashedRiderIds.length > 0 && userId && userId !== 'guest') {
+    await Promise.all(
+      trashedRiderIds.map(async (rId) => {
+        try {
+          const snap = await getDoc(doc(db, 'workspaces', userId, 'riders', rId));
+          if (snap.exists() && snap.data()?.phone) {
+            riderPhones.set(rId, snap.data().phone);
+          }
+        } catch {}
+      })
+    );
+  }
+
   if (trashedEntryIds.length > 0 || trashedRiderIds.length > 0 || allAdvIds.length > 0) {
     await recordDeletedTombstones(userId, {
       entryIds: trashedEntryIds,
@@ -4120,6 +4231,48 @@ export async function emptyAllTrashInFirestore(
     await Promise.all(primaryOps.slice(i, i + CHUNK_SIZE).map((fn) => fn()));
   }
   await Promise.all(mirrorOps);
+
+  const phonesToPurge = new Set(
+    Array.from(riderPhones.values())
+      .map((p) => String(p || '').replace(/\D/g, '').slice(-10))
+      .filter(Boolean)
+  );
+  if (phonesToPurge.size > 0 && userId && userId !== 'guest') {
+    try {
+      const [uSnap, rWsSnap, rHubSnap, rUserSnap] = await Promise.all([
+        getDocs(collection(db, 'users', userId, 'riders')).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('workspaceId', '==', userId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('hubId', '==', userId))).catch(() => null),
+        getDocs(query(collection(db, 'riders'), where('userId', '==', userId))).catch(() => null),
+      ]);
+      const extraDel: Promise<any>[] = [];
+      const extraIds: string[] = [];
+      [uSnap, rWsSnap, rHubSnap, rUserSnap].forEach((snap) => {
+        snap?.docs?.forEach((d: any) => {
+          const dPhone = String(d.data()?.phone || '').replace(/\D/g, '').slice(-10);
+          if (dPhone && phonesToPurge.has(dPhone)) {
+            extraIds.push(d.id);
+            extraDel.push(deleteDoc(d.ref).catch(() => {}));
+          }
+        });
+      });
+      if (extraIds.length > 0) {
+        await recordDeletedTombstones(userId, { riderIds: extraIds }).catch(() => {});
+      }
+      await Promise.all(extraDel);
+    } catch {}
+  }
+
+  if (trashedRiderIds.length > 0) {
+    try {
+      const { cleanupDeletedRiderInCodSystem } = await import('./codService');
+      await Promise.all(
+        trashedRiderIds.map((rId) =>
+          cleanupDeletedRiderInCodSystem(userId, rId, riderPhones.get(rId), { permanent: true })
+        )
+      );
+    } catch {}
+  }
 }
 
 
