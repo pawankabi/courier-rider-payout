@@ -1,7 +1,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 export interface BackgroundSmsPlugin {
-  sendSms(options: { phoneNumber: string; message: string }): Promise<{
+  sendSms(options: { phoneNumber: string; message: string; actionId?: string }): Promise<{
     success: boolean;
     message?: string;
   }>;
@@ -82,8 +82,10 @@ export async function openNativeAppSettings(): Promise<boolean> {
   }
 }
 
-// In-memory deduplication map to prevent double SMS dispatch across overlapping hooks
+// In-memory deduplication & in-flight locks to prevent double SMS dispatch across overlapping hooks or slow network
 const recentSmsDispatches = new Map<string, number>();
+const recentNativeActionIds = new Map<string, number>();
+const inFlightNativeKeys = new Set<string>();
 
 /**
  * Automatically requests SMS and Contacts permissions on startup.
@@ -141,6 +143,7 @@ export async function autoRequestStartupPermissions(): Promise<{
 export interface SendNativeSmsResult {
   success: boolean;
   isNative: boolean;
+  deduplicated?: boolean;
   message?: string;
   error?: string;
 }
@@ -148,11 +151,12 @@ export interface SendNativeSmsResult {
 /**
  * Dispatches an SMS directly via the device's native SIM card in the background (Khatabook style).
  * Automatically requests runtime permission and records into system sent messages.
- * Includes built-in deduplication to prevent double-dispatch within a 4-second window.
+ * Includes in-flight mutex + 60s content deduplication + 120s actionId deduplication.
  */
 export async function sendNativeBackgroundSms(
   phoneNumber: string,
-  message: string
+  message: string,
+  actionId?: string
 ): Promise<SendNativeSmsResult> {
   const cleanPhone = (phoneNumber || '').trim().replace(/\D/g, '').slice(-10);
   if (!cleanPhone || cleanPhone.length < 10) {
@@ -164,25 +168,62 @@ export async function sendNativeBackgroundSms(
   }
 
   const targetNumber = `+91${cleanPhone}`;
-
-  // Deduplication check: Avoid sending identical SMS to the same phone within 4 seconds
-  const dedupKey = `${cleanPhone}:::${message.trim()}`;
+  const trimmedMsg = (message || '').trim();
+  const dedupKey = `${cleanPhone}:::${trimmedMsg}`;
+  const cleanActionKey = actionId ? `act:::${actionId}` : '';
   const now = Date.now();
-  const lastTime = recentSmsDispatches.get(dedupKey);
-  if (lastTime && now - lastTime < 4000) {
-    console.log('Skipping duplicate native SMS call within 4s window:', cleanPhone);
+
+  // 1. Check in-flight lock: by actionId when provided (allows 2 distinct entries), otherwise by message
+  if (cleanActionKey ? inFlightNativeKeys.has(cleanActionKey) : inFlightNativeKeys.has(dedupKey)) {
     return {
       success: true,
       isNative: isNativeAndroid(),
-      message: '✅ सिम से SMS पहले ही भेजा जा चुका है।',
+      deduplicated: true,
+      message: '✅ सिम से SMS पहले ही भेजा जा रहा है।',
     };
   }
-  recentSmsDispatches.set(dedupKey, now);
 
-  // Periodic cleanup of deduplication map
-  if (recentSmsDispatches.size > 40) {
+  // 2. Check 120s actionId lock (guards against differing totals/texts or duplicate triggers for the same ledger entry)
+  if (cleanActionKey) {
+    const lastActionTime = recentNativeActionIds.get(cleanActionKey);
+    if (lastActionTime && now - lastActionTime < 120000) {
+      return {
+        success: true,
+        isNative: isNativeAndroid(),
+        deduplicated: true,
+        message: '✅ इस एंट्री का SMS पहले ही भेजा जा चुका है।',
+      };
+    }
+  } else {
+    // 3. Fallback 3s exact-message lock only when caller has no actionId
+    const lastTime = recentSmsDispatches.get(dedupKey);
+    if (lastTime && now - lastTime < 3000) {
+      return {
+        success: true,
+        isNative: isNativeAndroid(),
+        deduplicated: true,
+        message: '✅ सिम से SMS पहले ही भेजा जा चुका है।',
+      };
+    }
+  }
+
+  if (cleanActionKey) {
+    inFlightNativeKeys.add(cleanActionKey);
+    recentNativeActionIds.set(cleanActionKey, now);
+  } else {
+    inFlightNativeKeys.add(dedupKey);
+    recentSmsDispatches.set(dedupKey, now);
+  }
+
+  // Periodic cleanup of deduplication maps
+  if (recentSmsDispatches.size > 60) {
     for (const [k, t] of recentSmsDispatches.entries()) {
-      if (now - t > 15000) recentSmsDispatches.delete(k);
+      if (now - t > 30000) recentSmsDispatches.delete(k);
+    }
+  }
+  if (recentNativeActionIds.size > 60) {
+    for (const [k, t] of recentNativeActionIds.entries()) {
+      if (now - t > 180000) recentNativeActionIds.delete(k);
     }
   }
 
@@ -191,6 +232,8 @@ export async function sendNativeBackgroundSms(
       // 1. Ensure runtime SEND_SMS permission
       const hasPermission = await ensureSmsPermissions();
       if (!hasPermission) {
+        if (cleanActionKey) recentNativeActionIds.delete(cleanActionKey);
+        else recentSmsDispatches.delete(dedupKey);
         return {
           success: false,
           isNative: true,
@@ -201,7 +244,8 @@ export async function sendNativeBackgroundSms(
       // 2. Dispatch directly via native SIM SmsManager
       const res = await BackgroundSms.sendSms({
         phoneNumber: targetNumber,
-        message,
+        message: trimmedMsg,
+        ...(actionId ? { actionId } : {}),
       });
 
       if (res && res.success) {
@@ -211,6 +255,8 @@ export async function sendNativeBackgroundSms(
           message: '✅ सिम से SMS सफलतापूर्वक भेजा गया।',
         };
       } else {
+        if (cleanActionKey) recentNativeActionIds.delete(cleanActionKey);
+        else recentSmsDispatches.delete(dedupKey);
         return {
           success: false,
           isNative: true,
@@ -218,14 +264,22 @@ export async function sendNativeBackgroundSms(
         };
       }
     } catch (pluginErr: any) {
+      if (cleanActionKey) recentNativeActionIds.delete(cleanActionKey);
+      else recentSmsDispatches.delete(dedupKey);
       console.error('Native SIM SMS dispatch error:', pluginErr);
       return {
         success: false,
         isNative: true,
         error: pluginErr?.message || 'सिम से SMS नहीं भेजा जा सका',
       };
+    } finally {
+      inFlightNativeKeys.delete(dedupKey);
+      if (cleanActionKey) inFlightNativeKeys.delete(cleanActionKey);
     }
   }
+
+  inFlightNativeKeys.delete(dedupKey);
+  if (cleanActionKey) inFlightNativeKeys.delete(cleanActionKey);
 
   // Web Browser / Desktop standard fallback (no popup/window.open in automated background)
   return {

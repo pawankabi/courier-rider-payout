@@ -14,6 +14,8 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @CapacitorPlugin(
     name = "BackgroundSms",
@@ -37,6 +39,9 @@ import java.util.ArrayList;
     }
 )
 public class BackgroundSmsPlugin extends Plugin {
+    private static final long ACTION_DEDUP_WINDOW_MS = 120000L;
+    private static final long FALLBACK_RACE_WINDOW_MS = 2500L;
+    private static final Map<String, Long> recentNativeSends = new ConcurrentHashMap<>();
 
     @PluginMethod
     public void checkSmsPermissions(PluginCall call) {
@@ -177,6 +182,34 @@ public class BackgroundSmsPlugin extends Plugin {
             return;
         }
 
+        String actionId = call.getString("actionId");
+        boolean hasActionId = actionId != null && !actionId.trim().isEmpty();
+
+        // Normalize last 10 digits for native-level duplicate protection across bridge calls
+        String digitsOnly = cleanNumber.replaceAll("[^0-9]", "");
+        String canonicalPhone = digitsOnly.length() > 10 ? digitsOnly.substring(digitsOnly.length() - 10) : digitsOnly;
+        String dedupKey = hasActionId
+            ? ("act:::" + actionId.trim())
+            : (canonicalPhone + ":::" + message.trim());
+        long dedupWindowMs = hasActionId ? ACTION_DEDUP_WINDOW_MS : FALLBACK_RACE_WINDOW_MS;
+        long nowMs = System.currentTimeMillis();
+
+        synchronized (recentNativeSends) {
+            Long lastSentAt = recentNativeSends.get(dedupKey);
+            if (lastSentAt != null && (nowMs - lastSentAt) < dedupWindowMs) {
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("deduplicated", true);
+                ret.put("message", "Duplicate SMS suppressed natively");
+                call.resolve(ret);
+                return;
+            }
+            recentNativeSends.put(dedupKey, nowMs);
+            if (recentNativeSends.size() > 60) {
+                recentNativeSends.entrySet().removeIf(entry -> (nowMs - entry.getValue()) > ACTION_DEDUP_WINDOW_MS);
+            }
+        }
+
         try {
             SmsManager smsManager = null;
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
@@ -188,6 +221,7 @@ public class BackgroundSmsPlugin extends Plugin {
                 smsManager = SmsManager.getDefault();
             }
             if (smsManager == null) {
+                recentNativeSends.remove(dedupKey);
                 call.reject("SmsManager is not available on this device");
                 return;
             }
@@ -211,6 +245,7 @@ public class BackgroundSmsPlugin extends Plugin {
             ret.put("message", "SMS sent successfully via SIM");
             call.resolve(ret);
         } catch (Exception e) {
+            recentNativeSends.remove(dedupKey);
             call.reject("Failed to send SMS: " + e.getMessage());
         }
     }

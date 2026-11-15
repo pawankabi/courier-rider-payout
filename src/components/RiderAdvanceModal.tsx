@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   X, 
   IndianRupee, 
@@ -255,8 +255,11 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
     setErrorMessage(null);
   };
 
+  const submittingRef = useRef(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     setErrorMessage(null);
 
     const validAmount = Number(amount) || parseFloat(amount) || 0;
@@ -265,6 +268,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
 
     try {
@@ -295,7 +299,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           advances: updatedAdvances,
         };
 
-        await onSaveAdvance(updatedRider, updatedItem);
+        const savePromise = onSaveAdvance(updatedRider, updatedItem);
 
         const smsMessage = formatAdvanceSmsText({
           riderName: rider.name,
@@ -314,19 +318,23 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           provider: 'Gateway API',
         };
 
-        try {
-          const res = await dispatchAutomatedSms({
-            riderPhone: rider.phone,
-            riderName: rider.name,
-            message: smsMessage,
-            type: 'advance',
-            statementUrl,
-            amount: validAmount,
+        const smsPromise = dispatchAutomatedSms({
+          riderPhone: rider.phone,
+          riderName: rider.name,
+          message: smsMessage,
+          type: 'advance',
+          statementUrl,
+          amount: validAmount,
+          actionId: `adv_edit_${editingAdvance.id}_${nowIso}`,
+        })
+          .then((res) => {
+            if (res) apiResult = res;
+          })
+          .catch((smsErr) => {
+            console.warn('Background SMS trigger handled gracefully:', smsErr);
           });
-          if (res) apiResult = res;
-        } catch (smsErr) {
-          console.warn('Background SMS trigger handled gracefully:', smsErr);
-        }
+
+        await Promise.all([savePromise, smsPromise]);
 
         setDispatchResult({
           smsMessage,
@@ -347,7 +355,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         handleCancelEdit();
       } else {
         // --- NEW ENTRY MODE ---
-        const newAdvanceId = `adv_${Date.now()}`;
+        const newAdvanceId = `adv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         const newAdvance: RiderAdvanceEntry = {
           id: newAdvanceId,
           riderId: rider.id,
@@ -369,10 +377,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
           advances: updatedAdvances,
         };
 
-        // 1. Save to state & Firestore immediately
-        await onSaveAdvance(updatedRider, savedNewAdvance);
-
-        // 2. Prepare SMS Message text according to specification:
+        // 1. Prepare SMS immediately and dispatch alongside Firestore sync (0ms wait)
         const smsMessage = formatAdvanceSmsText({
           riderName: rider.name,
           amount: validAmount,
@@ -384,26 +389,30 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
         const waUrl = getWhatsAppUrl(rider.phone, smsMessage);
         const smsUrl = getNativeSmsUrl(rider.phone, smsMessage);
 
-        // 3. Automated background API call (Fast2SMS / MSG91 / Webhook)
         let apiResult: SmsDispatchResult = {
           success: true,
           message: 'SMS सफलतापूर्वक भेजा गया!',
           provider: 'Gateway API',
         };
 
-        try {
-          const res = await dispatchAutomatedSms({
-            riderPhone: rider.phone,
-            riderName: rider.name,
-            message: smsMessage,
-            type: 'advance',
-            statementUrl,
-            amount: validAmount,
+        const savePromise = onSaveAdvance(updatedRider, savedNewAdvance);
+        const smsPromise = dispatchAutomatedSms({
+          riderPhone: rider.phone,
+          riderName: rider.name,
+          message: smsMessage,
+          type: 'advance',
+          statementUrl,
+          amount: validAmount,
+          actionId: `adv_${newAdvanceId}`,
+        })
+          .then((res) => {
+            if (res) apiResult = res;
+          })
+          .catch((smsErr) => {
+            console.warn('Background SMS trigger handled gracefully:', smsErr);
           });
-          if (res) apiResult = res;
-        } catch (smsErr) {
-          console.warn('Background SMS trigger handled gracefully:', smsErr);
-        }
+
+        await Promise.all([savePromise, smsPromise]);
 
         setDispatchResult({
           smsMessage,
@@ -433,6 +442,7 @@ export const RiderAdvanceModal: React.FC<RiderAdvanceModalProps> = ({
       console.error('Error saving advance:', err);
       setErrorMessage(err?.message || 'एडवांस सुरक्षित करने में त्रुटि हुई।');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };

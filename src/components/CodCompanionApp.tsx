@@ -1723,6 +1723,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 message: smsText,
                 type: 'advance',
                 statementUrl,
+                actionId: `cod_adv_${deterministicAdvId}`,
               }).catch((e) => console.warn('COD companion shortage SMS notice:', e));
             } catch (wErr: any) {
               if (isTransientNetworkError(wErr)) {
@@ -1833,6 +1834,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 message: smsText,
                 type: 'general',
                 statementUrl,
+                actionId: `cod_inc_${deterministicIncId}`,
               }).catch((e) => console.warn('COD companion surplus SMS notice:', e));
             } catch (wErr: any) {
               if (isTransientNetworkError(wErr)) {

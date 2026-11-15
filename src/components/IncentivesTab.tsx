@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Gift,
   Sparkles,
@@ -154,8 +154,11 @@ export const IncentivesTab: React.FC<Props> = ({
     setTimeout(() => setToastMessage(null), 4500);
   };
 
+  const submittingRef = useRef(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     if (!selectedRiderId) {
       showToast('⚠️ कृपया राइडर चुनें!');
       return;
@@ -166,6 +169,7 @@ export const IncentivesTab: React.FC<Props> = ({
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     try {
       await onSaveIncentive(selectedRiderId, {
@@ -180,6 +184,7 @@ export const IncentivesTab: React.FC<Props> = ({
       console.error('Error adding incentive:', err);
       showToast('इंसेंटिव सुरक्षित करने में त्रुटि हुई।');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };

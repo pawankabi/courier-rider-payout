@@ -29,23 +29,35 @@ export const FestivalBannerCard: React.FC<Props> = ({ riders, hubSignature }) =>
     setIsModalOpen(true);
   };
 
-  // Important local Seraikella & major folk pujas to display in quick pills
+  // Important Jharkhand multi-community & major all-religion festivals sorted by closest upcoming date
   const featuredQuickPills = useMemo(() => {
     const featuredIds = [
-      'maa_manasa_puja',
-      'vishwakarma_puja',
-      'bhokta_parab',
-      'chhau_parv',
-      'gram_than_jaher_than',
-      'buru_bonga',
       'sarhul',
       'karma',
       'tusu_parab',
-      'saraswati_puja',
-      'maha_shivratri',
+      'bauri_parab',
+      'akhain_jatra',
+      'maghe_parab',
+      'rohini_parab',
+      'raja_rajo_parab',
+      'jantal_parab',
+      'ind_chhata_parab',
+      'nawakhani_parab',
+      'bandna_garu_khunta',
+      'hul_diwas',
+      'chhau_parv',
+      'maa_manasa_puja',
+      'bhokta_parab',
+      'parashuram_akshaya_tritiya',
+      'shravani_mahotsav',
+      'vishwakarma_puja',
+      'durga_puja',
+      'kali_puja',
       'diwali',
       'chhath',
-      'durga_puja'
+      'eid',
+      'easter_sunday',
+      'vaisakhi_khalsa',
     ];
     return FESTIVALS.filter((f) => featuredIds.includes(f.id));
   }, []);
@@ -111,7 +123,7 @@ export const FestivalBannerCard: React.FC<Props> = ({ riders, hubSignature }) =>
                   {activeFestival.dateLabel}
                 </span>
                 <span className="text-[10px] px-2 py-0.2 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                  {activeFestival.region}
+                  {activeFestival.communityTag || activeFestival.region}
                 </span>
               </div>
               <h3 className="text-sm sm:text-base font-extrabold text-white mt-0.5 tracking-tight flex items-center gap-2">
@@ -140,14 +152,14 @@ export const FestivalBannerCard: React.FC<Props> = ({ riders, hubSignature }) =>
 
         {/* 3. Cultural summary snippet */}
         <div className="text-[11px] text-amber-200/90 bg-amber-950/25 px-3 py-1.5 rounded-lg border border-amber-500/20 line-clamp-2">
-          <strong className="text-amber-300">सरायकेला परंपरा:</strong> {activeFestival.culturalSignificance}
+          <strong className="text-amber-300">झारखंड व लोक परंपरा:</strong> {activeFestival.culturalSignificance}
         </div>
 
         {/* 4. Quick festival pills preview */}
         <div className="pt-2 border-t border-slate-800/80 flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] scrollbar-none">
           <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider shrink-0 mr-1 flex items-center gap-1">
             <Sparkles className="w-3 h-3 text-amber-400" />
-            <span>Pujas:</span>
+            <span>प्रमुख पर्व:</span>
           </span>
           {featuredQuickPills.map((fest) => {
             const isSelected = fest.id === activeFestival.id;
@@ -171,7 +183,7 @@ export const FestivalBannerCard: React.FC<Props> = ({ riders, hubSignature }) =>
             onClick={() => setIsModalOpen(true)}
             className="px-2.5 py-1 rounded-lg text-amber-400 hover:text-amber-300 whitespace-nowrap transition font-bold text-xs shrink-0"
           >
-            + All {FESTIVALS.length} Pujas
+            + सभी {FESTIVALS.length} पर्व देखें
           </button>
         </div>
       </div>

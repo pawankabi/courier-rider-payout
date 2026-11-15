@@ -897,6 +897,7 @@ export const CodManagementModal: React.FC<Props> = ({
           message: smsText,
           type: 'advance',
           statementUrl,
+          actionId: `cod_adv_${deterministicAdvId}`,
         }).catch((e) => console.warn('Background shortage SMS notice:', e));
 
         showToast(`✅ ₹${safeShort} COD शॉर्टेज दिनांक ${formatDateDisplay(activeDate)} एडवांस टैब में जुड़ गया एवं SMS भेजा गया!`, 'success');
@@ -1054,6 +1055,7 @@ export const CodManagementModal: React.FC<Props> = ({
           message: smsText,
           type: 'general',
           statementUrl,
+          actionId: `cod_inc_${deterministicIncId}`,
         }).catch((e) => console.warn('Background surplus SMS notice:', e));
 
         showToast(`🎉 ₹${safeSurplus} अतिरिक्त राशि दिनांक ${formatDateDisplay(activeDate)} इंसेंटिव खाते में जुड़ गई एवं SMS भेजा गया!`, 'success');

@@ -15,6 +15,7 @@ export interface SmsDispatchPayload {
   type: 'advance' | 'salary' | 'general';
   statementUrl?: string;
   amount?: number;
+  actionId?: string;
 }
 
 export interface SmsDispatchResult {
@@ -38,7 +39,7 @@ export function generateStatementUrl(riderId: string): string {
 
 /**
  * Format Advance SMS text according to exact specification:
- * "नमस्ते {rider.name}, आपके खाते में ₹{amount} एडवांस जोड़ा गया है ({reason})। कुल बकाया एडवांस: ₹{totalAdvance}। खाता लेजर देखें: {ledgerUrl}"
+ * Note: formatINR(x) already includes the '₹' currency symbol.
  */
 export function formatAdvanceSmsText(params: {
   riderName: string;
@@ -58,21 +59,22 @@ export function formatAdvanceSmsText(params: {
   let standingStatus = '';
   if (typeof params.netBalance === 'number') {
     if (params.netBalance > 0.01) {
-      standingStatus = `आपका कुल बकाया एडवांस: ₹${formatINR(params.netBalance)} (कंपनी को लेना है)।`;
+      standingStatus = `आपका कुल बकाया एडवांस: ${formatINR(params.netBalance)} (कंपनी को लेना है)।`;
     } else if (params.netBalance < -0.01) {
-      standingStatus = `कंपनी की तरफ आपका शुद्ध पेआउट शेष: ₹${formatINR(Math.abs(params.netBalance))} (राइडर को देना है)।`;
+      standingStatus = `कंपनी की तरफ आपका शुद्ध पेआउट शेष: ${formatINR(Math.abs(params.netBalance))} (राइडर को देना है)।`;
     } else {
       standingStatus = 'आपका खाता पूर्णतः चुकता (₹0) है।';
     }
   } else if (typeof params.totalAdvance === 'number') {
-    standingStatus = `आपका कुल बकाया एडवांस: ₹${formatINR(params.totalAdvance)} (कंपनी को लेना है)।`;
+    standingStatus = `आपका कुल बकाया एडवांस: ${formatINR(params.totalAdvance)} (कंपनी को लेना है)।`;
   }
 
-  return `नमस्ते ${params.riderName}, आपके खाते में ${dateText}₹${formatINR(params.amount)} एडवांस दर्ज किया गया (${reasonText})। ${standingStatus} विस्तृत खाता लेजर देखें: ${safeStatementUrl}`;
+  return `नमस्ते ${params.riderName}, आपके खाते में ${dateText}${formatINR(params.amount)} एडवांस दर्ज किया गया (${reasonText})। ${standingStatus} विस्तृत खाता लेजर देखें: ${safeStatementUrl}`;
 }
 
 /**
  * Format Incentive & Bonus SMS text:
+ * Shows strictly the exact credited incentive amount (never misleading cumulative totals or ₹0 net-offset figures).
  * "नमस्ते {riderName}, आपके खाते में ₹{amount} इंसेंटिव/बोनस जोड़ा गया है ({reason})। विस्तृत खाता लेजर देखें: {statementUrl}"
  */
 export function formatIncentiveSmsText(params: {
@@ -85,9 +87,9 @@ export function formatIncentiveSmsText(params: {
   const reasonText = params.reason && params.reason.trim().length > 0
     ? params.reason.trim()
     : 'इंसेंटिव / बोनस';
-  const totalText = params.totalIncentive !== undefined ? `। कुल इंसेंटिव कमाई: ₹${params.totalIncentive}` : '';
+  const safeAmount = Math.round((Number(params.amount) || 0) * 100) / 100;
   const safeStatementUrl = ensureProductionStatementUrl(params.statementUrl);
-  return `नमस्ते ${params.riderName}, आपके खाते में ₹${params.amount} इंसेंटिव/बोनस जोड़ा गया है (${reasonText})${totalText}। विस्तृत खाता लेजर देखें: ${safeStatementUrl}`;
+  return `नमस्ते ${params.riderName}, आपके खाते में ₹${safeAmount} इंसेंटिव/बोनस जोड़ा गया है (${reasonText})। विस्तृत खाता लेजर देखें: ${safeStatementUrl}`;
 }
 
 /**
@@ -136,15 +138,21 @@ export function getNativeSmsUrl(phone: string, text: string): string {
   return `sms:${clean}?body=${encodeURIComponent(safeText)}`;
 }
 
+// Dispatcher-level deduplication maps to ensure 1 entry = strictly 1 SMS across all channels
+const recentDispatchedActionIds = new Map<string, number>();
+const recentDispatchedMessages = new Map<string, number>();
+const inFlightDispatches = new Set<string>();
+
 /**
  * Automated Background SMS Dispatch
- * Executes an automated API call to /api/send-sms (or custom webhook) without blocking the user.
+ * On Native Android APK: sends strictly via SIM card once and NEVER falls through to duplicate /api/send-sms.
+ * On Web: dispatches via /api/send-sms with identical actionId & content deduplication.
  */
 export async function dispatchAutomatedSms(
   payload: SmsDispatchPayload
 ): Promise<SmsDispatchResult> {
   const cleanPhone = sanitizeIndianPhone(payload.riderPhone);
-  const safeMessage = ensureProductionStatementUrl(payload.message);
+  const safeMessage = ensureProductionStatementUrl(payload.message).trim();
   const safeStatementUrl = payload.statementUrl ? ensureProductionStatementUrl(payload.statementUrl) : undefined;
   const waUrl = getWhatsAppUrl(cleanPhone, safeMessage);
   const smsUrl = getNativeSmsUrl(cleanPhone, safeMessage);
@@ -158,14 +166,76 @@ export async function dispatchAutomatedSms(
     };
   }
 
-  // 100% Background Native SIM dispatch on Android (Silent, Khatabook style)
-  if (isNativeAndroid()) {
-    sendNativeBackgroundSms(cleanPhone, safeMessage).catch((err) => {
-      console.warn('Native SIM background SMS notice:', err);
-    });
+  const now = Date.now();
+  const actionKey = payload.actionId ? `action:::${payload.actionId}` : '';
+  const msgKey = `${cleanPhone}:::${safeMessage}`;
+
+  if (actionKey ? inFlightDispatches.has(actionKey) : inFlightDispatches.has(msgKey)) {
+    return {
+      success: true,
+      message: `SMS पहले ही भेजा जा रहा है (+91${cleanPhone})`,
+      provider: 'Deduplication Guard',
+      whatsappUrl: waUrl,
+      smsUrl: smsUrl,
+    };
+  }
+
+  if (actionKey) {
+    const prevActTime = recentDispatchedActionIds.get(actionKey);
+    if (prevActTime && now - prevActTime < 120000) {
+      return {
+        success: true,
+        message: `इस एंट्री का SMS पहले ही भेजा जा चुका है (+91${cleanPhone})`,
+        provider: 'Deduplication Guard',
+        whatsappUrl: waUrl,
+        smsUrl: smsUrl,
+      };
+    }
+    inFlightDispatches.add(actionKey);
+    recentDispatchedActionIds.set(actionKey, now);
+  } else {
+    const prevMsgTime = recentDispatchedMessages.get(msgKey);
+    if (prevMsgTime && now - prevMsgTime < 3000) {
+      return {
+        success: true,
+        message: `SMS पहले ही भेजा जा चुका है (+91${cleanPhone})`,
+        provider: 'Deduplication Guard',
+        whatsappUrl: waUrl,
+        smsUrl: smsUrl,
+      };
+    }
+    inFlightDispatches.add(msgKey);
+    recentDispatchedMessages.set(msgKey, now);
+  }
+
+  if (recentDispatchedMessages.size > 60) {
+    for (const [k, t] of recentDispatchedMessages.entries()) {
+      if (now - t > 30000) recentDispatchedMessages.delete(k);
+    }
+  }
+  if (recentDispatchedActionIds.size > 60) {
+    for (const [k, t] of recentDispatchedActionIds.entries()) {
+      if (now - t > 180000) recentDispatchedActionIds.delete(k);
+    }
   }
 
   try {
+    // 100% Background Native SIM dispatch on Android (Single channel only - never also call /api/send-sms)
+    if (isNativeAndroid()) {
+      const nativeRes = await sendNativeBackgroundSms(cleanPhone, safeMessage, payload.actionId);
+      if (!nativeRes.success) {
+        if (actionKey) recentDispatchedActionIds.delete(actionKey);
+        else recentDispatchedMessages.delete(msgKey);
+      }
+      return {
+        success: nativeRes.success,
+        message: nativeRes.message || nativeRes.error || `सिम SMS (+91${cleanPhone})`,
+        provider: 'Native SIM',
+        whatsappUrl: waUrl,
+        smsUrl: smsUrl,
+      };
+    }
+
     const res = await fetch('/api/send-sms', {
       method: 'POST',
       headers: {
@@ -192,7 +262,6 @@ export async function dispatchAutomatedSms(
         smsUrl: smsUrl,
       };
     } else {
-      // Non-ok response
       return {
         success: true,
         message: `SMS ट्रिगर किया गया (+91${cleanPhone})`,
@@ -203,7 +272,6 @@ export async function dispatchAutomatedSms(
     }
   } catch (err) {
     console.warn('Background SMS fetch notice:', err);
-    // Graceful fallback so user is never blocked
     return {
       success: true,
       message: `SMS ट्रिगर तैयार (+91${cleanPhone})`,
@@ -211,5 +279,8 @@ export async function dispatchAutomatedSms(
       whatsappUrl: waUrl,
       smsUrl: smsUrl,
     };
+  } finally {
+    inFlightDispatches.delete(msgKey);
+    if (actionKey) inFlightDispatches.delete(actionKey);
   }
 }

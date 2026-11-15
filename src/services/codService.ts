@@ -3690,6 +3690,7 @@ export async function convertCodShortageToAdvance(
         type: 'advance',
         amount: shortageAmount,
         statementUrl: getRiderStatementUrl(entry.riderId),
+        actionId: `cod_short_${advanceId}`,
       }).catch((err) => console.warn('Shortage SMS dispatch notice:', err));
     }
 

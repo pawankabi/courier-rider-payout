@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   IndianRupee,
   TrendingDown,
@@ -140,8 +140,11 @@ export const AdvancesTab: React.FC<Props> = ({
     setTimeout(() => setToastMessage(null), 4500);
   };
 
+  const submittingRef = useRef(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     if (!selectedRiderId) {
       showToast('⚠️ कृपया राइडर चुनें!');
       return;
@@ -155,6 +158,7 @@ export const AdvancesTab: React.FC<Props> = ({
     const targetRider = riders.find((r) => r.id === selectedRiderId);
     if (!targetRider) return;
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     try {
       const advId = `adv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -184,9 +188,9 @@ export const AdvancesTab: React.FC<Props> = ({
         advances: updatedAdvances,
       };
 
-      await onSaveAdvance(updatedRider, newAdvEntry);
+      const savePromise = onSaveAdvance(updatedRider, newAdvEntry);
 
-      // Background SMS dispatch
+      // Immediate background SMS dispatch (parallel with Firestore sync)
       const statementUrl = getRiderStatementUrl(targetRider.id);
       const smsText = formatAdvanceSmsText({
         riderName: targetRider.name,
@@ -205,7 +209,10 @@ export const AdvancesTab: React.FC<Props> = ({
         message: smsText,
         type: 'advance',
         statementUrl,
+        actionId: `adv_${advId}`,
       }).catch((e) => console.warn('Advance background SMS notice:', e));
+
+      await savePromise;
 
       setAmount('');
       setReason('');
@@ -214,6 +221,7 @@ export const AdvancesTab: React.FC<Props> = ({
       console.error('Error adding advance:', err);
       showToast('एडवांस दर्ज करने में त्रुटि हुई।');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };

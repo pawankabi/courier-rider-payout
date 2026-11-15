@@ -2453,10 +2453,11 @@ function MainCourierApp() {
       return next;
     });
 
-    // 1. Write or update advance directly in Firestore root and workspace 'advances' collection
+    // Run Firestore persistence and public ledger sync in parallel so entry confirmation & SMS never stall
+    const firestoreTasks: Promise<unknown>[] = [];
     if (newAdvance) {
-      try {
-        await writeAdvanceEntryToFirestore(targetUid || '', {
+      firestoreTasks.push(
+        writeAdvanceEntryToFirestore(targetUid || '', {
           id: newAdvance.id,
           riderId: updatedRider.id,
           riderName: updatedRider.name,
@@ -2465,34 +2466,32 @@ function MainCourierApp() {
           date: newAdvance.date || getTodayDateString(),
           reason: newAdvance.reason || 'सामान्य एडवांस',
           runningBalance: newAdvance.runningBalance,
-        });
-      } catch (err) {
-        console.warn('Error saving advance document to Firestore:', err);
-      }
+        }).catch((err) => console.warn('Error saving advance document to Firestore:', err))
+      );
     }
 
     if (targetUid) {
-      try {
-        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
-      } catch (err) {
-        console.warn('Error saving rider advance to Firestore:', err);
-      }
+      firestoreTasks.push(
+        saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch((err) =>
+          console.warn('Error saving rider advance to Firestore:', err)
+        )
+      );
     } else {
       setSyncStatus('local');
     }
 
-    try {
-      await syncPublicRiderStatement(
+    firestoreTasks.push(
+      syncPublicRiderStatement(
         updatedRider,
         updatedRider.advances || [],
         settlements,
         entries,
         userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
         userRateConfig.hubSignature
-      );
-    } catch (err) {
-      console.warn('Error syncing public statement:', err);
-    }
+      ).catch((err) => console.warn('Error syncing public statement:', err))
+    );
+
+    await Promise.allSettled(firestoreTasks);
 
     const amt = newAdvance?.amount !== undefined ? `₹${newAdvance.amount} का ` : '';
     setToastMessage({
@@ -2618,39 +2617,7 @@ function MainCourierApp() {
       return next;
     });
 
-    try {
-      await writeIncentiveEntryToFirestore(targetUid || '', {
-        id: incId,
-        riderId: targetRider.id,
-        riderName: targetRider.name,
-        riderPhone: targetRider.phone,
-        amount: incentiveData.amount,
-        date: incentiveData.date,
-        reason: incentiveData.reason,
-        source: 'manual',
-        createdBy: currentOwnerEmail,
-      });
-
-      if (targetUid) {
-        await saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail);
-      }
-    } catch (err) {
-      console.warn('Error saving incentive to Firestore:', err);
-    }
-
-    try {
-      await syncPublicRiderStatement(
-        updatedRider,
-        updatedRider.advances || [],
-        settlements,
-        entries,
-        userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
-        userRateConfig.hubSignature
-      );
-    } catch (err) {
-      console.warn('Error syncing statement for incentive:', err);
-    }
-
+    // Dispatch background SMS immediately on entry (zero Firestore wait)
     if (!isEditing) {
       const statementUrl = getRiderStatementUrl(targetRider.id);
       const smsText = formatIncentiveSmsText({
@@ -2668,8 +2635,42 @@ function MainCourierApp() {
         message: smsText,
         type: 'general',
         statementUrl,
+        actionId: `inc_${incId}`,
       }).catch((e) => console.warn('Incentive background SMS notice:', e));
     }
+
+    // Run Firestore persistence & public statement sync concurrently in the background
+    const incentiveSyncTasks: Promise<unknown>[] = [
+      writeIncentiveEntryToFirestore(targetUid || '', {
+        id: incId,
+        riderId: targetRider.id,
+        riderName: targetRider.name,
+        riderPhone: targetRider.phone,
+        amount: incentiveData.amount,
+        date: incentiveData.date,
+        reason: incentiveData.reason,
+        source: 'manual',
+        createdBy: currentOwnerEmail,
+      }).catch((err) => console.warn('Error saving incentive to Firestore:', err)),
+      syncPublicRiderStatement(
+        updatedRider,
+        updatedRider.advances || [],
+        settlements,
+        entries,
+        userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
+        userRateConfig.hubSignature
+      ).catch((err) => console.warn('Error syncing statement for incentive:', err)),
+    ];
+
+    if (targetUid) {
+      incentiveSyncTasks.push(
+        saveRiderToFirestore(targetUid, updatedRider, currentOwnerEmail).catch((err) =>
+          console.warn('Error updating rider incentive in Firestore:', err)
+        )
+      );
+    }
+
+    await Promise.allSettled(incentiveSyncTasks);
 
     setToastMessage({
       text: isEditing

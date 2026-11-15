@@ -1,37 +1,45 @@
 import React, { useState, useMemo } from 'react';
-import { 
-  X, 
-  MessageCircle, 
-  Sparkles, 
-  Phone, 
-  Check, 
-  Copy, 
-  Send, 
-  Calendar, 
-  Users, 
-  Info, 
-  Edit3, 
+import {
+  X,
+  MessageCircle,
+  Sparkles,
+  Phone,
+  Check,
+  Copy,
+  Send,
+  Calendar,
+  Users,
+  Info,
+  Edit3,
   RotateCcw,
-  Bell,
   MessageSquare,
   Clock,
   Loader2,
-  AlertCircle
+  Search,
+  Filter,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { Rider } from '../types';
-import { 
-  FESTIVALS, 
-  Festival, 
-  getFestivalAlert, 
-  formatFestivalGreeting, 
+import {
+  FESTIVALS,
+  getFestivalAlert,
+  getFestivalDaysDiff,
+  getEffectiveFestivalMonthDay,
+  loadFestivalDateOverrides,
+  saveFestivalDateOverride,
+  clearFestivalDateOverride,
+  loadCustomFestivalTemplates,
+  saveCustomFestivalTemplates,
+  formatFestivalGreeting,
   buildWhatsAppGreetingUrl,
-  buildSmsGreetingUrl
+  buildSmsGreetingUrl,
 } from '../data/festivals';
 import {
   loadFestivalGreetingSentRecords,
   saveFestivalGreetingSentRecord,
   isFestivalGreetingSentWithin24Hours,
-  FestivalGreetingSentRecord
+  FestivalGreetingSentRecord,
 } from '../utils/storage';
 import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
 
@@ -43,6 +51,21 @@ export interface FestivalGreetingsModalProps {
   hubSignature?: string;
 }
 
+const HINDI_MONTHS = [
+  'जनवरी',
+  'फ़रवरी',
+  'मार्च',
+  'अप्रैल',
+  'मई',
+  'जून',
+  'जुलाई',
+  'अगस्त',
+  'सितंबर',
+  'अक्टूबर',
+  'नवंबर',
+  'दिसंबर',
+];
+
 export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   isOpen,
   onClose,
@@ -50,33 +73,52 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
   initialFestivalId,
   hubSignature,
 }) => {
-  // Compute smart calendar alert based on live system date
-  const smartAlert = useMemo(() => getFestivalAlert(), []);
+  const [dateOverrides, setDateOverrides] = useState(() => loadFestivalDateOverrides());
+  const smartAlert = useMemo(() => getFestivalAlert(new Date(), dateOverrides), [dateOverrides]);
 
-  // Active festival selection - auto-selects today's or tomorrow's or nearest upcoming festival
   const [selectedFestivalId, setSelectedFestivalId] = useState<string>(() => {
     if (initialFestivalId) return initialFestivalId;
     return smartAlert.festival.id;
   });
 
-  const [categoryFilter, setCategoryFilter] = useState<'all' | 'local_jharkhand' | 'national'>('all');
-  
-  // Custom message override state per festival
-  const [customTemplates, setCustomTemplates] = useState<Record<string, string>>({});
+  const [categoryFilter, setCategoryFilter] = useState<
+    'all' | 'upcoming_30' | 'local_jharkhand' | 'national'
+  >('all');
+  const [festivalSearch, setFestivalSearch] = useState('');
+
+  // Custom message override state per festival (persisted in localStorage)
+  const [customTemplates, setCustomTemplates] = useState<Record<string, string>>(() =>
+    loadCustomFestivalTemplates()
+  );
   const [isEditingTemplate, setIsEditingTemplate] = useState(false);
 
-  // 24-Hour persistent records: loaded from localStorage, auto-expiring after 24h
-  const [sentRecords, setSentRecords] = useState<FestivalGreetingSentRecord[]>(() => {
-    return loadFestivalGreetingSentRecords();
-  });
+  // Optional lunar/yearly date adjustment UI
+  const [isEditingDate, setIsEditingDate] = useState(false);
+  const [editMonth, setEditMonth] = useState<number>(1);
+  const [editDay, setEditDay] = useState<number>(1);
+
+  // Rider list filtering & targeted selection
+  const [riderSearch, setRiderSearch] = useState('');
+  const [showUnsentOnly, setShowUnsentOnly] = useState(false);
+  const [selectedRiderIds, setSelectedRiderIds] = useState<Set<string>>(() => new Set());
+
+  // 24-Hour persistent records
+  const [sentRecords, setSentRecords] = useState<FestivalGreetingSentRecord[]>(() =>
+    loadFestivalGreetingSentRecords()
+  );
   const [copiedRiderId, setCopiedRiderId] = useState<string | null>(null);
-  const [smsFeedbackToast, setSmsFeedbackToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [smsFeedbackToast, setSmsFeedbackToast] = useState<{
+    message: string;
+    type: 'success' | 'error';
+  } | null>(null);
   const [sendingRiderId, setSendingRiderId] = useState<string | null>(null);
   const [isBulkSending, setIsBulkSending] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentName: '' });
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [bulkTargetMode, setBulkTargetMode] = useState<'all_active' | 'unsent_only' | 'selected'>(
+    'all_active'
+  );
 
-  // Smooth Escape key handler to return smoothly without freeze
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -91,13 +133,89 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
     return FESTIVALS.find((f) => f.id === selectedFestivalId) || smartAlert.festival || FESTIVALS[0];
   }, [selectedFestivalId, smartAlert.festival]);
 
+  const effectiveDate = useMemo(
+    () => getEffectiveFestivalMonthDay(selectedFestival, dateOverrides),
+    [selectedFestival, dateOverrides]
+  );
+
+  const selectedFestivalDaysDiff = useMemo(
+    () => getFestivalDaysDiff(selectedFestival, new Date(), dateOverrides),
+    [selectedFestival, dateOverrides]
+  );
+
   const activeTemplate = customTemplates[selectedFestival.id] || selectedFestival.greetingTemplate;
 
-  // Filtered festivals for selector dropdown
+  const upcoming30Count = useMemo(() => {
+    const now = new Date();
+    return FESTIVALS.filter((f) => getFestivalDaysDiff(f, now, dateOverrides) <= 30).length;
+  }, [dateOverrides]);
+
+  // Filtered & sorted festivals for selector dropdown
   const filteredFestivals = useMemo(() => {
-    if (categoryFilter === 'all') return FESTIVALS;
-    return FESTIVALS.filter((f) => f.category === categoryFilter);
-  }, [categoryFilter]);
+    const now = new Date();
+    const q = festivalSearch.trim().toLowerCase();
+
+    let list = FESTIVALS.filter((f) => {
+      if (categoryFilter === 'local_jharkhand' && f.category !== 'local_jharkhand') return false;
+      if (categoryFilter === 'national' && f.category !== 'national') return false;
+      if (categoryFilter === 'upcoming_30' && getFestivalDaysDiff(f, now, dateOverrides) > 30) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        f.nameHindi.toLowerCase().includes(q) ||
+        f.name.toLowerCase().includes(q) ||
+        f.region.toLowerCase().includes(q) ||
+        f.dateLabel.toLowerCase().includes(q) ||
+        f.description.toLowerCase().includes(q) ||
+        (f.communityTag || '').toLowerCase().includes(q)
+      );
+    });
+
+    if (categoryFilter === 'upcoming_30') {
+      list = [...list].sort(
+        (a, b) =>
+          getFestivalDaysDiff(a, now, dateOverrides) - getFestivalDaysDiff(b, now, dateOverrides)
+      );
+    }
+    return list;
+  }, [categoryFilter, festivalSearch, dateOverrides]);
+
+  // Strictly filter out all Inactive riders
+  const activeRiders = useMemo(() => riders.filter((r) => r.active !== false), [riders]);
+  const inactiveRidersCount = riders.length - activeRiders.length;
+
+  const unsentActiveRiders = useMemo(
+    () =>
+      activeRiders.filter(
+        (r) => !isFestivalGreetingSentWithin24Hours(sentRecords, r.id, selectedFestival.id).isSent
+      ),
+    [activeRiders, sentRecords, selectedFestival.id]
+  );
+
+  const visibleActiveRiders = useMemo(() => {
+    const q = riderSearch.trim().toLowerCase();
+    return activeRiders.filter((r) => {
+      if (
+        showUnsentOnly &&
+        isFestivalGreetingSentWithin24Hours(sentRecords, r.id, selectedFestival.id).isSent
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      return r.name.toLowerCase().includes(q) || (r.phone || '').includes(q);
+    });
+  }, [activeRiders, riderSearch, showUnsentOnly, sentRecords, selectedFestival.id]);
+
+  const targetBulkRiders = useMemo(() => {
+    if (bulkTargetMode === 'selected' && selectedRiderIds.size > 0) {
+      return activeRiders.filter((r) => selectedRiderIds.has(r.id));
+    }
+    if (bulkTargetMode === 'unsent_only') {
+      return unsentActiveRiders;
+    }
+    return activeRiders;
+  }, [bulkTargetMode, selectedRiderIds, activeRiders, unsentActiveRiders]);
 
   if (!isOpen) return null;
 
@@ -105,16 +223,53 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
     setCustomTemplates((prev) => {
       const next = { ...prev };
       delete next[selectedFestival.id];
+      saveCustomFestivalTemplates(next);
       return next;
     });
     setIsEditingTemplate(false);
   };
 
   const handleTemplateChange = (val: string) => {
-    setCustomTemplates((prev) => ({
-      ...prev,
-      [selectedFestival.id]: val,
-    }));
+    setCustomTemplates((prev) => {
+      const next = {
+        ...prev,
+        [selectedFestival.id]: val,
+      };
+      saveCustomFestivalTemplates(next);
+      return next;
+    });
+  };
+
+  const handleOpenDateEditor = () => {
+    setEditMonth(effectiveDate.month);
+    setEditDay(effectiveDate.day);
+    setIsEditingDate((prev) => !prev);
+  };
+
+  const handleSaveDateOverride = () => {
+    const updated = saveFestivalDateOverride(selectedFestival.id, editMonth, editDay);
+    setDateOverrides(updated);
+    setIsEditingDate(false);
+    setSmsFeedbackToast({
+      message: `📅 "${selectedFestival.nameHindi}" की तिथि ${editDay} ${HINDI_MONTHS[editMonth - 1]} पर अपडेट की गई।`,
+      type: 'success',
+    });
+    setTimeout(() => setSmsFeedbackToast(null), 3500);
+  };
+
+  const handleResetDateOverride = () => {
+    const updated = clearFestivalDateOverride(selectedFestival.id);
+    setDateOverrides(updated);
+    setIsEditingDate(false);
+  };
+
+  const handleToggleRiderSelect = (riderId: string) => {
+    setSelectedRiderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(riderId)) next.delete(riderId);
+      else next.add(riderId);
+      return next;
+    });
   };
 
   const handleMarkSent = (riderId: string) => {
@@ -150,7 +305,11 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
     setSendingRiderId(rider.id);
     try {
       if (isNativeAndroid()) {
-        const res = await sendNativeBackgroundSms(cleanPhone, personalizedMessage);
+        const res = await sendNativeBackgroundSms(
+          cleanPhone,
+          personalizedMessage,
+          `fest_${selectedFestival.id}_${rider.id}`
+        );
         if (res.success) {
           handleMarkSent(rider.id);
           setSmsFeedbackToast({
@@ -164,7 +323,6 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
           });
         }
       } else {
-        // Desktop / web browser fallback
         const url = buildSmsGreetingUrl(rider.phone, personalizedMessage);
         handleMarkSent(rider.id);
         try {
@@ -186,20 +344,6 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
     }
   };
 
-  const handleSendSms = (rider: Rider) => {
-    if (rider.active === false) {
-      setSmsFeedbackToast({
-        message: `⚠️ Rider "${rider.name}" is Inactive and excluded from festival greetings.`,
-        type: 'error',
-      });
-      return;
-    }
-    const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
-    const url = buildSmsGreetingUrl(rider.phone, personalizedMessage);
-    handleMarkSent(rider.id);
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
-
   const handleCopyMessage = (rider: Rider) => {
     if (rider.active === false) return;
     const personalizedMessage = formatFestivalGreeting(activeTemplate, rider.name, hubSignature);
@@ -208,37 +352,30 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
     setTimeout(() => setCopiedRiderId(null), 2500);
   };
 
-  // Strictly filter out all Inactive riders - Inactive riders must NEVER receive festival greetings SMS
-  const activeRiders = useMemo(() => {
-    return riders.filter((r) => r.active !== false);
-  }, [riders]);
+  const nextUnsentRider = unsentActiveRiders[0];
+  const sentCount = activeRiders.length - unsentActiveRiders.length;
 
-  const inactiveRidersCount = riders.length - activeRiders.length;
+  const openBulkConfirm = (mode: 'all_active' | 'unsent_only' | 'selected') => {
+    setBulkTargetMode(mode);
+    setShowConfirmModal(true);
+  };
 
-  // Find next unsent rider among active riders only
-  const nextUnsentRider = activeRiders.find(
-    (r) => !isFestivalGreetingSentWithin24Hours(sentRecords, r.id, selectedFestival.id).isSent
-  );
-  const sentCount = activeRiders.filter(
-    (r) => isFestivalGreetingSentWithin24Hours(sentRecords, r.id, selectedFestival.id).isSent
-  ).length;
-
-  // 1-Click Send Festival SMS to All Active Riders
   const handleBulkSendFestivalSms = async () => {
-    if (activeRiders.length === 0) return;
+    const recipients = targetBulkRiders;
+    if (recipients.length === 0) return;
 
     setShowConfirmModal(false);
     setIsBulkSending(true);
-    setBulkProgress({ current: 0, total: activeRiders.length, currentName: '' });
+    setBulkProgress({ current: 0, total: recipients.length, currentName: '' });
 
     let successCount = 0;
     let failCount = 0;
 
-    for (let i = 0; i < activeRiders.length; i++) {
-      const rider = activeRiders[i];
+    for (let i = 0; i < recipients.length; i++) {
+      const rider = recipients[i];
       setBulkProgress({
         current: i + 1,
-        total: activeRiders.length,
+        total: recipients.length,
         currentName: rider.name,
       });
 
@@ -247,7 +384,11 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
 
       try {
         if (isNativeAndroid()) {
-          const res = await sendNativeBackgroundSms(cleanPhone, personalizedMessage);
+          const res = await sendNativeBackgroundSms(
+            cleanPhone,
+            personalizedMessage,
+            `fest_${selectedFestival.id}_${rider.id}`
+          );
           if (res.success) {
             handleMarkSent(rider.id);
             successCount++;
@@ -255,7 +396,6 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
             failCount++;
           }
         } else {
-          // Web fallback
           const url = buildSmsGreetingUrl(rider.phone, personalizedMessage);
           handleMarkSent(rider.id);
           try {
@@ -263,27 +403,39 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
           } catch {}
           successCount++;
         }
-      } catch (err) {
+      } catch {
         failCount++;
       }
 
-      // 350ms modem throttle for carrier queuing
-      if (isNativeAndroid() && i < activeRiders.length - 1) {
+      if (isNativeAndroid() && i < recipients.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 350));
       }
     }
 
     setIsBulkSending(false);
+    if (bulkTargetMode === 'selected') {
+      setSelectedRiderIds(new Set());
+    }
     setSmsFeedbackToast({
-      message: `✅ Dispatched festival greetings to ${successCount} active riders!${failCount > 0 ? ` (${failCount} failed)` : ''}`,
+      message: `✅ ${successCount} सक्रिय राइडर्स को त्योहार शुभकामनाएं भेज दी गईं!${
+        failCount > 0 ? ` (${failCount} असफल)` : ''
+      }`,
       type: 'success',
     });
     setTimeout(() => setSmsFeedbackToast(null), 5000);
   };
 
+  const formatCountdownText = (days: number) => {
+    if (days === 0) return 'आज है!';
+    if (days === 1) return 'कल है!';
+    return `${days} दिन बाद`;
+  };
+
+  const samplePreviewName = activeRiders[0]?.name || 'साथी राइडर';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm overflow-y-auto animate-in fade-in duration-150">
-      <div 
+      <div
         className="bg-slate-900 border border-amber-500/30 w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
@@ -299,11 +451,18 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                   {selectedFestival.badge}
                 </span>
                 <span className="text-[11px] text-amber-100 font-semibold">
-                  {selectedFestival.dateLabel}
+                  {effectiveDate.isOverridden
+                    ? `${effectiveDate.day} ${HINDI_MONTHS[effectiveDate.month - 1]} (कस्टम तिथि)`
+                    : selectedFestival.dateLabel}
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 text-white font-bold">
-                  {selectedFestival.region}
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-black/25 text-amber-100 font-bold">
+                  ⏳ {formatCountdownText(selectedFestivalDaysDiff)}
                 </span>
+                {selectedFestival.communityTag && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 text-white font-bold">
+                    {selectedFestival.communityTag}
+                  </span>
+                )}
               </div>
               <h2 className="text-lg sm:text-xl font-black mt-1 tracking-tight flex items-center gap-2">
                 <span>{selectedFestival.nameHindi}</span>
@@ -331,7 +490,11 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
               <span className="text-base">
                 {smsFeedbackToast.type === 'success' ? '📱' : '⚠️'}
               </span>
-              <span className={`text-xs font-bold ${smsFeedbackToast.type === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}>
+              <span
+                className={`text-xs font-bold ${
+                  smsFeedbackToast.type === 'success' ? 'text-emerald-300' : 'text-rose-300'
+                }`}
+              >
                 {smsFeedbackToast.message}
               </span>
             </div>
@@ -347,8 +510,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
 
         {/* Modal Scrollable Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
-          
-          {/* Smart Auto-Detection Alert Banner (Today / Tomorrow / Upcoming) */}
+          {/* Smart Auto-Detection Alert Banner */}
           {smartAlert.status === 'today' && (
             <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-950/70 via-slate-900 to-emerald-900/60 border border-emerald-500/50 shadow-lg flex items-center justify-between gap-3 animate-pulse">
               <div className="flex items-center gap-2.5">
@@ -369,7 +531,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                 onClick={() => setSelectedFestivalId(smartAlert.festival.id)}
                 className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shrink-0 transition"
               >
-                चुनें (Select)
+                चुनें
               </button>
             </div>
           )}
@@ -394,7 +556,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                 onClick={() => setSelectedFestivalId(smartAlert.festival.id)}
                 className="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 text-slate-950 font-black text-xs rounded-lg shrink-0 transition"
               >
-                चुनें (Select)
+                चुनें
               </button>
             </div>
           )}
@@ -409,9 +571,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                   <div className="text-xs font-bold text-slate-200">
                     {smartAlert.alertHeadline}
                   </div>
-                  <div className="text-[11px] text-slate-400">
-                    {smartAlert.alertDescription}
-                  </div>
+                  <div className="text-[11px] text-slate-400">{smartAlert.alertDescription}</div>
                 </div>
               </div>
               <button
@@ -419,21 +579,21 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                 onClick={() => setSelectedFestivalId(smartAlert.festival.id)}
                 className="px-2.5 py-1 bg-slate-800 hover:bg-slate-750 text-amber-300 border border-slate-700 font-semibold text-xs rounded-lg shrink-0 transition"
               >
-                Auto-Select
+                चुनें
               </button>
             </div>
           )}
 
-          {/* Festival Selection Bar with Category Filters & Search */}
+          {/* Festival Selection Bar with Search, Category Tabs & Date Override */}
           <div className="bg-slate-850 p-3.5 rounded-xl border border-slate-750 space-y-2.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
                 <Calendar className="w-4 h-4 text-amber-400" />
-                <span>Select Festival / पर्व चुनें ({filteredFestivals.length} Festivals):</span>
+                <span>पर्व चुनें ({filteredFestivals.length} प्रमुख पर्व):</span>
               </label>
 
-              {/* Category Filter Pills */}
-              <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-750 text-[11px] font-semibold">
+              {/* Category Filter Tabs */}
+              <div className="flex flex-wrap items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-750 text-[11px] font-semibold">
                 <button
                   type="button"
                   onClick={() => setCategoryFilter('all')}
@@ -443,7 +603,18 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  All ({FESTIVALS.length})
+                  सभी ({FESTIVALS.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('upcoming_30')}
+                  className={`px-2 py-0.5 rounded-md transition ${
+                    categoryFilter === 'upcoming_30'
+                      ? 'bg-amber-500 text-slate-950 font-bold'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  🗓️ आगामी 30 दिन ({upcoming30Count})
                 </button>
                 <button
                   type="button"
@@ -454,7 +625,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  🌾 सरायकेला / कोल्हान ({FESTIVALS.filter(f => f.category === 'local_jharkhand').length})
+                  🌾 झारखंड लोक ({FESTIVALS.filter((f) => f.category === 'local_jharkhand').length})
                 </button>
                 <button
                   type="button"
@@ -465,12 +636,98 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  🇮🇳 National ({FESTIVALS.filter(f => f.category === 'national').length})
+                  🕉️🌙✝️ सर्वधर्म व राष्ट्रीय ({FESTIVALS.filter((f) => f.category === 'national').length})
                 </button>
               </div>
             </div>
 
-            {/* Dropdown Select with Smart Indicator */}
+            {/* Search Input + Date Editor Trigger */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={festivalSearch}
+                  onChange={(e) => setFestivalSearch(e.target.value)}
+                  placeholder="पर्व, समुदाय या धर्म से खोजें (जैसे: करमा, परशुराम, माघे, ईद, छठ)..."
+                  className="w-full pl-8 pr-8 py-2 rounded-xl bg-slate-900 border border-slate-750 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-500"
+                />
+                {festivalSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setFestivalSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenDateEditor}
+                className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition shrink-0 ${
+                  effectiveDate.isOverridden
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                    : 'bg-slate-900 text-slate-300 border-slate-750 hover:text-white'
+                }`}
+                title="यदि इस वर्ष हिंदी/चांद्र तिथि बदली हो तो तारीख सेट करें"
+              >
+                <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                <span>{effectiveDate.isOverridden ? 'कस्टम तिथि सक्रिय' : 'तिथि बदलें'}</span>
+              </button>
+            </div>
+
+            {/* Inline Yearly Lunar Date Override Panel */}
+            {isEditingDate && (
+              <div className="p-3 rounded-xl bg-slate-900/95 border border-amber-500/35 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-amber-300 font-semibold">इस वर्ष की तिथि सेट करें:</span>
+                  <select
+                    value={editDay}
+                    onChange={(e) => setEditDay(Number(e.target.value))}
+                    className="px-2 py-1 rounded-lg bg-slate-850 border border-slate-700 text-white"
+                  >
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={editMonth}
+                    onChange={(e) => setEditMonth(Number(e.target.value))}
+                    className="px-2 py-1 rounded-lg bg-slate-850 border border-slate-700 text-white"
+                  >
+                    {HINDI_MONTHS.map((mName, idx) => (
+                      <option key={mName} value={idx + 1}>
+                        {mName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {effectiveDate.isOverridden && (
+                    <button
+                      type="button"
+                      onClick={handleResetDateOverride}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 font-semibold"
+                    >
+                      डिफ़ॉल्ट करें
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveDateOverride}
+                    className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black"
+                  >
+                    सेव करें
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Dropdown Select with Smart Countdown Indicator */}
             <div className="relative">
               <select
                 id="festival-dropdown-select"
@@ -478,14 +735,24 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                 onChange={(e) => setSelectedFestivalId(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-750 text-xs sm:text-sm font-semibold text-amber-200 focus:outline-none focus:border-amber-500 appearance-none"
               >
-                {filteredFestivals.map((f) => {
-                  const isCurrentAlert = f.id === smartAlert.festival.id;
-                  return (
-                    <option key={f.id} value={f.id}>
-                      {isCurrentAlert ? '⭐ ' : ''}{f.nameHindi} — {f.dateLabel} [{f.region}]
-                    </option>
-                  );
-                })}
+                {filteredFestivals.length === 0 ? (
+                  <option value={selectedFestival.id}>
+                    कोई मेल खाता पर्व नहीं मिला — फिल्टर साफ़ करें
+                  </option>
+                ) : (
+                  filteredFestivals.map((f) => {
+                    const isCurrentAlert = f.id === smartAlert.festival.id;
+                    const diff = getFestivalDaysDiff(f, new Date(), dateOverrides);
+                    const tagInfo = f.communityTag ? ` • ${f.communityTag}` : '';
+                    return (
+                      <option key={f.id} value={f.id}>
+                        {isCurrentAlert ? '⭐ ' : ''}
+                        {f.nameHindi} — {f.dateLabel} ({formatCountdownText(diff)}
+                        {tagInfo})
+                      </option>
+                    );
+                  })
+                )}
               </select>
               <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-amber-400 text-xs">
                 ▼
@@ -493,18 +760,25 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
             </div>
           </div>
 
-          {/* Cultural Significance & Why It Is Celebrated in Seraikella / India */}
+          {/* Cultural Significance & Traditional Blessing */}
           <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/25 space-y-1.5">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-amber-400 shrink-0" />
-              <h4 className="text-xs font-bold text-amber-300">
-                सरायकेला एवं भारत में यह पर्व क्यों मनाया जाता है? (Cultural Significance):
-              </h4>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Info className="w-4 h-4 text-amber-400 shrink-0" />
+                <h4 className="text-xs font-bold text-amber-300">
+                  झारखंड एवं भारत में यह पर्व क्यों मनाया जाता है? (सांस्कृतिक महत्व):
+                </h4>
+              </div>
+              {selectedFestival.communityTag && (
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-200 border border-amber-500/25 font-semibold">
+                  {selectedFestival.communityTag}
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-300 leading-relaxed font-sans">
               {selectedFestival.culturalSignificance}
             </p>
-            <div className="pt-1.5 flex items-center gap-2 text-[11px] text-amber-200/90 font-medium">
+            <div className="pt-1.5 flex items-center gap-2 text-[11px] text-amber-200/90 font-medium flex-wrap">
               <span className="font-bold text-amber-400">पारंपरिक आशीष (Blessing):</span>
               <span className="italic bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
                 "{selectedFestival.traditionalBlessing}"
@@ -512,13 +786,13 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
             </div>
           </div>
 
-          {/* Hindi Greeting Message Template Preview & Edit Box */}
+          {/* Hindi Greeting Message Template Preview & Persistent Edit Box */}
           <div className="bg-slate-850 p-4 rounded-xl border border-amber-500/20 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-amber-400" />
                 <span className="text-xs font-bold text-white">
-                  सम्मानजनक शुभकामना संदेश (Culturally Authentic Hindi Greeting):
+                  सम्मानजनक शुभकामना संदेश (Hindi Greeting Preview):
                 </span>
               </div>
 
@@ -528,7 +802,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                     type="button"
                     onClick={handleResetTemplate}
                     className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-white transition"
-                    title="Reset to original greeting"
+                    title="मूल संदेश वापस लाएं"
                   >
                     <RotateCcw className="w-3 h-3" />
                     <span>Reset</span>
@@ -540,7 +814,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700 text-[11px] font-semibold text-amber-300 transition"
                 >
                   <Edit3 className="w-3 h-3" />
-                  <span>{isEditingTemplate ? 'Done' : 'Edit Text'}</span>
+                  <span>{isEditingTemplate ? 'सेव व प्रीव्यू' : 'संदेश बदलें'}</span>
                 </button>
               </div>
             </div>
@@ -555,18 +829,18 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                   placeholder="Use {riderName} as placeholder..."
                 />
                 <p className="text-[11px] text-slate-400 mt-1">
-                  💡 Note: Use <code className="text-amber-300">{"{riderName}"}</code> where the delivery boy's name should appear automatically.
+                  💡 <code className="text-amber-300">{'{riderName}'}</code> की जगह प्रत्येक राइडर का नाम अपने-आप जुड़ जाएगा (बदलाव स्वतः सुरक्षित रहेगा)।
                 </p>
               </div>
             ) : (
               <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 font-sans">
                 <div className="text-xs text-slate-200 leading-relaxed whitespace-pre-line">
-                  {formatFestivalGreeting(activeTemplate, 'राजू प्रमाणिक', hubSignature)}
+                  {formatFestivalGreeting(activeTemplate, samplePreviewName, hubSignature)}
                 </div>
                 {hubSignature && (
                   <div className="pt-1.5 border-t border-slate-800 text-[11px] text-amber-300/90 flex items-center gap-1.5">
                     <Sparkles className="w-3 h-3 text-amber-400" />
-                    <span>हब हस्ताक्षर (Hub Signature):</span>
+                    <span>हब हस्ताक्षर:</span>
                     <span className="font-semibold text-white bg-slate-800 px-2 py-0.5 rounded border border-slate-750">
                       {hubSignature}
                     </span>
@@ -576,38 +850,71 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
             )}
           </div>
 
-          {/* 1-Click Send Festival SMS to All Active Riders Card */}
+          {/* 1-Click Bulk Send Card (All Active / Unsent Only / Selected) */}
           <div className="p-4 rounded-xl bg-gradient-to-r from-amber-600/25 via-orange-600/20 to-slate-900/90 border border-amber-500/40 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Sparkles className="w-4 h-4 text-amber-400" />
                 <h4 className="text-sm font-bold text-white">
-                  1-Click Send Festival SMS to All Active Riders
+                  1-Click त्योहार SMS डिस्पैच
                 </h4>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-extrabold border border-emerald-500/30">
                   {activeRiders.length} Active
                 </span>
+                {unsentActiveRiders.length < activeRiders.length && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">
+                    {unsentActiveRiders.length} बाकी
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-300 mt-0.5">
-                Automatically dispatch background SIM SMS greetings to all active riders in sequence without manual selection.
+                {isNativeAndroid()
+                  ? 'सिम से सीधे बैकग्राउंड SMS भेजें। चाहें तो केवल बाकी बचे या चुने हुए राइडर्स को ही भेजें।'
+                  : 'सक्रिय राइडर्स को तुरंत त्योहार शुभकामना संदेश भेजें।'}
                 {inactiveRidersCount > 0 && (
                   <span className="text-amber-400 font-semibold ml-1">
-                    ({inactiveRidersCount} inactive riders excluded)
+                    ({inactiveRidersCount} Inactive राइडर अलग रखे गए हैं)
                   </span>
                 )}
               </p>
             </div>
 
-            <button
-              id="bulk-festival-sms-send-all-btn"
-              type="button"
-              onClick={() => setShowConfirmModal(true)}
-              disabled={activeRiders.length === 0 || isBulkSending}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs shadow-md shadow-amber-500/25 active:scale-95 transition cursor-pointer disabled:opacity-50 shrink-0"
-            >
-              <Send className="w-4 h-4 text-slate-950" />
-              <span>Send Festival SMS to All Active Riders ({activeRiders.length})</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {selectedRiderIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => openBulkConfirm('selected')}
+                  disabled={isBulkSending}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-md active:scale-95 transition cursor-pointer disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>चुने हुए को भेजें ({selectedRiderIds.size})</span>
+                </button>
+              )}
+
+              {unsentActiveRiders.length > 0 && unsentActiveRiders.length < activeRiders.length && (
+                <button
+                  type="button"
+                  onClick={() => openBulkConfirm('unsent_only')}
+                  disabled={isBulkSending}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md active:scale-95 transition cursor-pointer disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>केवल बाकी ({unsentActiveRiders.length}) को भेजें</span>
+                </button>
+              )}
+
+              <button
+                id="bulk-festival-sms-send-all-btn"
+                type="button"
+                onClick={() => openBulkConfirm('all_active')}
+                disabled={activeRiders.length === 0 || isBulkSending}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs shadow-md shadow-amber-500/25 active:scale-95 transition cursor-pointer disabled:opacity-50"
+              >
+                <Send className="w-4 h-4 text-slate-950" />
+                <span>सभी Active को SMS ({activeRiders.length})</span>
+              </button>
+            </div>
           </div>
 
           {/* Live Bulk Dispatch Progress Bar */}
@@ -616,7 +923,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-amber-300 flex items-center gap-1.5">
                   <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                  <span>Dispatching Festival SMS: {bulkProgress.currentName}...</span>
+                  <span>SMS भेजा जा रहा है: {bulkProgress.currentName}...</span>
                 </span>
                 <span className="font-bold text-amber-200">
                   {bulkProgress.current} / {bulkProgress.total}
@@ -631,30 +938,30 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
             </div>
           )}
 
-          {/* Broadcast / Send to All Active Riders Queue */}
+          {/* Active Riders List with Search, Unsent Filter & Multi-select */}
           <div className="space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <Users className="w-4 h-4 text-emerald-400" />
-                  <span>Active Delivery Fleet ({activeRiders.length} Active Delivery Boys)</span>
+                  <span>सक्रिय डिलीवरी राइडर्स ({activeRiders.length})</span>
                 </h3>
                 <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
                   <Clock className="w-3 h-3 text-slate-500" />
-                  <span>Progress: {sentCount} of {activeRiders.length} sent today</span>
-                  {inactiveRidersCount > 0 && (
-                    <span className="text-amber-400 font-medium">({inactiveRidersCount} inactive excluded)</span>
-                  )}
+                  <span>
+                    प्रगति: {sentCount} / {activeRiders.length} को भेजा गया (24 घंटे रिकॉर्ड)
+                  </span>
                 </p>
               </div>
 
               {/* Progress bar and Quick Next Action */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <div className="w-24 bg-slate-800 h-2 rounded-full overflow-hidden border border-slate-700">
                   <div
                     className="bg-emerald-500 h-full transition-all duration-300"
                     style={{
-                      width: activeRiders.length > 0 ? `${(sentCount / activeRiders.length) * 100}%` : '0%',
+                      width:
+                        activeRiders.length > 0 ? `${(sentCount / activeRiders.length) * 100}%` : '0%',
                     }}
                   />
                 </div>
@@ -685,19 +992,81 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
               </div>
             </div>
 
-            {/* Active Rider List strictly excluding Inactive riders */}
+            {/* Compact Rider Search + Unsent Only + Select All Bar */}
+            {activeRiders.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[180px]">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={riderSearch}
+                    onChange={(e) => setRiderSearch(e.target.value)}
+                    placeholder="राइडर का नाम या नंबर खोजें..."
+                    className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-slate-850 border border-slate-750 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowUnsentOnly((prev) => !prev)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition ${
+                    showUnsentOnly
+                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/40'
+                      : 'bg-slate-850 text-slate-300 border-slate-750 hover:text-white'
+                  }`}
+                >
+                  <Filter className="w-3.5 h-3.5" />
+                  <span>केवल बाकी ({unsentActiveRiders.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedRiderIds.size > 0) {
+                      setSelectedRiderIds(new Set());
+                    } else {
+                      setSelectedRiderIds(new Set(visibleActiveRiders.map((r) => r.id)));
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-850 hover:bg-slate-800 border border-slate-750 text-xs font-semibold text-amber-300 transition"
+                >
+                  {selectedRiderIds.size > 0 ? (
+                    <>
+                      <CheckSquare className="w-3.5 h-3.5" />
+                      <span>चयन हटाएं ({selectedRiderIds.size})</span>
+                    </>
+                  ) : (
+                    <>
+                      <Square className="w-3.5 h-3.5" />
+                      <span>सभी चुनें</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Active Rider List */}
             <div className="divide-y divide-slate-800/80 rounded-xl bg-slate-850 border border-slate-750 max-h-64 overflow-y-auto">
-              {activeRiders.length === 0 ? (
+              {visibleActiveRiders.length === 0 ? (
                 <div className="p-6 text-center text-xs text-slate-400 space-y-1">
-                  <p>No active delivery riders available.</p>
-                  {inactiveRidersCount > 0 && (
-                    <p className="text-amber-400">All {inactiveRidersCount} riders are marked as Inactive. Activate riders to send festival greetings.</p>
+                  <p>
+                    {activeRiders.length === 0
+                      ? 'कोई सक्रिय राइडर उपलब्ध नहीं है।'
+                      : 'इस फ़िल्टर के अनुसार कोई राइडर नहीं मिला।'}
+                  </p>
+                  {inactiveRidersCount > 0 && activeRiders.length === 0 && (
+                    <p className="text-amber-400">
+                      सभी {inactiveRidersCount} राइडर्स Inactive हैं।
+                    </p>
                   )}
                 </div>
               ) : (
-                activeRiders.map((rider, idx) => {
-                  const sentStatus = isFestivalGreetingSentWithin24Hours(sentRecords, rider.id, selectedFestival.id);
+                visibleActiveRiders.map((rider, idx) => {
+                  const sentStatus = isFestivalGreetingSentWithin24Hours(
+                    sentRecords,
+                    rider.id,
+                    selectedFestival.id
+                  );
                   const isCopied = copiedRiderId === rider.id;
+                  const isSelected = selectedRiderIds.has(rider.id);
 
                   return (
                     <div
@@ -705,6 +1074,18 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                       className="p-3 flex items-center justify-between gap-2 hover:bg-slate-800/40 transition"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRiderSelect(rider.id)}
+                          className="text-slate-400 hover:text-amber-300 shrink-0"
+                          title="चुनें"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-amber-400" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </button>
                         <span className="w-6 h-6 rounded-lg bg-slate-800 text-slate-400 text-[11px] font-mono font-bold flex items-center justify-center shrink-0">
                           #{idx + 1}
                         </span>
@@ -714,12 +1095,12 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                               {rider.name}
                             </span>
                             {sentStatus.isSent && (
-                              <span 
+                              <span
                                 id={`sent-badge-${rider.id}`}
                                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                                title={`Sent in last 24 hours (~${sentStatus.hoursRemaining}h remaining before auto-reset)`}
+                                title={`पिछले 24 घंटे में भेजा गया (~${sentStatus.hoursRemaining}h बाकी)`}
                               >
-                                <Check className="w-2.5 h-2.5" /> ✅ Sent
+                                <Check className="w-2.5 h-2.5" /> भेजा गया
                               </span>
                             )}
                           </div>
@@ -739,12 +1120,11 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
 
                       {/* Action buttons: Copy, Call, SIM SMS, WhatsApp */}
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {/* Copy button */}
                         <button
                           type="button"
                           onClick={() => handleCopyMessage(rider)}
                           className="p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded-lg transition"
-                          title="Copy personalized greeting message"
+                          title="संदेश कॉपी करें"
                         >
                           {isCopied ? (
                             <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -753,16 +1133,14 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                           )}
                         </button>
 
-                        {/* Direct Call button */}
                         <a
                           href={`tel:${rider.phone}`}
                           className="p-1.5 text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-lg transition"
-                          title={`Call ${rider.name} on phone`}
+                          title={`Call ${rider.name}`}
                         >
                           <Phone className="w-3.5 h-3.5" />
                         </a>
 
-                        {/* Dedicated SIM SMS button */}
                         <button
                           type="button"
                           id={`send-festival-sim-sms-${rider.id}`}
@@ -775,13 +1153,12 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                               ? 'bg-slate-800 text-amber-300 border border-amber-500/30 hover:bg-amber-500/20'
                               : 'bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white border border-amber-400/40 shadow-sm shadow-amber-600/25'
                           }`}
-                          title={`Send Native Background SIM SMS greeting to ${rider.name}`}
+                          title={`SIM SMS भेजें (${rider.name})`}
                         >
                           <MessageSquare className="w-3.5 h-3.5 text-amber-200" />
                           <span>{sendingRiderId === rider.id ? 'Sending...' : 'SIM SMS'}</span>
                         </button>
 
-                        {/* Send on WhatsApp button */}
                         <button
                           type="button"
                           id={`send-festival-wa-${rider.id}`}
@@ -792,7 +1169,7 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                               ? 'bg-slate-800 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20'
                               : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/25'
                           }`}
-                          title={sentStatus.isSent ? `Sent in last 24h (~${sentStatus.hoursRemaining}h left). Click to send again.` : `Send WhatsApp greeting to ${rider.name}`}
+                          title={`WhatsApp शुभकामना भेजें (${rider.name})`}
                         >
                           <MessageCircle className="w-3.5 h-3.5" />
                           <span>{sentStatus.isSent ? 'Sent ✓' : 'WhatsApp'}</span>
@@ -810,18 +1187,18 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
         <div className="p-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
           <span className="flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>सरायकेला व झारखंड की पावन लोक परंपरा • कर्मठ राइडर्स का सम्मान</span>
+            <span>संपूर्ण झारखंड की पावन लोक परंपरा व सर्वधर्म समरसता</span>
           </span>
           <button
             onClick={onClose}
             className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 font-semibold transition cursor-pointer"
           >
-            Back / Cancel (वापस जाएं)
+            वापस जाएं (Close)
           </button>
         </div>
       </div>
 
-      {/* Quick Confirmation Modal for 1-Click Festival SMS */}
+      {/* Confirmation Modal for Bulk Festival SMS */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-amber-500/40 w-full max-w-md rounded-2xl p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
@@ -831,8 +1208,12 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                   <Sparkles className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Send Festival SMS to All Active Riders?</h3>
-                  <p className="text-xs text-amber-300 font-semibold">Ready to send festival greetings to {activeRiders.length} active riders</p>
+                  <h3 className="text-base font-bold text-white">
+                    त्योहार SMS भेजने की पुष्टि करें
+                  </h3>
+                  <p className="text-xs text-amber-300 font-semibold">
+                    {targetBulkRiders.length} राइडर्स को शुभकामनाएं भेजी जाएंगी
+                  </p>
                 </div>
               </div>
               <button
@@ -846,27 +1227,35 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
 
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 text-xs">
               <div className="flex items-center justify-between text-slate-300">
-                <span>Active Recipients:</span>
-                <span className="font-extrabold text-white">{activeRiders.length} Active Delivery Boys</span>
+                <span>पर्व (Festival):</span>
+                <span className="font-bold text-amber-300 truncate max-w-[210px]">
+                  {selectedFestival.nameHindi}
+                </span>
               </div>
               <div className="flex items-center justify-between text-slate-300">
-                <span>Delivery Mode:</span>
+                <span>प्राप्तकर्ता राइडर्स:</span>
+                <span className="font-extrabold text-white">
+                  {targetBulkRiders.length} राइडर्स
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-slate-300">
+                <span>डिलीवरी माध्यम:</span>
                 <span className="font-semibold text-emerald-400">
-                  {isNativeAndroid() ? 'Direct Device SIM SMS (Background)' : 'Web SMS Service'}
+                  {isNativeAndroid() ? 'मोबाइल SIM से सीधे बैकग्राउंड SMS' : 'Web SMS Service'}
                 </span>
               </div>
               {inactiveRidersCount > 0 && (
                 <div className="flex items-center justify-between text-amber-400 pt-1.5 border-t border-slate-850">
-                  <span>Inactive Exclusion:</span>
-                  <span className="font-bold">{inactiveRidersCount} Inactive (Excluded automatically)</span>
+                  <span>Inactive राइडर्स:</span>
+                  <span className="font-bold">{inactiveRidersCount} (स्वतः अलग रखे गए)</span>
                 </div>
               )}
             </div>
 
             <div className="space-y-1">
-              <span className="text-[11px] font-semibold text-slate-400">Personalized Message Preview:</span>
+              <span className="text-[11px] font-semibold text-slate-400">संदेश प्रीव्यू:</span>
               <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-xs text-amber-200/90 italic font-sans max-h-24 overflow-y-auto whitespace-pre-line">
-                "{formatFestivalGreeting(activeTemplate, activeRiders[0]?.name || 'राजू प्रमाणिक', hubSignature)}"
+                "{formatFestivalGreeting(activeTemplate, targetBulkRiders[0]?.name || samplePreviewName, hubSignature)}"
               </div>
             </div>
 
@@ -876,14 +1265,14 @@ export const FestivalGreetingsModal: React.FC<FestivalGreetingsModalProps> = ({
                 onClick={() => setShowConfirmModal(false)}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-750 transition cursor-pointer"
               >
-                Cancel
+                रद्द करें
               </button>
               <button
                 type="button"
                 onClick={handleBulkSendFestivalSms}
                 className="px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-lg shadow-amber-500/25 active:scale-95 transition cursor-pointer"
               >
-                Confirm & Send ({activeRiders.length} SMS)
+                पुष्टि करें व भेजें ({targetBulkRiders.length} SMS)
               </button>
             </div>
           </div>

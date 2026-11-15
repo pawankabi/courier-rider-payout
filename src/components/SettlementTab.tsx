@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   CheckCircle2, 
   Clock, 
@@ -387,12 +387,20 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     setAdvanceReason('');
   };
 
+  const isSettlingRef = useRef(false);
+
   // Mark all entries as Paid
   const handleMarkAllAsPaid = () => {
+    if (isSettlingRef.current) return;
     if (unpaidEntries.length === 0) {
       showToast('इस तारीख सीमा में सभी एंट्रियां पहले से पेड (Paid) हैं!');
       return;
     }
+
+    isSettlingRef.current = true;
+    setTimeout(() => {
+      isSettlingRef.current = false;
+    }, 3000);
 
     const ids = unpaidEntries.map((e) => e.id);
     onMarkEntriesPaid(ids, numericAdvance, advanceDate || undefined, {
@@ -426,11 +434,6 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
     // Generate canonical public ledger link for the rider: ${window.location.origin}/statement/${rider.id}
     const statementUrl = generateStatementUrl(selectedRider.id);
 
-    // Format Dynamic SIM Background SMS on settlement:
-    // If Net Settlement >= 0:
-    // "नमस्ते [Rider], आपका दिनांक [From Date] से [To Date] तक कुल पारिश्रमिक ₹[Gross] बना है। आपका कुल एडवांस ₹[Advance] समायोजित कर कुल नेट भुगतान ₹[Net] कर दिया गया है। धन्यवाद - [Hub Name]"
-    // If Net Settlement < 0 (Overpaid / Recovery Due):
-    // "नमस्ते [Rider], आपका दिनांक [From Date] से [To Date] तक का कुल पारिश्रमिक ₹[Gross] बना, जबकि आपका कुल एडवांस ₹[Advance] था। हिसाब के उपरांत आपसे ₹[Math.abs(Net)] लेना शेष है। कृपया यह राशि आज ही कार्यालय में जमा कर दें ताकि अन्य डिलीवरी साथियों को भुगतान किया जा सके। आपके सहयोग के लिए धन्यवाद - [Hub Name]"
     const cleanPhone = (selectedRider.phone || '').trim().replace(/\D/g, '').slice(-10);
     const effectiveHubName = (hubName || '').trim() || 'कूरियर हब';
 
@@ -441,9 +444,10 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
 
     const waUrl = getWhatsAppUrl(selectedRider.phone, settlementSms);
     const smsUrl = getNativeSmsUrl(selectedRider.phone, settlementSms);
+    const settleActionId = `settle_${selectedRider.id}_${startDate}_${endDate}_${ids.length}_${Date.now()}`;
 
     if (isNativeAndroid()) {
-      sendNativeBackgroundSms(cleanPhone, settlementSms).then((smsRes) => {
+      sendNativeBackgroundSms(cleanPhone, settlementSms, settleActionId).then((smsRes) => {
         setSalarySmsFeedback({
           riderName: selectedRider.name,
           phone: selectedRider.phone,
@@ -458,7 +462,6 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         });
       });
     } else {
-      // Trigger automated background API call (Fast2SMS / MSG91 / Webhook)
       dispatchAutomatedSms({
         riderPhone: selectedRider.phone,
         riderName: selectedRider.name,
@@ -466,6 +469,7 @@ export const SettlementTab: React.FC<SettlementTabProps> = ({
         type: 'salary',
         statementUrl,
         amount: netPayableAmount,
+        actionId: settleActionId,
       }).then((res) => {
         setSalarySmsFeedback({
           riderName: selectedRider.name,

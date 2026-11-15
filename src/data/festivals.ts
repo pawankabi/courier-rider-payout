@@ -3,15 +3,21 @@ export interface Festival {
   name: string;
   nameHindi: string;
   category: 'local_jharkhand' | 'national';
+  communityTag?: string; // Major community / faith / regional tradition tag
   region: string;
   dateLabel: string;
   month: number; // 1-12
   day: number; // 1-31 (calendar day for calendar calculation)
   badge: string;
   description: string;
-  culturalSignificance: string; // Explains why it is celebrated in Seraikella / India & rituals
+  culturalSignificance: string; // Explains why it is celebrated in Seraikella / Jharkhand / India & rituals
   traditionalBlessing: string;  // Specific traditional blessing phrase
   greetingTemplate: string;
+}
+
+export interface FestivalDateOverride {
+  month: number;
+  day: number;
 }
 
 export interface FestivalAlert {
@@ -32,6 +38,7 @@ export const FESTIVALS: Festival[] = [
     name: 'Maa Manasa Puja',
     nameHindi: 'माँ मनसा पूजा (विषहरी नाग देवी पूजा)',
     category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, सदान व बंगाली समाज',
     region: 'Seraikella / Kolhan / Jharkhand & Bengal',
     dateLabel: 'अगस्त - सितंबर (भाद्रपद संक्रांति, 17-18 सितंबर)',
     month: 9,
@@ -66,6 +73,7 @@ export const FESTIVALS: Festival[] = [
     name: 'Bhokta Parab & Shiva Gajan (Pata Nach)',
     nameHindi: 'भोक्ता परब एवं शिव गाजन / पाता परब',
     category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, सदान व सर्व समाज',
     region: 'Seraikella / Kolhan / Jharkhand',
     dateLabel: 'अप्रैल (चैत्र मास / चड़क पूजा)',
     month: 4,
@@ -151,6 +159,7 @@ export const FESTIVALS: Festival[] = [
     name: 'Karma Festival (Karam Puja)',
     nameHindi: 'करमा परब (करम पूजा)',
     category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, आदिवासी व सदान समाज',
     region: 'Jharkhand / Seraikella',
     dateLabel: 'अगस्त - सितंबर (भाद्रपद एकादशी)',
     month: 9,
@@ -168,6 +177,7 @@ export const FESTIVALS: Festival[] = [
     name: 'Tusu Parab & Makar Sankranti',
     nameHindi: 'टुसू परब एवं मकर संक्रांति',
     category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, सदान व कोल्हान समाज',
     region: 'Seraikella / Kolhan / Manbhum',
     dateLabel: '14 - 15 जनवरी',
     month: 1,
@@ -202,6 +212,7 @@ export const FESTIVALS: Festival[] = [
     name: 'Manda Parab & Charak Puja',
     nameHindi: 'मंडा परब / चरक पूजा (अंगार परीक्षा)',
     category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, सदान व सर्व झारखंड समाज',
     region: 'Seraikella / Kolhan / Jharkhand',
     dateLabel: 'मई - जून (बैशाख - ज्येष्ठ पूर्णिमा)',
     month: 5,
@@ -219,6 +230,7 @@ export const FESTIVALS: Festival[] = [
     name: 'Jitiya Parab (Jiwitputrika Vrata)',
     nameHindi: 'जितिया परब (जीवित्पुत्रिका व्रत)',
     category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, ब्राह्मण व सदान समाज',
     region: 'Jharkhand / Seraikella / Kolhan',
     dateLabel: 'आश्विन कृष्ण अष्टमी (सितंबर - अक्टूबर)',
     month: 9,
@@ -281,6 +293,204 @@ export const FESTIVALS: Festival[] = [
     traditionalBlessing: 'धरती आबा बिरसा मुंडा का स्वाभिमान और साहस सदा प्रेरित करे',
     greetingTemplate:
       'प्रिय {riderName} जी,\n\nधरती आबा भगवान बिरसा मुंडा जी की पावन जयंती और "झारखंड स्थापना दिवस" की आपको हार्दिक बधाई एवं जोहार! 🏹🇮🇳\n\nआपके निरंतर परिश्रम और क्षेत्र में समय पर हर पैकेट सुरक्षित पहुंचाने के जज्बे पर हमें गर्व है। आइए हम सब मिलकर एक सशक्त और समृद्ध समाज के निर्माण में सहयोग दें।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'akhain_jatra',
+    name: 'Akhain Jatra (Kudmi & Sadan New Year)',
+    nameHindi: 'आखाइन जातरा (कुड़मी-महतो नववर्ष एवं हल पूजन)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो एवं सदान समाज',
+    region: 'Jharkhand / Seraikella / Kurmi-Mahato Belt',
+    dateLabel: '15 जनवरी (1 माघ — मकर के अगले दिन)',
+    month: 1,
+    day: 15,
+    badge: '🚜 कुड़मी-सदान नववर्ष व हल पूजन',
+    description: 'मकर संक्रांति के अगले दिन कुड़मी/महतो एवं झारखंडी किसान समाज का नववर्ष व शुभ कार्य शुभारंभ।',
+    culturalSignificance:
+      '1 माघ को मनाया जाने वाला आखाइन जातरा झारखंड के कुड़मी (महतो), सदान और किसान समाज का पारंपरिक नववर्ष है। इस दिन खेतों में दो-अढ़ाई कुंड हल चलाकर "हल पुनहा" और कृषि यंत्रों की पूजा की जाती है। मान्यता है कि इस शुभ दिन से शुरू किया गया हर व्यापार, यात्रा और कर्म पूरे वर्ष समृद्धि लाता है।',
+    traditionalBlessing: 'आखाइन जातरा का नया वर्ष आपके कर्म और घर-परिवार में अपार समृद्धि लाए',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nझारखंड के पावन नववर्ष "आखाइन जातरा (हल पुनहा)" की आपको और आपके पूरे परिवार को हार्दिक बधाई एवं जोहार! 🚜🌾\n\nनए कृषि और कर्म वर्ष की तरह हमारे डिलीवरी परिवार में आपकी निरंतर मेहनत और समयबद्ध सेवाएं अत्यंत सराहनीय हैं। ईश्वर से प्रार्थना है कि यह शुभ आरंभ आपके जीवन में सुख, शांति और भरपूर तरक्की लेकर आए।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'maghe_parab',
+    name: 'Maghe Parab (Ho & Kolhan Grand Festival)',
+    nameHindi: 'माघे परब (कोल्हान एवं हो आदिवासी महापर्व)',
+    category: 'local_jharkhand',
+    communityTag: 'हो एवं आदिवासी समाज (कोल्हान)',
+    region: 'Kolhan / Seraikella / West & East Singhbhum',
+    dateLabel: 'फ़रवरी (माघ पूर्णिमा)',
+    month: 2,
+    day: 12,
+    badge: '🥁 कोल्हान-हो समाज का सबसे बड़ा पर्व',
+    description: 'कोल्हान और सरायकेला अंचल में हो आदिवासी समाज का सर्वप्रमुख सांस्कृतिक व प्रकृति महापर्व।',
+    culturalSignificance:
+      'माघे परब कोल्हान, सरायकेला और सिंहभूम के हो आदिवासी समुदाय का सबसे बड़ा और अत्यंत उल्लासपूर्ण महापर्व है। फसल कटाई के बाद देशाउली (जाहेर) में दिउरी द्वारा सिंगबोंगा, ओते इली और पुरखों की विशेष पूजा की जाती है। मांदल, नगाड़ा और दमामा की थाप पर पारंपरिक माघे सुसुन (नृत्य) और अतिथि सत्कार से पूरा कोल्हान गूंज उठता है।',
+    traditionalBlessing: 'सिंगबोंगा और देशाउली माँ आपके परिवार को सुख, आरोग्य व शांति प्रदान करें',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nकोल्हान और सरायकेला की गौरवशाली संस्कृति के सबसे बड़े महापर्व "माघे परब" की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं एवं जोहार! 🥁🌿\n\nफील्ड पर हर दिन आपकी ईमानदारी, धैर्य और लगन हमारे पूरे नेटवर्क की शक्ति है। सिंगबोंगा और देशाउली माता से प्रार्थना है कि आपका घर-आंगन सदा सुख, सुरक्षा और समृद्धि से भरा रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'rohini_parab',
+    name: 'Rohini / Rohin Parab (Seed Sowing Festival)',
+    nameHindi: 'रोहिणी / रोहिन परब (कृषि एवं बीज बुवाई महापर्व)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो एवं सदान किसान समाज',
+    region: 'Jharkhand / Manbhum / Seraikella',
+    dateLabel: '25 मई (जेठ मास / रोहिणी नक्षत्र)',
+    month: 5,
+    day: 25,
+    badge: '🌱 कृषि व धान बुवाई शुभारंभ',
+    description: 'झारखंड में खेतों में धान बुवाई के शुभारंभ, रोहिन माटी पूजा और समृद्धि का पावन लोकपर्व।',
+    culturalSignificance:
+      'झारखंड के कुड़मी/महतो, सदान और कृषक समाज में जेठ मास का "रोहिन परब" अत्यंत पावन और उत्साहपूर्ण पर्व है। इसी दिन से खेतों में नया बीज (मुठा बुना) बोने की शुरुआत होती है। घरों को लाल-पीली "रोहिन माटी" से सजाया जाता है, अन्न-गोबर की पूजा होती है और लोग साल भर की खुशहाली व अच्छी फसल की कामना करते हैं।',
+    traditionalBlessing: 'रोहिणी पर्व के शुभ बीज की तरह आपका परिश्रम भी जीवन में भरपूर फल दे',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nझारखंड के पावन कृषि एवं लोक आस्था पर्व "रोहिणी (रोहिन) परब" की आपको और आपके समस्त परिवार को हार्दिक शुभकामनाएं एवं जोहार! 🌱🌾\n\nधूप-गर्मी में भी पूरी मुस्तैदी से हर पार्सल समय पर पहुंचाने की आपकी मेहनत प्रशंसनीय है। जैसे रोहिन के शुभ बीज से खेत लहलहाते हैं, वैसे ही आपके जीवन में भी सुख और उन्नति की फसल सदा लहलहाती रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'hul_diwas',
+    name: 'Hul Diwas (Sido-Kanhu Santhal Kranti Diwas)',
+    nameHindi: 'हूल दिवस (अमर शहीद सिदो-कान्हू स्मृति दिवस)',
+    category: 'local_jharkhand',
+    communityTag: 'संथाल / आदिवासी एवं संपूर्ण झारखंड',
+    region: 'Jharkhand State / Kolhan & Santhal Pargana',
+    dateLabel: '30 जून',
+    month: 6,
+    day: 30,
+    badge: '🏹 संथाल हूल व वीरता दिवस',
+    description: '1855 के अमर वीर सिदो-कान्हू, चांद-भैरव और फूलो-झानो के ऐतिहासिक संथाल हूल बलिदान का गौरव दिवस।',
+    culturalSignificance:
+      '30 जून 1855 को भोगनाडीह से अमर शहीद सिदो-कान्हू, चांद-भैरव और वीरांगना फूलो-झानो ने अन्याय के विरुद्ध ऐतिहासिक "संथाल हूल" (क्रांति) का बिगुल फूंका था। संपूर्ण झारखंड में आदिवासी एवं सर्वसमाज इस दिन को स्वाभिमान, साहस और जल-जंगल-जमीन के सम्मान के महापर्व के रूप में बड़े उत्साह व श्रद्धा से मनाता है।',
+    traditionalBlessing: 'हूल जोहार! अमर वीरों का साहस और स्वाभिमान सदैव प्रेरणा देता रहे',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nअमर शहीद सिदो-कान्हू, चांद-भैरव एवं फूलो-झानो के पावन बलिदान दिवस "हूल दिवस" पर आपको कोटि-कोटि नमन एवं हूल जोहार! 🏹🇮🇳\n\nईमानदारी, आत्मसम्मान और मेहनत के साथ हर दिन अपनी जिम्मेदारी निभाने का आपका जज्बा अद्भुत है। आइए हम सब मिलकर एक सशक्त और समृद्ध झारखंड के निर्माण में योगदान दें।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'kali_puja',
+    name: 'Maa Kali Puja (Shyama Puja)',
+    nameHindi: 'माँ काली पूजा (श्यामा पूजा महापर्व)',
+    category: 'local_jharkhand',
+    communityTag: 'ब्राह्मण, बंगाली, सदान व सर्व समाज',
+    region: 'Seraikella / Kolhan / Jharkhand & Bengal',
+    dateLabel: 'अक्टूबर - नवंबर (कार्तिक अमावस्या निशीथ)',
+    month: 11,
+    day: 1,
+    badge: '🔱 शक्ति, रक्षा व श्यामा आराधना',
+    description: 'सरायकेला, कोल्हान व पूर्वी भारत में भव्य पंडालों के साथ माँ दक्षिणेश्वर काली की महापूजा।',
+    culturalSignificance:
+      'दीपावली की अमावस्या रात्रि में सरायकेला, जमशेदपुर, रांची और पूरे कोल्हान में माँ काली (श्यामा माँ) की भव्य आराधना होती है। ब्राह्मण पुरोहितों के वैदिक मंत्रोच्चार, ढाक की धुन और भव्य पंडालों के साथ शक्ति की अधिष्ठात्री माँ काली से संकटों से रक्षा, साहस और मंगलमय जीवन का आशीर्वाद मांगा जाता है।',
+    traditionalBlessing: 'जय माँ काली! माँ श्यामा हर विपदा से आपकी रक्षा करें',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nशक्ति और अभय प्रदान करने वाली माँ श्यामा के पावन पर्व "माँ काली पूजा" की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं! 🔱🪔\n\nत्योहारी भीड़ और व्यस्तता में भी हर ग्राहक तक सुरक्षित डिलीवरी पहुंचाने के आपके समर्पण को सलाम। माँ काली की असीम कृपा से आपका जीवन निर्भय, स्वस्थ और समृद्ध रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'bauri_parab',
+    name: 'Bauri Parab (Makar Eve Rituals)',
+    nameHindi: 'बाउड़ी परब (मकर-टुसू पूर्व संध्या महापर्व)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो एवं सदान समाज',
+    region: 'Seraikella / Kolhan / Manbhum / Jharkhand',
+    dateLabel: '13 जनवरी (मकर संक्रांति से एक दिन पूर्व)',
+    month: 1,
+    day: 13,
+    badge: '🌾 मकर-बाउड़ी व गुड़ पीठा उत्सव',
+    description: 'मकर संक्रांति से एक दिन पहले बाउड़ी रस्सी बांधने, डामरा पीठा बनाने और रातभर अलाव-लोकगीत का उत्साहपूर्ण पर्व।',
+    culturalSignificance:
+      'कुड़मी (महतो) एवं सदान समाज में टुसू और मकर संक्रांति से ठीक एक दिन पहले "बाउड़ी परब" अत्यंत जोश व धूमधाम से मनाया जाता है। इस दिन धान के पुआल से बनी पवित्र "बाउड़ी" घर के आंगन, धनकोठी, पेड़ों, हल और वाहनों में बांधी जाती है ताकि वर्ष भर सुख-बरकत बनी रहे। हर घर में गुड़-तिल के पारंपरिक पीठे बनते हैं और रातभर मेढ़ा (अलाव) जलाकर लोकगीतों के साथ उत्सव मनाया जाता है।',
+    traditionalBlessing: 'बाउड़ी और मकर संक्रांति की पावन ऊर्जा आपके घर-परिवार में अखंड बरकत लाए',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nमकर व टुसू से पूर्व पावन "बाउड़ी परब" की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं एवं जोहार! 🌾🔥\n\nहर मौसम में अपनी बाइक व कर्म के साथ पूरी ईमानदारी से सेवा देने के लिए धन्यवाद। ईश्वर करे आपके घर, वाहन और परिवार में साल भर बरकत, सुरक्षा और मिठास बनी रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'raja_rajo_parab',
+    name: 'Raja / Rajo Parab (Rajo Sankranti)',
+    nameHindi: 'रजो परब / पाहिली रजो संक्रांति (धरती सम्मान व झूला उत्सव)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, सरायकेला व कोल्हान समाज',
+    region: 'Seraikella / Kolhan / East Singhbhum',
+    dateLabel: '14 - 16 जून (आषाढ़ संक्रांति)',
+    month: 6,
+    day: 14,
+    badge: '🌿 धरती वंदना, पोड़ो पीठा व दोलना',
+    description: 'सरायकेला-कोल्हान में तीन दिनों का भव्य धरती माता सम्मान पर्व, झूला उत्सव और पारंपरिक पोड़ो पीठा।',
+    culturalSignificance:
+      'सरायकेला, पूर्वी सिंहभूम और कोल्हान के कुड़मी/महतो एवं स्थानीय समाज में आषाढ़ संक्रांति पर तीन दिवसीय "रजो परब" (पाहिली रजो, रजो संक्रांति, बासी रजो) अत्यंत उल्लास से मनाया जाता है। धरती माता को सम्मान व विश्राम देने के लिए 3 दिन खेत की खुदाई-जुताई बंद रहती है, पेड़ों पर झूले (दोलना) डाले जाते हैं, पारंपरिक पीठा-पकवान बनते हैं और रिश्तेदारों-साथियों में खुशियाँ बांटी जाती हैं।',
+    traditionalBlessing: 'धरती माता की कृपा से आपका परिवार सदा खुशहाल और समृद्ध रहे',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nधरती माता के सम्मान और उल्लास के तीन दिवसीय लोकपर्व "रजो परब (रजो संक्रांति)" की आपको और आपके परिवार को हार्दिक शुभकामनाएं एवं जोहार! 🌿🌸\n\nकड़ी मेहनत के साथ हमारे डिलीवरी परिवार को आगे बढ़ाने के लिए आपका आभार। धरती माता की कृपा से आपके जीवन में उत्तम स्वास्थ्य, आनंद और खुशहाली बनी रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'jantal_parab',
+    name: 'Jantal Parab (Ashadhi Gram & Ropani Puja)',
+    nameHindi: 'जाँताड़ परब (आषाढ़ी ग्राम पूजा व रोपनी महापर्व)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो एवं कृषक समाज',
+    region: 'Jharkhand / Seraikella / Kolhan & Manbhum',
+    dateLabel: 'जुलाई आरंभ (आषाढ़ मास — रोपनी पूर्व)',
+    month: 7,
+    day: 5,
+    badge: '🌧️ आषाढ़ी ग्राम रक्षा व कृषि पर्व',
+    description: 'धान की रोपनी शुरू करने से पहले अच्छी वर्षा, रोग-बाधा से रक्षा व समृद्धि की सामूहिक ग्राम पूजा।',
+    culturalSignificance:
+      'कुड़मी/महतो एवं झारखंड के किसान समाज में आषाढ़ मास में धान रोपनी से ठीक पहले "जाँताड़ परब (आषाढ़ी पूजा)" बड़े उत्साह से मनाया जाता है। पूरे गांव के लोग ग्राम थान व पहाड़ देवता के समक्ष एकत्र होकर समय पर मानसून वर्षा, अच्छी खेती और पूरे गांव की सुख-शांति के लिए सामूहिक पूजा व प्रसाद वितरण करते हैं।',
+    traditionalBlessing: 'जाँताड़ बोंगा और ग्राम देवता हर बाधा से आपकी और आपके परिवार की रक्षा करें',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nग्राम मंगल और कृषि समृद्धि के पावन लोकपर्व "जाँताड़ परब (आषाढ़ी पूजा)" की आपको और आपके पूरे परिवार को हार्दिक बधाई एवं जोहार! 🌧️🌱\n\nमानसून की पहली फुहारों में भी समय पर हर पार्सल पहुंचाने के आपके समर्पण को नमन। ग्राम देवता आपके घर-परिवार में सुख, सुरक्षा और समृद्धि बनाए रखें।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'ind_chhata_parab',
+    name: 'Ind Parab & Chhata Parab (Ind Mela)',
+    nameHindi: 'इंद परब एवं छता परब (विशाल इंद मेला व झूमर उत्सव)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो एवं सदान समाज',
+    region: 'Jharkhand (Ranchi-Silli, Bokaro, Dhanbad, Seraikella, Manbhum)',
+    dateLabel: 'सितंबर (भाद्रपद शुक्ल द्वादशी — करमा के अगले दिन)',
+    month: 9,
+    day: 22,
+    badge: '🎪 छता उत्सव व विशाल इंद मेला',
+    description: 'करमा के तुरंत बाद कुड़मी-महतो व सदान समाज का विशाल छता खंभा पूजन, झूमर नृत्य और पारंपरिक इंद मेला।',
+    culturalSignificance:
+      'कुड़मी (महतो) एवं सदान समाज में करमा पूजा के ठीक अगले दिन "इंद परब / छता परब" अद्वितीय जोश, ढोल-नगाड़ा और धूमधाम के साथ मनाया जाता है। ऊंचे शाल वृक्ष के खंभे (छता) को खड़ा कर देवराज इंद्र की पूजा की जाती है ताकि पर्याप्त वर्षा और समृद्धि बनी रहे। इस अवसर पर लगने वाले विशाल इंद मेले, रातभर चलने वाले पारंपरिक झूमर नृत्य-गीत और सांस्कृतिक मेलमिलाप की भव्यता देखते ही बनती है।',
+    traditionalBlessing: 'इंद परब का उल्लास आपके जीवन में प्रगति, एकता और खुशहाली लेकर आए',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nझारखंड के विशाल लोक उत्सव "इंद परब एवं छता परब" की आपको और आपके पूरे परिवार को ढेरों शुभकामनाएं एवं जोहार! 🎪🥁\n\nआपके ऊर्जावान परिश्रम और फील्ड में मुस्तैद सेवा की हम हृदय से सराहना करते हैं। ईश्वर करे इस पावन पर्व की तरह आपके जीवन में भी सदा उल्लास, तरक्की और खुशियों का मेला सजा रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'nawakhani_parab',
+    name: 'Nawakhani / Nawa Ann Parab',
+    nameHindi: 'नवाखाई / नवान्न परब (नया धान व कुलदेवता उत्सव)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो, सदान व आदिवासी समाज',
+    region: 'Seraikella / Kolhan / Jharkhand',
+    dateLabel: 'सितंबर - अक्टूबर (भादो-आश्विन — नई फसल)',
+    month: 9,
+    day: 28,
+    badge: '🍚 नया अन्न व पारिवारिक मिलन पर्व',
+    description: 'नई फसल का पहला धान कटने पर पुरखों व ईष्टदेव को अर्पण कर पूरे कुटुंब संग उत्सव मनाने का महापर्व।',
+    culturalSignificance:
+      'खेतों में नया धान पकने पर कुड़मी/महतो, सदान और आदिवासी समाज में "नवाखाई (नवान्न परब)" बड़े जोश व आस्था से मनाया जाता है। नए चावल का चूड़ा, खीर और विशेष पकवान सबसे पहले कुलदेवता और पूर्वजों को अर्पित किए जाते हैं, जिसके बाद पूरा परिवार, रिश्तेदार और पड़ोसी एक साथ बैठकर नवअन्न ग्रहण कर खुशियां बांटते हैं।',
+    traditionalBlessing: 'नए अन्न और पुरखों का आशीष आपके घर में सदा अन्न-धन का भंडार भरा रखे',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nनई फसल, आभार और पारिवारिक स्नेह के पावन महापर्व "नवाखाई (नवान्न परब)" की आपको और आपके समस्त परिवार को हार्दिक बधाई एवं जोहार! 🍚🌾\n\nआपकी रोज़ की ईमानदार मेहनत हमारे पूरे नेटवर्क का गौरव है। ईश्वर व पुरखों के आशीर्वाद से आपका घर सदा अन्न-धन, सुख और अच्छे स्वास्थ्य से परिपूर्ण रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'bandna_garu_khunta',
+    name: 'Bandna Parab & Barad / Garu Khunta',
+    nameHindi: 'बांदना परब एवं बरद खुंटा / गरू खुंटा (अहिरा गीत महापर्व)',
+    category: 'local_jharkhand',
+    communityTag: 'कुड़मी / महतो एवं सदान समाज का महापर्व',
+    region: 'Jharkhand / Manbhum / Bokaro-Dhanbad-Kolhan-Seraikella',
+    dateLabel: 'नवंबर (कार्तिक अमावस्या से द्वितीया — सोहराय-बांदना)',
+    month: 11,
+    day: 3,
+    badge: '🐂 कांचा कांटी, अहिरा गीत व बरद खुंटा',
+    description: 'कुड़मी-महतो समाज का सबसे जोशपूर्ण महापर्व — गाय जागरण (अहिरा गीत), गोहाल पूजा और भव्य बरद/गरू खुंटा उत्सव।',
+    culturalSignificance:
+      'झारखंड और मानभूम के कुड़मी (महतो) समाज में कार्तिक मास का "बांदना परब और बरद (गरू) खुंटा" अत्यंत जोश, ढोल-धमसा और लोकगीतों के साथ 3 से 5 दिनों तक मनाया जाने वाला महापर्व है। पहले दिन "गाय जागरण" में रातभर पारंपरिक "अहिरा गीत" व धुमसा-मांदर के साथ बैलों को जगाया जाता है, दूसरे दिन सिंदूर-तेल लगाकर "चुमान व गोहाल पूजा" (कांचा कांटी) होती है, और तीसरे दिन विशाल भीड़ व मेले के बीच शक्ति-सामर्थ्य के प्रतीक "बरद खुंटा (गरू खुंटा)" का अद्वितीय आयोजन होता है।',
+    traditionalBlessing: 'अहिरा गीत और बांदना परब की ऊर्जा आपके जीवन में साहस, शक्ति व समृद्धि लाए',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nकुड़मी-महतो व झारखंडी लोकसंस्कृति के सबसे जोशपूर्ण महापर्व "बांदना परब एवं बरद (गरू) खुंटा" की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं एवं जोहार! 🐂🥁✨\n\nढोल-धमसा के उत्साह की तरह हर दिन पूरी ऊर्जा और निष्ठा से कूरियर डिलीवरी करने के आपके जज्बे को सलाम। ईश्वर आपके घर-आंगन में खुशहाली, आरोग्यता और अपार तरक्की प्रदान करें।\n\n- कूरियर डिलीवरी टीम',
   },
 
   // ==========================================
@@ -458,20 +668,39 @@ export const FESTIVALS: Festival[] = [
   },
   {
     id: 'eid',
-    name: 'Eid-ul-Fitr / Eid-ul-Adha',
-    nameHindi: 'ईद मुबारक',
+    name: 'Eid-ul-Fitr (Meethi Eid)',
+    nameHindi: 'ईद-उल-फ़ित्र (मीठी ईद मुबारक)',
     category: 'national',
-    region: 'National',
-    dateLabel: 'ईद पर्व',
-    month: 4,
-    day: 1,
-    badge: '🌙 अमन व बरकत',
-    description: 'आपसी भाईचारे, अमन और खुशियां बांटने का मुकद्दस त्योहार।',
+    communityTag: 'मुस्लिम समाज (सर्वधर्म सौहार्द)',
+    region: 'Jharkhand / National',
+    dateLabel: 'मार्च - अप्रैल (शव्वाल १)',
+    month: 3,
+    day: 31,
+    badge: '🌙 अमन, भाईचारा व बरकत',
+    description: 'रमजान के रोजों के बाद आपसी भाईचारे, अमन और खुशियां बांटने का मुकद्दस त्योहार।',
     culturalSignificance:
-      'रमजान के मुकद्दस महीने के रोजों के बाद ईद-उल-फितर का त्योहार खुशियों, सहृदयता और ईदी बांटने का दिन है। यह पर्व आपसी प्रेम, सौहार्द और जरूरतमंदों की मदद का संदेश देता है।',
+      'रमजान के मुकद्दस महीने के रोजों के बाद ईद-उल-फितर का त्योहार खुशियों, सहृदयता और ईदी बांटने का दिन है। झारखंड के हर शहर-कस्बे में ईदगाहों में नमाज़ अदा कर गले मिलने और सेवइयों की मिठास के साथ आपसी प्रेम, सौहार्द और जरूरतमंदों की मदद का संदेश दिया जाता है।',
     traditionalBlessing: 'अल्लाह ताला आपकी ज़िंदगी में बरकत, अच्छी सेहत और खुशियां अता फरमाए',
     greetingTemplate:
-      'प्रिय {riderName} जी,\n\nआपको और आपके पूरे अहलो-अयाल को "ईद" की तहे दिल से बहुत-बहुत मुबारकबाद! 🌙✨\n\nहमारे डिलीवरी परिवार के एक अहम सदस्य के रूप में आपकी कर्तव्यनिष्ठा के लिए शुक्रिया। अल्लाह ताला आपकी ज़िंदगी में बरकत, अच्छी सेहत और खुशियां अता फरमाए।\n\n- कूरियर डिलीवरी टीम',
+      'प्रिय {riderName} जी,\n\nआपको और आपके पूरे अहलो-अयाल को "ईद-उल-फ़ित्र (मीठी ईद)" की तहे दिल से बहुत-बहुत मुबारकबाद! 🌙✨\n\nहमारे डिलीवरी परिवार के एक अहम सदस्य के रूप में आपकी कर्तव्यनिष्ठा के लिए शुक्रिया। अल्लाह ताला आपकी ज़िंदगी में बरकत, अच्छी सेहत और खुशियां अता फरमाए।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'bakrid_eid_ul_adha',
+    name: 'Eid-ul-Adha (Bakrid Mubarak)',
+    nameHindi: 'ईद-उल-अज़हा (बकरीद मुबारक)',
+    category: 'national',
+    communityTag: 'मुस्लिम समाज (त्याग व सद्भाव)',
+    region: 'Jharkhand / National',
+    dateLabel: 'जून (ज़िल-हिज्जा १०)',
+    month: 6,
+    day: 7,
+    badge: '🕌 त्याग, सेवा व मोहब्बत',
+    description: 'कुर्बानी, निस्वार्थ त्याग, दान और आपसी भाईचारे का मुकद्दस त्योहार ईद-उल-अज़हा।',
+    culturalSignificance:
+      'ईद-उल-अज़हा (बकरीद) हज़रत इब्राहिम (अ.स.) के असीम त्याग और ईश्वर के प्रति समर्पण की याद में मनाया जाता है। इस मुबारक मौके पर गरीबों, पड़ोसियों और रिश्तेदारों में खुशियां व दान बांटकर सामाजिक एकता और इंसानियत का पैगाम दिया जाता है।',
+    traditionalBlessing: 'ईद-उल-अज़हा आपके घर में अमन, सलामती और खुशहाली लेकर आए',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nत्याग, सेवा और भाईचारे के मुकद्दस पर्व "ईद-उल-अज़हा (बकरीद)" की आपको और आपके पूरे परिवार को दिल से मुबारकबाद! 🕌🌙\n\nहर मौसम और हर परिस्थिति में ईमानदारी से डिलीवरी पहुंचाने के आपके जज्बे की हम कद्र करते हैं। ऊपरवाला आपके परिवार को सेहत, तरक्की और अमन से नवाज़े।\n\n- कूरियर डिलीवरी टीम',
   },
   {
     id: 'independence_day',
@@ -643,7 +872,204 @@ export const FESTIVALS: Festival[] = [
     greetingTemplate:
       'प्रिय {riderName} जी,\n\nप्रेम, शांति, करुणा और खुशियों के पावन पर्व "क्रिसमस" (बड़ा दिन) की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं! 🎄🎅✨\n\nठंड के मौसम में भी हर दिन फील्ड पर लगन और ईमानदारी से सेवाएं देने के लिए धन्यवाद। प्रभु यीशु आपके घर-परिवार को उत्तम स्वास्थ्य, आनंद और समृद्धि से भर दें।\n\n- कूरियर डिलीवरी टीम',
   },
+  {
+    id: 'hanuman_jayanti',
+    name: 'Shri Hanuman Jayanti',
+    nameHindi: 'श्री हनुमान जयंती (महावीर जन्मोत्सव)',
+    category: 'national',
+    communityTag: 'ब्राह्मण, सनातन व सर्व हिंदू समाज',
+    region: 'Jharkhand / Seraikella / National',
+    dateLabel: 'अप्रैल (चैत्र शुक्ल पूर्णिमा)',
+    month: 4,
+    day: 12,
+    badge: '🚩 बल, भक्ति व संकटमोचन',
+    description: 'पवनपुत्र संकटमोचन श्री हनुमान जी का जन्मोत्सव, सुंदरकांड पाठ एवं महावीर भंडारा।',
+    culturalSignificance:
+      'चैत्र शुक्ल पूर्णिमा को संकटमोचन श्री हनुमान जी का जन्मोत्सव पूरे झारखंड और सरायकेला में अत्यंत उत्साह से मनाया जाता है। मंदिरों में सुंदरकांड व हनुमान चालीसा का पाठ, ध्वजारोहण और विशाल भंडारों का आयोजन होता है। निस्वार्थ सेवा, शक्ति और सुरक्षा के प्रतीक बजरंगबली हर कर्मवीर के रक्षक हैं।',
+    traditionalBlessing: 'जय बजरंगबली! संकटमोचन हनुमान जी आपकी सदा रक्षा करें',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nसंकटमोचन महावीर श्री "हनुमान जयंती" की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं! 🚩🙏\n\nबिना थके हर रास्ते पर समय से पार्सल पहुंचाने का आपका साहस और समर्पण सराहनीय है। पवनपुत्र हनुमान जी की कृपा से आपकी हर यात्रा सुरक्षित रहे और जीवन में बल, बुद्धि व समृद्धि आए।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'vaisakhi_khalsa',
+    name: 'Vaisakhi & Khalsa Sajna Diwas (Satuani)',
+    nameHindi: 'वैसाखी, सतुआनी एवं खालसा स्थापना दिवस',
+    category: 'national',
+    communityTag: 'सिख, सदान एवं किसान समाज',
+    region: 'Jharkhand / National',
+    dateLabel: '13 - 14 अप्रैल (मेष संक्रांति)',
+    month: 4,
+    day: 13,
+    badge: '🌾 खालसा गौरव व फसल पर्व',
+    description: 'सिख समुदाय का खालसा स्थापना महापर्व (वैसाखी) एवं झारखंड में मेष संक्रांति / सतुआनी पर्व।',
+    culturalSignificance:
+      '13-14 अप्रैल को गुरु गोबिंद सिंह जी द्वारा 1699 में खालसा पंथ की स्थापना के पावन दिवस "वैसाखी" को सिख समाज गुरुद्वारों में कीर्तन व लंगर सेवा के साथ धूमधाम से मनाता है। साथ ही झारखंड के ब्राह्मण, सदान व कृषक समाज में इसे "सतुआनी / जुरशीतल / मेष संक्रांति" के रूप में नई फसल, सत्तू-गुड़ और शीतल जल दान के पर्व के रूप में मनाया जाता है।',
+    traditionalBlessing: 'वाहेगुरु जी का आशीर्वाद और नई फसल की खुशहाली आपके घर आए',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nउमंग, सेवा और नई फसल के पावन पर्व "वैसाखी एवं सतुआनी (खालसा स्थापना दिवस)" की आपको और आपके पूरे परिवार को लख-लख बधाइयां! 🌾🙏\n\nईमानदारी और परिश्रम के साथ हर दिन क्षेत्र में सेवाएं देने के लिए आपका आभार। ईश्वर आपके घर-परिवार में सुख, समृद्धि और उत्तम स्वास्थ्य बनाए रखें।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'easter_sunday',
+    name: 'Good Friday & Easter Sunday',
+    nameHindi: 'ईस्टर महापर्व (गुड फ्राइडे व पुनरुत्थान उत्सव)',
+    category: 'national',
+    communityTag: 'ईसाई समाज (रांची, कोल्हान व झारखंड)',
+    region: 'Jharkhand / National',
+    dateLabel: 'अप्रैल (बसंत पूर्णिमा उपरांत रविवार)',
+    month: 4,
+    day: 20,
+    badge: '✝️ आशा, प्रेम व नवजीवन',
+    description: 'झारखंड और भारत के ईसाई समुदाय का सबसे पवित्र पुनरुत्थान पर्व ईस्टर व करुणा दिवस।',
+    culturalSignificance:
+      'झारखंड (रांची, खूंटी, गुमला, सिमडेगा, कोल्हान-सरायकेला) के ईसाई समाज में क्रिसमस के साथ-साथ ईस्टर अत्यंत श्रद्धा और उत्साह से मनाया जाने वाला प्रमुख पर्व है। यह पर्व अंधकार पर प्रकाश, निराशा पर नई आशा, क्षमा और आपसी प्रेम की विजय का पावन संदेश देता है।',
+    traditionalBlessing: 'प्रभु यीशु का प्रेम, शांति और नई आशा आपके जीवन को आलोकित करे',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nआशा, प्रेम और नवजीवन के पावन पर्व "ईस्टर महापर्व" की आपको और आपके समस्त परिवार को हार्दिक शुभकामनाएं! ✝️🕊️✨\n\nहमारे कूरियर नेटवर्क में आपके शांत व्यवहार, ईमानदारी और कठिन परिश्रम के लिए दिल से धन्यवाद। ईश्वर आपके परिवार को सुख, शांति और उत्तम आरोग्य प्रदान करें।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'parashuram_akshaya_tritiya',
+    name: 'Parashuram Jayanti & Akshaya Tritiya',
+    nameHindi: 'भगवान परशुराम जयंती एवं अक्षय तृतीया',
+    category: 'national',
+    communityTag: 'ब्राह्मण एवं सर्व सनातन समाज',
+    region: 'Jharkhand / Seraikella / National',
+    dateLabel: 'अप्रैल - मई (वैशाख शुक्ल तृतीया)',
+    month: 4,
+    day: 30,
+    badge: '🪓 ब्राह्मण गौरव व अक्षय समृद्धि',
+    description: 'भगवान विष्णु के षष्ठम अवतार श्री परशुराम जी का जन्मोत्सव एवं सर्वसिद्धिदायक अक्षय तृतीया।',
+    culturalSignificance:
+      'वैशाख शुक्ल तृतीया को चिरंजीवी भगवान परशुराम जी की पावन जयंती और अक्षय तृतीया का महासंयोग होता है। झारखंड में ब्राह्मण समाज एवं समस्त सनातन धर्मावलंबी भव्य शोभायात्रा, वैदिक हवन-पूजन और दान-पुण्य के साथ इसे अत्यंत उत्साह से मनाते हैं। अक्षय तृतीया को किए गए शुभ कर्म और दान का फल कभी क्षय (समाप्त) नहीं होता।',
+    traditionalBlessing: 'भगवान परशुराम का तेज और अक्षय तृतीया का अखंड सौभाग्य आप पर बना रहे',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nचिरंजीवी भगवान "श्री परशुराम जयंती" एवं सर्वसिद्धिदायक महापर्व "अक्षय तृतीया" की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं! 🪓🪔✨\n\nनिष्ठा, धर्म और परिश्रम के साथ हर दिन अपनी जिम्मेदारी निभाने के लिए आपका आभार। ईश्वर से प्रार्थना है कि आपके घर में सुख, शांति और समृद्धि सदा अक्षय (अखंड) बनी रहे।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'shravani_mahotsav',
+    name: 'Shravani Mahotsav & Bol Bam (Sawan Somwari)',
+    nameHindi: 'श्रावणी महापर्व एवं बोल बम (सावन सोमवारी)',
+    category: 'national',
+    communityTag: 'ब्राह्मण, सदान व संपूर्ण झारखंड आस्था',
+    region: 'Jharkhand (Deoghar-Basukinath) / Seraikella',
+    dateLabel: 'जुलाई - अगस्त (श्रावण मास)',
+    month: 7,
+    day: 28,
+    badge: '🔱 बाबा बैद्यनाथ व बोल बम आस्था',
+    description: 'झारखंड की पावन श्रावणी कांवड़ यात्रा, सावन सोमवारी जलाभिषेक एवं बाबा बैद्यनाथ धाम भक्ति उत्सव।',
+    culturalSignificance:
+      'पावन श्रावण मास झारखंड की सबसे बड़ी आध्यात्मिक पहचान है। देवघर के बाबा बैद्यनाथ धाम, बासुकीनाथ और सरायकेला-कोल्हान के सभी शिवालयों में ब्राह्मण, महतो, सदान और सर्वसमाज के करोड़ों भक्त "बोल बम" के जयघोष के साथ कांवड़ में गंगाजल लेकर भगवान भोलेनाथ का जलाभिषेक करते हैं। यह महीना भक्ति, धैर्य और सेवा का जीवंत उत्सव है।',
+    traditionalBlessing: 'बोल बम! बाबा बैद्यनाथ की असीम कृपा आप और आपके परिवार पर सदा रहे',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nपावन श्रावण मास, सावन सोमवारी एवं "बाबा बैद्यनाथ श्रावणी महापर्व" की आपको और आपके समस्त परिवार को हार्दिक शुभकामनाएं! बोल बम! 🔱🌿\n\nसावन की झमाझम बारिश में भी पूरी लगन से हर ग्राहक तक पार्सल पहुंचाने के आपके जज्बे को नमन। बाबा भोलेनाथ आपकी हर राह सुरक्षित रखें और जीवन को खुशहाली से भर दें।\n\n- कूरियर डिलीवरी टीम',
+  },
+  {
+    id: 'hartalika_teej',
+    name: 'Hartalika Teej Mahaparv',
+    nameHindi: 'हरितालिका तीज महापर्व (सौभाग्य व परिवार कल्याण)',
+    category: 'national',
+    communityTag: 'ब्राह्मण, कुड़मी-सदान व सर्व हिंदू समाज',
+    region: 'Jharkhand / Bihar / National',
+    dateLabel: 'अगस्त - सितंबर (भाद्रपद शुक्ल तृतीया)',
+    month: 8,
+    day: 26,
+    badge: '🌺 सौभाग्य, अखंड विश्वास व पारिवारिक सुख',
+    description: 'भगवान शिव और माता पार्वती की आराधना तथा परिवार की सुख-समृद्धि व दीर्घायु का महापर्व।',
+    culturalSignificance:
+      'भाद्रपद शुक्ल तृतीया को झारखंड के ब्राह्मण, महतो, सदान व समस्त हिंदू परिवारों में हरितालिका तीज का पावन पर्व अत्यंत श्रद्धा और धूमधाम से मनाया जाता है। माता पार्वती और भगवान शिव की मिट्टी की प्रतिमा बनाकर पूजा की जाती है तथा परिवार के स्वास्थ्य, अखंड सौभाग्य और दीर्घायु की कामना के साथ रात्रि जागरण एवं लोकगीत गाए जाते हैं।',
+    traditionalBlessing: 'माता गौरी और भगवान शिव आपके परिवार में अखंड सुख और सौभाग्य बनाए रखें',
+    greetingTemplate:
+      'प्रिय {riderName} जी,\n\nप्रेम, समर्पण और पारिवारिक कल्याण के पावन पर्व "हरितालिका तीज" की आपको और आपके पूरे परिवार को हार्दिक शुभकामनाएं! 🌺🙏\n\nअपने परिवार के उज्ज्वल भविष्य के लिए फील्ड पर आपकी निरंतर मेहनत प्रेरणादायी है। माता पार्वती और भगवान भोलेनाथ आपके घर-आंगन को सदा सुख, शांति और आरोग्य से भर दें।\n\n- कूरियर डिलीवरी टीम',
+  },
 ];
+
+const CUSTOM_FESTIVAL_DATES_STORAGE_KEY = 'courier_payout_festival_date_overrides_v1';
+const CUSTOM_FESTIVAL_TEMPLATES_STORAGE_KEY = 'courier_payout_festival_templates_v1';
+
+export function loadFestivalDateOverrides(): Record<string, FestivalDateOverride> {
+  try {
+    const raw = localStorage.getItem(CUSTOM_FESTIVAL_DATES_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveFestivalDateOverride(
+  festivalId: string,
+  month: number,
+  day: number
+): Record<string, FestivalDateOverride> {
+  const current = loadFestivalDateOverrides();
+  const next = {
+    ...current,
+    [festivalId]: {
+      month: Math.min(12, Math.max(1, Math.floor(month))),
+      day: Math.min(31, Math.max(1, Math.floor(day))),
+    },
+  };
+  try {
+    localStorage.setItem(CUSTOM_FESTIVAL_DATES_STORAGE_KEY, JSON.stringify(next));
+  } catch {}
+  return next;
+}
+
+export function clearFestivalDateOverride(festivalId: string): Record<string, FestivalDateOverride> {
+  const current = loadFestivalDateOverrides();
+  const next = { ...current };
+  delete next[festivalId];
+  try {
+    localStorage.setItem(CUSTOM_FESTIVAL_DATES_STORAGE_KEY, JSON.stringify(next));
+  } catch {}
+  return next;
+}
+
+export function loadCustomFestivalTemplates(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(CUSTOM_FESTIVAL_TEMPLATES_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveCustomFestivalTemplates(templates: Record<string, string>): void {
+  try {
+    localStorage.setItem(CUSTOM_FESTIVAL_TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
+  } catch {}
+}
+
+export function getEffectiveFestivalMonthDay(
+  fest: Festival,
+  overrides?: Record<string, FestivalDateOverride>
+): { month: number; day: number; isOverridden: boolean } {
+  const ov = overrides?.[fest.id];
+  if (ov && ov.month >= 1 && ov.month <= 12 && ov.day >= 1 && ov.day <= 31) {
+    return { month: ov.month, day: ov.day, isOverridden: true };
+  }
+  return { month: fest.month, day: fest.day, isOverridden: false };
+}
+
+export function getFestivalDaysDiff(
+  fest: Festival,
+  currentDate = new Date(),
+  overrides?: Record<string, FestivalDateOverride>
+): number {
+  const curYear = currentDate.getFullYear();
+  const currentMidnight = new Date(curYear, currentDate.getMonth(), currentDate.getDate(), 0, 0, 0, 0);
+  const { month, day } = getEffectiveFestivalMonthDay(fest, overrides);
+
+  const dateThisYear = new Date(curYear, month - 1, day, 0, 0, 0, 0);
+  let diffDays = Math.round((dateThisYear.getTime() - currentMidnight.getTime()) / (24 * 60 * 60 * 1000));
+  if (diffDays < 0) {
+    const dateNextYear = new Date(curYear + 1, month - 1, day, 0, 0, 0, 0);
+    diffDays = Math.round((dateNextYear.getTime() - currentMidnight.getTime()) / (24 * 60 * 60 * 1000));
+  }
+  return diffDays;
+}
 
 /**
  * Intelligent Calendar Checker:
@@ -653,9 +1079,11 @@ export const FESTIVALS: Festival[] = [
  * - Detects festivals UPCOMING within 2-7 days
  * - Detects nearest festival
  */
-export function getFestivalAlert(currentDate = new Date()): FestivalAlert {
-  const curYear = currentDate.getFullYear();
-  const currentMidnight = new Date(curYear, currentDate.getMonth(), currentDate.getDate(), 0, 0, 0, 0);
+export function getFestivalAlert(
+  currentDate = new Date(),
+  overrides?: Record<string, FestivalDateOverride>
+): FestivalAlert {
+  const resolvedOverrides = overrides ?? loadFestivalDateOverrides();
 
   // Map festivals to upcoming occurrences with accurate day difference
   interface Candidate {
@@ -663,19 +1091,10 @@ export function getFestivalAlert(currentDate = new Date()): FestivalAlert {
     daysDiff: number;
   }
 
-  const candidates: Candidate[] = FESTIVALS.map((fest) => {
-    // Check this year's date
-    const dateThisYear = new Date(curYear, fest.month - 1, fest.day, 0, 0, 0, 0);
-    let diffDays = Math.round((dateThisYear.getTime() - currentMidnight.getTime()) / (24 * 60 * 60 * 1000));
-
-    // If already passed in current year, calculate for next year
-    if (diffDays < 0) {
-      const dateNextYear = new Date(curYear + 1, fest.month - 1, fest.day, 0, 0, 0, 0);
-      diffDays = Math.round((dateNextYear.getTime() - currentMidnight.getTime()) / (24 * 60 * 60 * 1000));
-    }
-
-    return { festival: fest, daysDiff: diffDays };
-  });
+  const candidates: Candidate[] = FESTIVALS.map((fest) => ({
+    festival: fest,
+    daysDiff: getFestivalDaysDiff(fest, currentDate, resolvedOverrides),
+  }));
 
   // Sort ascending by closest days difference
   candidates.sort((a, b) => a.daysDiff - b.daysDiff);

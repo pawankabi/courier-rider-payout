@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -723,7 +723,10 @@ export const RidersTab: React.FC<Props> = ({
     setPayingRiderData({ rider, stats });
   };
 
+  const isConfirmingPayRef = useRef(false);
+
   const handleConfirmMarkPaid = () => {
+    if (isConfirmingPayRef.current) return;
     if (!payingRiderData || !onMarkEntriesPaid) return;
 
     const { rider, stats } = payingRiderData;
@@ -732,6 +735,11 @@ export const RidersTab: React.FC<Props> = ({
       setPayingRiderData(null);
       return;
     }
+
+    isConfirmingPayRef.current = true;
+    setTimeout(() => {
+      isConfirmingPayRef.current = false;
+    }, 3000);
 
     const numAdvance =
       typeof advanceDeduction === 'number'
@@ -777,7 +785,11 @@ export const RidersTab: React.FC<Props> = ({
         : `नमस्ते ${rider.name}, आपका दिनांक ${formatDateDisplay(startDate)} से ${formatDateDisplay(endDate)} तक का कुल पारिश्रमिक ₹${grossPayout} बना, जबकि आपका कुल एडवांस ₹${numAdvance} था। हिसाब के उपरांत आपसे ₹${Math.abs(netPayout)} लेना शेष है। कृपया यह राशि आज ही कार्यालय में जमा कर दें ताकि अन्य डिलीवरी साथियों को भुगतान किया जा सके। आपके सहयोग के लिए धन्यवाद - ${effectiveHub}`;
 
     if (isNativeAndroid()) {
-      sendNativeBackgroundSms(cleanPhone, settlementSms).then((smsRes) => {
+      sendNativeBackgroundSms(
+        cleanPhone,
+        settlementSms,
+        `settle_${rider.id}_${startDate}_${endDate}_${unpaidIds.length}_${Date.now()}`
+      ).then((smsRes) => {
         if (smsRes.success) {
           setPaidToast(`✅ सिम से पे-आउट सेटलमेंट SMS भेजा गया: ${rider.name}`);
         } else {

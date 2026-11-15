@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Gift, 
@@ -23,11 +23,10 @@ import { formatINR, formatDateDisplay, getTodayDateString, formatPhoneNumber, ge
 import { 
   generateStatementUrl, 
   formatIncentiveSmsText, 
-  dispatchAutomatedSms, 
   getWhatsAppUrl, 
   getNativeSmsUrl 
 } from '../services/smsService';
-import { isNativeAndroid, sendNativeBackgroundSms } from '../services/nativeSms';
+import { isNativeAndroid } from '../services/nativeSms';
 
 interface RiderIncentiveModalProps {
   rider: Rider;
@@ -102,8 +101,11 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
   const projectedTotalIncentive = currentTotalIncentive + numericAmount;
   const statementUrl = generateStatementUrl(rider.id);
 
+  const submittingRef = useRef(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     setErrorMessage(null);
 
     if (numericAmount <= 0) {
@@ -114,32 +116,15 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
     const cleanReason = reason.trim() || 'त्यौहार / परफॉर्मेंस इंसेंटिव';
     const entryDate = date.trim() || getTodayDateString();
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     try {
+      // onSaveIncentive (App.tsx) persists to Firestore & dispatches the single authoritative background SMS
       await onSaveIncentive(rider.id, {
         amount: numericAmount,
         reason: cleanReason,
         date: entryDate,
       });
-
-      // Prepare share text
-      const smsMessage = formatIncentiveSmsText({
-        riderName: rider.name,
-        amount: numericAmount,
-        reason: cleanReason,
-        totalIncentive: projectedTotalIncentive,
-        statementUrl,
-      });
-
-      // 100% Automated Background SMS Dispatch (No manual prompt/popup)
-      dispatchAutomatedSms({
-        riderPhone: rider.phone,
-        riderName: rider.name,
-        message: smsMessage,
-        type: 'general',
-        statementUrl,
-        amount: numericAmount,
-      }).catch((smsErr) => console.warn('Background incentive SMS error:', smsErr));
 
       setToastMessage(
         isNativeAndroid()
@@ -156,6 +141,7 @@ export const RiderIncentiveModal: React.FC<RiderIncentiveModalProps> = ({
       console.error('Error saving incentive:', err);
       setErrorMessage('इंसेंटिव सुरक्षित करने में त्रुटि हुई। कृपया पुनः प्रयास करें।');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
