@@ -2014,7 +2014,7 @@ function MainCourierApp() {
           await batchUpdateDeliveriesAndSettlement(targetUid, affectedEntries, undefined, currentOwnerEmail);
         }
       if (riderWithOwnership.active === false || riderWithOwnership.status === 'inactive' || riderWithOwnership.isDeleted) {
-        cleanupDeletedRiderInCodSystem(targetUid || 'guest', riderWithOwnership.id, riderWithOwnership.phone, { permanent: false }).catch(() => {});
+        cleanupDeletedRiderInCodSystem(targetUid || 'guest', riderWithOwnership.id, riderWithOwnership.phone, { permanent: false, riderName: riderWithOwnership.name }).catch(() => {});
       }
       setSyncStatus('synced');
       } catch (err) {
@@ -2022,7 +2022,7 @@ function MainCourierApp() {
       }
     } else {
       if (riderWithOwnership.active === false || riderWithOwnership.status === 'inactive' || riderWithOwnership.isDeleted) {
-        cleanupDeletedRiderInCodSystem('guest', riderWithOwnership.id, riderWithOwnership.phone, { permanent: false }).catch(() => {});
+        cleanupDeletedRiderInCodSystem('guest', riderWithOwnership.id, riderWithOwnership.phone, { permanent: false, riderName: riderWithOwnership.name }).catch(() => {});
       }
       setSyncStatus('local');
     }
@@ -2046,7 +2046,7 @@ function MainCourierApp() {
           console.error('Error soft-deleting rider from Firestore', err);
         }
       } else {
-        cleanupDeletedRiderInCodSystem('guest', id, deletedRider?.phone, { permanent: false }).catch(() => {});
+        cleanupDeletedRiderInCodSystem('guest', id, deletedRider?.phone, { permanent: false, riderName: deletedRider?.name }).catch(() => {});
         setSyncStatus('local');
       }
       setToastMessage({
@@ -2150,7 +2150,7 @@ function MainCourierApp() {
         throw err;
       }
     } else {
-      cleanupDeletedRiderInCodSystem('guest', riderId, removedRider?.phone, { permanent: true }).catch(() => {});
+      cleanupDeletedRiderInCodSystem('guest', riderId, removedRider?.phone, { permanent: true, riderName: removedRider?.name }).catch(() => {});
     }
   };
 
@@ -2247,7 +2247,7 @@ function MainCourierApp() {
     } else if (trashedRiderIds.length > 0) {
       for (const trashedId of trashedRiderIds) {
         const trashedRider = riders.find((r) => r.id === trashedId);
-        cleanupDeletedRiderInCodSystem('guest', trashedId, trashedRider?.phone, { permanent: true }).catch(() => {});
+        cleanupDeletedRiderInCodSystem('guest', trashedId, trashedRider?.phone, { permanent: true, riderName: trashedRider?.name }).catch(() => {});
       }
     }
     setToastMessage({

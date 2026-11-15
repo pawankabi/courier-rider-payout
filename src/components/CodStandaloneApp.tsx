@@ -80,6 +80,7 @@ import {
   withTransientAckTimeout,
   PendingCodLedgerTransfer,
   hasRealRecordedCodData,
+  hasNonZeroCodFinancialData,
   isRiderEligibleForCod,
   removeEntryAndRiderFromCodSystem,
   deleteCodStaffMember,
@@ -169,10 +170,10 @@ export const CodStandaloneApp: React.FC<Props> = ({
       activeRidersList.map((r) => (r.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
     );
     return entries.filter((e) => {
-      if (!e) return false;
-      if (e.status === 'locked' || hasRealRecordedCodData(e)) return true;
+      if (!e || e.isDeleted || (e as any).status === 'deleted') return false;
       const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
-      return Boolean((e.riderId && activeIds.has(e.riderId)) || (cleanPhone && activePhones.has(cleanPhone)));
+      const isActive = Boolean((e.riderId && activeIds.has(e.riderId)) || (cleanPhone && activePhones.has(cleanPhone)));
+      return isActive || hasNonZeroCodFinancialData(e);
     });
   };
 
@@ -425,7 +426,7 @@ export const CodStandaloneApp: React.FC<Props> = ({
         await deleteCodStaffMember(userId, staff);
         if (staff.role === 'rider') {
           const cleanPhone = (staff.phone || '').replace(/\D/g, '').slice(-10);
-          await cleanupDeletedRiderInCodSystem(userId, staff.riderId || staff.id, cleanPhone, { permanent: false });
+          await cleanupDeletedRiderInCodSystem(userId, staff.riderId || staff.id, cleanPhone, { permanent: false, riderName: staff.name });
         }
         setStaffUsers((prev) => prev.filter((s) => s.id !== staff.id));
         showToast(`🗑️ "${staff.name}" का PIN और एक्सेस रिकॉर्ड हटा दिया गया!`, 'success');
@@ -486,10 +487,31 @@ export const CodStandaloneApp: React.FC<Props> = ({
     setGridEntries((prev) => {
       if (!prev || prev.length === 0) return prev;
       const byId = new Map(activeTenantRiders.map((r) => [r.id, r]));
-      const presentIds = new Set(prev.map((e) => e.riderId));
+      const byPhone = new Map<string, Rider>();
+      activeTenantRiders.forEach((r) => {
+        const cp = (r.phone || '').replace(/\D/g, '').slice(-10);
+        if (cp) byPhone.set(cp, r);
+      });
       let changed = false;
-      const updated = prev.map((e) => {
-        const matched = byId.get(e.riderId);
+      const kept = prev.filter((e) => {
+        if (!e || e.isDeleted || (e as any).status === 'deleted') {
+          changed = true;
+          return false;
+        }
+        const ep = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+        const isActive = Boolean((e.riderId && byId.has(e.riderId)) || (ep && byPhone.has(ep)));
+        if (isActive || hasNonZeroCodFinancialData(e)) return true;
+        changed = true;
+        return false;
+      });
+
+      const presentIds = new Set(kept.map((e) => e.riderId));
+      const presentPhones = new Set(
+        kept.map((e) => (e.riderPhone || '').replace(/\D/g, '').slice(-10)).filter(Boolean)
+      );
+      const updated = kept.map((e) => {
+        const ep = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
+        const matched = byId.get(e.riderId) || (ep ? byPhone.get(ep) : undefined);
         if (matched && (e.riderName !== matched.name || e.riderPhone !== matched.phone)) {
           changed = true;
           return { ...e, riderName: matched.name, riderPhone: matched.phone };
@@ -497,7 +519,8 @@ export const CodStandaloneApp: React.FC<Props> = ({
         return e;
       });
       activeTenantRiders.forEach((r) => {
-        if (!presentIds.has(r.id)) {
+        const rp = (r.phone || '').replace(/\D/g, '').slice(-10);
+        if (!presentIds.has(r.id) && (!rp || !presentPhones.has(rp))) {
           changed = true;
           updated.push({
             id: `cod_${selectedDate}_${r.id}`,
@@ -847,10 +870,11 @@ export const CodStandaloneApp: React.FC<Props> = ({
           );
 
           (sheetData.entries || []).forEach((e) => {
+            if (!e || e.isDeleted || (e as any).status === 'deleted') return;
             const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
             const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
               (cleanPhone && processedPhones.has(cleanPhone));
-            if (!isProcessed && hasRealRecordedCodData(e)) {
+            if (!isProcessed && hasNonZeroCodFinancialData(e)) {
               merged.push(e);
               if (e.riderId) processedIds.add(e.riderId);
               if (cleanPhone) processedPhones.add(cleanPhone);

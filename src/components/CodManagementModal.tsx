@@ -68,6 +68,7 @@ import {
   withTransientAckTimeout,
   PendingCodLedgerTransfer,
   hasRealRecordedCodData,
+  hasNonZeroCodFinancialData,
   isRiderEligibleForCod,
   removeEntryAndRiderFromCodSystem,
   deleteCodStaffMember,
@@ -328,7 +329,7 @@ export const CodManagementModal: React.FC<Props> = ({
         await deleteCodStaffMember(userId, staff);
         if (staff.role === 'rider') {
           const cleanPhone = (staff.phone || '').replace(/\D/g, '').slice(-10);
-          await cleanupDeletedRiderInCodSystem(userId, staff.riderId || staff.id, cleanPhone, { permanent: false });
+          await cleanupDeletedRiderInCodSystem(userId, staff.riderId || staff.id, cleanPhone, { permanent: false, riderName: staff.name });
         }
         setStaffUsers((prev) => prev.filter((s) => s.id !== staff.id));
         showToast(`🗑️ "${staff.name}" का PIN और एक्सेस रिकॉर्ड हटा दिया गया!`, 'success');
@@ -515,10 +516,11 @@ export const CodManagementModal: React.FC<Props> = ({
           );
 
           (sheetData.entries || []).forEach((e) => {
+            if (!e || e.isDeleted || (e as any).status === 'deleted') return;
             const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
             const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
               (cleanPhone && processedPhones.has(cleanPhone));
-            if (!isProcessed && hasRealRecordedCodData(e)) {
+            if (!isProcessed && hasNonZeroCodFinancialData(e)) {
               merged.push(e);
               if (e.riderId) processedIds.add(e.riderId);
               if (cleanPhone) processedPhones.add(cleanPhone);

@@ -77,6 +77,7 @@ import {
   removePendingCodLedgerTransfer,
   withTransientAckTimeout,
   hasRealRecordedCodData,
+  hasNonZeroCodFinancialData,
   isRiderEligibleForCod
 } from '../services/codService';
 import { getTodayDateString, getDaysAgoDateString, formatINR } from '../utils/formatters';
@@ -1021,11 +1022,12 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       );
 
       rawSheetEntries.forEach((e) => {
+        if (!e || e.isDeleted || (e as any).status === 'deleted') return;
         if (e.date && e.date !== selectedDate) return;
         const cleanPhone = (e.riderPhone || '').replace(/\D/g, '').slice(-10);
         const isProcessed = (e.riderId && processedIds.has(e.riderId)) ||
           (cleanPhone && processedPhones.has(cleanPhone));
-        if (!isProcessed && hasRealRecordedCodData(e)) {
+        if (!isProcessed && hasNonZeroCodFinancialData(e)) {
           merged.push(e);
           if (e.riderId) processedIds.add(e.riderId);
           if (cleanPhone) processedPhones.add(cleanPhone);
@@ -1051,9 +1053,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     // Fallback if hubRiders is loading: once loaded with 0 active riders, never resurrect 0-value deleted/phantom rows
     if (rawSheetEntries && rawSheetEntries.length > 0) {
       const validEntries = rawSheetEntries.filter((e) => {
-        if (!e || (e.date && e.date !== selectedDate)) return false;
+        if (!e || e.isDeleted || (e as any).status === 'deleted' || (e.date && e.date !== selectedDate)) return false;
         if (!hasLoadedHubRiders) return true;
-        return hasRealRecordedCodData(e) || (isRider && isMatchingRiderRow(e));
+        return hasNonZeroCodFinancialData(e) || (isRider && isMatchingRiderRow(e));
       });
       if (isRider && authUser) {
         return [...validEntries].sort((a, b) => {

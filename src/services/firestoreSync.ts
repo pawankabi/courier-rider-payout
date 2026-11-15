@@ -2436,10 +2436,12 @@ export async function saveRiderToFirestore(
 export async function deleteRiderFromFirestore(userId: string, riderId: string): Promise<void> {
   if (!userId || !riderId) return;
   let riderPhone = '';
+  let riderName = '';
   try {
     const snap = await getDoc(doc(db, 'workspaces', userId, 'riders', riderId));
     if (snap.exists()) {
       riderPhone = snap.data()?.phone || '';
+      riderName = snap.data()?.name || '';
     }
   } catch {}
 
@@ -2461,10 +2463,10 @@ export async function deleteRiderFromFirestore(userId: string, riderId: string):
   } catch (err) {
     console.warn('Root rider soft-delete notice:', err);
   }
-  // Deactivate COD companion PIN & prune blank today's COD ghost row immediately
+  // Deactivate COD companion PIN & prune blank COD ghost rows immediately across all dates
   try {
     const { cleanupDeletedRiderInCodSystem } = await import('./codService');
-    await cleanupDeletedRiderInCodSystem(userId, riderId, riderPhone, { permanent: false });
+    await cleanupDeletedRiderInCodSystem(userId, riderId, riderPhone, { permanent: false, riderName });
   } catch {}
 }
 
@@ -4037,19 +4039,22 @@ export async function permanentlyDeleteRiderFromFirestore(
 ): Promise<void> {
   if (!riderId) return;
 
-  // Lookup phone before deleting so cod_staff_pins and today's unlocked COD sheets can be purged too
+  // Lookup phone & name before deleting so cod_staff_pins and COD sheets can be purged too
   let riderPhone = '';
+  let riderName = '';
   try {
     if (userId && userId !== 'guest') {
       const wsSnap = await getDoc(doc(db, 'workspaces', userId, 'riders', riderId)).catch(() => null);
       if (wsSnap && wsSnap.exists()) {
         riderPhone = wsSnap.data()?.phone || '';
+        riderName = wsSnap.data()?.name || '';
       }
     }
-    if (!riderPhone) {
+    if (!riderPhone || !riderName) {
       const rootSnap = await getDoc(doc(db, 'riders', riderId)).catch(() => null);
       if (rootSnap && rootSnap.exists()) {
-        riderPhone = rootSnap.data()?.phone || '';
+        if (!riderPhone) riderPhone = rootSnap.data()?.phone || '';
+        if (!riderName) riderName = rootSnap.data()?.name || '';
       }
     }
   } catch {}
@@ -4105,7 +4110,7 @@ export async function permanentlyDeleteRiderFromFirestore(
 
   try {
     const { cleanupDeletedRiderInCodSystem } = await import('./codService');
-    await cleanupDeletedRiderInCodSystem(userId, riderId, riderPhone, { permanent: true });
+    await cleanupDeletedRiderInCodSystem(userId, riderId, riderPhone, { permanent: true, riderName });
   } catch {}
 }
 
@@ -4162,15 +4167,18 @@ export async function emptyAllTrashInFirestore(
     if (clean !== advanceId) allAdvIds.push(clean);
   });
 
-  // Fetch rider phones before deleting rider docs so COD staff PINs & sheets are purged cleanly too
+  // Fetch rider phones & names before deleting rider docs so COD staff PINs & sheets are purged cleanly too
   const riderPhones = new Map<string, string>();
+  const riderNames = new Map<string, string>();
   if (trashedRiderIds.length > 0 && userId && userId !== 'guest') {
     await Promise.all(
       trashedRiderIds.map(async (rId) => {
         try {
           const snap = await getDoc(doc(db, 'workspaces', userId, 'riders', rId));
-          if (snap.exists() && snap.data()?.phone) {
-            riderPhones.set(rId, snap.data().phone);
+          if (snap.exists()) {
+            const d = snap.data();
+            if (d?.phone) riderPhones.set(rId, d.phone);
+            if (d?.name) riderNames.set(rId, d.name);
           }
         } catch {}
       })
@@ -4268,7 +4276,10 @@ export async function emptyAllTrashInFirestore(
       const { cleanupDeletedRiderInCodSystem } = await import('./codService');
       await Promise.all(
         trashedRiderIds.map((rId) =>
-          cleanupDeletedRiderInCodSystem(userId, rId, riderPhones.get(rId), { permanent: true })
+          cleanupDeletedRiderInCodSystem(userId, rId, riderPhones.get(rId), {
+            permanent: true,
+            riderName: riderNames.get(rId),
+          })
         )
       );
     } catch {}

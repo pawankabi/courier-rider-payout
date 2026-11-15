@@ -623,6 +623,8 @@ export interface CodDailyEntry {
   verifiedAt?: string;
   lockedAt?: string;
   notes?: string;
+  isDeleted?: boolean;
+  deletedAt?: string;
   updatedAt: string;
   updatedBy?: string;
 }
