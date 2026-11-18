@@ -64,7 +64,7 @@ function getSettlementContext(settlements?: SettlementRecord[], riderId?: string
 }
 
 /**
- * STANDARD KHATABOOK / BANKING FORMULAS:
+ * STANDARD HISAB KITAB / BANKING FORMULAS:
  * Check if an incentive is active and unsettled.
  * Timeless / State-Scoped: Stays active across ALL time horizons until fully settled by a paid settlement.
  */
@@ -116,7 +116,7 @@ export function calculateActiveIncentiveTotal(
 }
 
 /**
- * STANDARD KHATABOOK / BANKING FORMULAS:
+ * STANDARD HISAB KITAB / BANKING FORMULAS:
  * Check if an advance is active and unsettled/unrecovered.
  * Timeless / State-Scoped: Stays active across ALL time horizons until fully settled or recovered.
  */

@@ -46,7 +46,7 @@ import {
   loadSettlementsFromStorage,
   setCachedAuthUserId 
 } from '../utils/storage';
-import { purgePhantomAdvances } from '../utils/pureLedgerEngine';
+import { purgePhantomAdvances, isPhantomOrSyntheticAdvance } from '../utils/pureLedgerEngine';
 import { calculateActiveAdvanceTotal, calculateActiveIncentiveTotal } from '../utils/payoutCalculations';
 import {
   enforceLocalStorageHeadroom,
@@ -2720,7 +2720,8 @@ export async function syncPublicRiderStatement(
   settlements: SettlementRecord[] = [],
   deliveries: DeliveryEntry[] = [],
   hubName?: string,
-  hubSignature?: string
+  hubSignature?: string,
+  options?: { isAccountReset?: boolean }
 ): Promise<void> {
   if (!rider?.id) return;
   try {
@@ -2731,9 +2732,13 @@ export async function syncPublicRiderStatement(
       item.status !== 'DELETED' &&
       item.status !== 'RESET_ARCHIVED';
 
-    // Read existing doc once when either settlements or deliveries are omitted/empty so we NEVER wipe them
+    const isSyntheticSettlementAdv = (a: any) =>
+      Boolean(a?.id && String(a.id).startsWith('settlement_adv_'));
+
+    // Always read existing doc unless this is an explicit account reset,
+    // so partial updates (like COD companion modal or single-entry saves) NEVER drop historical records.
     let existingDocData: PublicRiderStatement | null = null;
-    if (!settlements || settlements.length === 0 || !deliveries || deliveries.length === 0) {
+    if (!options?.isAccountReset) {
       try {
         const snap = await getDoc(docRef);
         if (snap.exists()) {
@@ -2744,98 +2749,108 @@ export async function syncPublicRiderStatement(
       }
     }
 
-    // Purge phantom & soft-deleted advances
-    const rawAdvances = (advances.length > 0 ? advances : (rider.advances || [])).filter(isNotDeleted);
-    const cleanAdvances = purgePhantomAdvances(rawAdvances);
-
-    // If settlements parameter is not passed or empty, NEVER wipe out authentic settlements!
-    let riderSettlements: any[] = [];
-    if (settlements && settlements.length > 0) {
-      riderSettlements = settlements
-        .filter((s) => !s.isDeleted && (s.riderId === rider.id || (rider.phone && (s as any).riderPhone === rider.phone)))
-        .sort((a, b) => new Date(b.paidAt || b.startDate).getTime() - new Date(a.paidAt || a.startDate).getTime())
-        .map((s) => ({
-          id: s.id,
-          startDate: s.startDate,
-          endDate: s.endDate,
-          totalParcels: Number(s.totalParcels) || 0,
-          baseAmount: Number(s.baseAmount) || 0,
-          incentiveAmount: Number(s.incentiveAmount) || 0,
-          grossTotal: Number(s.grossTotal) || 0,
-          advanceAmount: Number(s.advanceAmount) || 0,
-          advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
-          advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
-          netTotal: Number(s.netTotal) || 0,
-          paidAt: s.paidAt || s.endDate,
-          status: s.status || 'PAID',
-          settledAdvanceIds: s.settledAdvanceIds,
-          settledIncentiveIds: s.settledIncentiveIds,
-        }));
-    } else {
-      if (existingDocData && Array.isArray(existingDocData.salaries) && existingDocData.salaries.length > 0) {
-        riderSettlements = existingDocData.salaries;
+    const callerAdvancesRaw = advances.length > 0 ? advances : (rider.advances || []);
+    const deletedAdvIds = new Set<string>();
+    [...callerAdvancesRaw, ...(rider.advances || [])].forEach((a) => {
+      if (a && !isNotDeleted(a) && a.id) {
+        deletedAdvIds.add(String(a.id).trim());
+        deletedAdvIds.add(String(a.id).replace(/^adv-/, '').trim());
       }
+    });
 
-      // If still empty, query collectionGroup('settlements') to find all authentic settlements for this rider
-      if (riderSettlements.length === 0) {
-        try {
-          const qSettle = query(collectionGroup(db, 'settlements'), where('riderId', '==', rider.id));
-          const snapSettle = await getDocs(qSettle);
-          if (!snapSettle.empty) {
-            riderSettlements = snapSettle.docs
-              .map((d) => d.data() as SettlementRecord)
-              .filter((s) => !s.isDeleted)
-              .map((s) => ({
-                id: s.id,
-                startDate: s.startDate,
-                endDate: s.endDate,
-                totalParcels: Number(s.totalParcels) || 0,
-                baseAmount: Number(s.baseAmount) || 0,
-                incentiveAmount: Number(s.incentiveAmount) || 0,
-                grossTotal: Number(s.grossTotal) || 0,
-                advanceAmount: Number(s.advanceAmount) || 0,
-                advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
-                advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
-                netTotal: Number(s.netTotal) || 0,
-                paidAt: s.paidAt || s.endDate,
-                status: s.status || 'PAID',
-                settledAdvanceIds: s.settledAdvanceIds,
-                settledIncentiveIds: s.settledIncentiveIds,
-              }));
-          }
-        } catch (e) {
-          console.warn('collectionGroup settlements lookup notice:', e);
-        }
+    // Respect local tombstones if workspaceId is known
+    const knownOwnerId = (rider.workspaceId || rider.userId || '').trim();
+    if (knownOwnerId && knownOwnerId !== 'guest') {
+      const localTombs = getLocalDeletedTombstones(knownOwnerId);
+      localTombs.advanceIds.forEach((id) => deletedAdvIds.add(id));
+    }
+
+    const advMap = new Map<string, RiderAdvanceEntry>();
+    if (!options?.isAccountReset && existingDocData && Array.isArray(existingDocData.advances)) {
+      existingDocData.advances.forEach((a) => {
+        if (!a || !isNotDeleted(a) || isSyntheticSettlementAdv(a)) return;
+        const cleanId = String(a.id || '').replace(/^adv-/, '').trim();
+        if (a.id && (deletedAdvIds.has(a.id) || deletedAdvIds.has(cleanId))) return;
+        const key = String(a.id || `${a.date}_${a.amount}_${a.reason}`).trim();
+        advMap.set(key, a);
+      });
+    }
+    callerAdvancesRaw.forEach((a) => {
+      if (!a || !isNotDeleted(a) || isSyntheticSettlementAdv(a)) return;
+      const key = String(a.id || `${a.date}_${a.amount}_${a.reason}`).trim();
+      const prev = advMap.get(key);
+      advMap.set(key, prev ? { ...prev, ...a } : a);
+    });
+    const cleanAdvances = purgePhantomAdvances(Array.from(advMap.values()));
+
+    // Merge settlements across caller and existing doc so older paid cycles are never wiped out
+    const salMap = new Map<string, any>();
+    if (!options?.isAccountReset && existingDocData && Array.isArray(existingDocData.salaries)) {
+      existingDocData.salaries.forEach((s: any) => {
+        if (!s || s.isDeleted) return;
+        const key = s.id || `${s.startDate}_${s.endDate}`;
+        salMap.set(key, s);
+      });
+    }
+
+    if (settlements && settlements.length > 0) {
+      settlements
+        .filter((s) => !s.isDeleted && (s.riderId === rider.id || (rider.phone && (s as any).riderPhone === rider.phone)))
+        .forEach((s) => {
+          const key = s.id || `${s.startDate}_${s.endDate}`;
+          salMap.set(key, {
+            id: s.id,
+            startDate: s.startDate,
+            endDate: s.endDate,
+            totalParcels: Number(s.totalParcels) || 0,
+            baseAmount: Number(s.baseAmount) || 0,
+            incentiveAmount: Number(s.incentiveAmount) || 0,
+            grossTotal: Number(s.grossTotal) || 0,
+            advanceAmount: Number(s.advanceAmount) || 0,
+            advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
+            advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
+            netTotal: Number(s.netTotal) || 0,
+            paidAt: s.paidAt || s.endDate,
+            status: s.status || 'PAID',
+            settledAdvanceIds: s.settledAdvanceIds,
+            settledIncentiveIds: s.settledIncentiveIds,
+          });
+        });
+    } else if (salMap.size === 0) {
+      // If caller omitted settlements and existing doc had none, query collectionGroup('settlements')
+      try {
+        const qSettle = query(collectionGroup(db, 'settlements'), where('riderId', '==', rider.id));
+        const snapSettle = await getDocs(qSettle);
+        snapSettle.docs.forEach((d) => {
+          const s = d.data() as SettlementRecord;
+          if (!s || s.isDeleted) return;
+          const key = s.id || `${s.startDate}_${s.endDate}`;
+          salMap.set(key, {
+            id: s.id,
+            startDate: s.startDate,
+            endDate: s.endDate,
+            totalParcels: Number(s.totalParcels) || 0,
+            baseAmount: Number(s.baseAmount) || 0,
+            incentiveAmount: Number(s.incentiveAmount) || 0,
+            grossTotal: Number(s.grossTotal) || 0,
+            advanceAmount: Number(s.advanceAmount) || 0,
+            advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
+            advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
+            netTotal: Number(s.netTotal) || 0,
+            paidAt: s.paidAt || s.endDate,
+            status: s.status || 'PAID',
+            settledAdvanceIds: s.settledAdvanceIds,
+            settledIncentiveIds: s.settledIncentiveIds,
+          });
+        });
+      } catch (e) {
+        console.warn('collectionGroup settlements lookup notice:', e);
       }
     }
 
-    // Dynamically pull authentic advances directly from settlements into advances
-    riderSettlements.forEach((s) => {
-      if (s.advanceAmount > 0) {
-        const hasMatch = cleanAdvances.some(
-          (a) =>
-            a.id === `settlement_adv_${s.id}` ||
-            a.id === s.id ||
-            a.settlementId === s.id ||
-            a.settledPayoutId === s.id ||
-            ((s as any).settledAdvanceIds && (s as any).settledAdvanceIds.includes(a.id)) ||
-            (!a.settlementId && !a.settledPayoutId && Math.abs(Number(a.amount) - s.advanceAmount) < 0.01)
-        );
-        if (!hasMatch) {
-          cleanAdvances.push({
-            id: `settlement_adv_${s.id}`,
-            riderId: rider.id,
-            amount: s.advanceAmount,
-            date: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
-            createdAt: s.advanceDate || s.paidAt || s.startDate,
-            reason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
-            isSettled: true,
-            isDeducted: true,
-            status: 'PAID',
-          });
-        }
-      }
-    });
+    const riderSettlements: any[] = Array.from(salMap.values()).sort(
+      (a, b) => new Date(b.paidAt || b.startDate).getTime() - new Date(a.paidAt || a.startDate).getTime()
+    );
 
     const sortedAdvances = [...cleanAdvances].sort((a, b) => {
       const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
@@ -2862,17 +2877,38 @@ export async function syncPublicRiderStatement(
           status: d.status,
           settlementId: d.settlementId,
         }));
-    } else if (existingDocData && Array.isArray(existingDocData.recentDeliveries)) {
+    } else if (!options?.isAccountReset && existingDocData && Array.isArray(existingDocData.recentDeliveries)) {
       recentDeliveries = existingDocData.recentDeliveries;
     }
 
-    const sortedIncentives = [...(rider.incentives || [])]
-      .filter(isNotDeleted)
-      .sort((a, b) => {
-        const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
-        const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
-        return timeB - timeA;
+    // Merge incentives across caller and existing doc so settled bonus history never gets wiped out
+    const deletedIncIds = new Set<string>();
+    (rider.incentives || []).forEach((i) => {
+      if (i && !isNotDeleted(i) && i.id) {
+        deletedIncIds.add(String(i.id).trim());
+      }
+    });
+    const incMap = new Map<string, RiderIncentiveEntry>();
+    if (!options?.isAccountReset && existingDocData && Array.isArray(existingDocData.incentives)) {
+      existingDocData.incentives.forEach((i) => {
+        if (!i || !isNotDeleted(i) || (Number(i.amount) || 0) <= 0) return;
+        if (i.id && deletedIncIds.has(String(i.id).trim())) return;
+        const key = String(i.id || `${i.date}_${i.amount}_${i.reason}`).trim();
+        incMap.set(key, i);
       });
+    }
+    (rider.incentives || []).forEach((i) => {
+      if (!i || !isNotDeleted(i) || (Number(i.amount) || 0) <= 0) return;
+      const key = String(i.id || `${i.date}_${i.amount}_${i.reason}`).trim();
+      const prev = incMap.get(key);
+      incMap.set(key, prev ? { ...prev, ...i } : i);
+    });
+
+    const sortedIncentives = Array.from(incMap.values()).sort((a, b) => {
+      const timeA = a.date ? new Date(a.date).getTime() : new Date(a.createdAt).getTime();
+      const timeB = b.date ? new Date(b.date).getTime() : new Date(b.createdAt).getTime();
+      return timeB - timeA;
+    });
 
     const canonicalRawAdv = calculateActiveAdvanceTotal(sortedAdvances, riderSettlements as any, rider.id);
     const canonicalRawInc = calculateActiveIncentiveTotal(sortedIncentives, riderSettlements as any, rider.id);
@@ -2950,7 +2986,8 @@ export function subscribeToPublicRiderStatement(
 /**
  * Fetch public read-only statement by riderId from Firestore (/public_statements/{riderId})
  * Callable without authentication.
- * Fetches rider profile, advances, delivery entries, and settlements.
+ * Merges across public_statements, rider profile, advances, incentives, and settlements so
+ * historical settled entries are never dropped.
  */
 export async function fetchPublicRiderStatement(
   riderId: string
@@ -2984,63 +3021,12 @@ export async function fetchPublicRiderStatement(
       item.status !== 'DELETED' &&
       item.status !== 'RESET_ARCHIVED';
 
-    // If existing statement exists, ensure its salaries and advances are complete and deleted items are stripped
-    if (existingStatement) {
-      if (Array.isArray(existingStatement.advances)) {
-        existingStatement.advances = purgePhantomAdvances(existingStatement.advances.filter(isNotDeleted));
-      }
-      if (Array.isArray(existingStatement.incentives)) {
-        existingStatement.incentives = existingStatement.incentives.filter(isNotDeleted);
-      }
-
-      // Check if salaries are missing or empty in this existingStatement
-      if (!Array.isArray(existingStatement.salaries) || existingStatement.salaries.length === 0) {
-        try {
-          const qSettle = query(collectionGroup(db, 'settlements'), where('riderId', 'in', [cleanId, decodedId]));
-          const snapSettle = await getDocs(qSettle);
-          if (!snapSettle.empty) {
-            existingStatement.salaries = snapSettle.docs
-              .map((d) => d.data() as SettlementRecord)
-              .filter((s) => !s.isDeleted)
-              .map((s) => ({
-                id: s.id,
-                startDate: s.startDate,
-                endDate: s.endDate,
-                totalParcels: Number(s.totalParcels) || 0,
-                baseAmount: Number(s.baseAmount) || 0,
-                incentiveAmount: Number(s.incentiveAmount) || 0,
-                grossTotal: Number(s.grossTotal) || 0,
-                advanceAmount: Number(s.advanceAmount) || 0,
-                advanceDate: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
-                advanceReason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
-                netTotal: Number(s.netTotal) || 0,
-                paidAt: s.paidAt || s.endDate,
-                status: s.status || 'PAID',
-                settledAdvanceIds: s.settledAdvanceIds,
-                settledIncentiveIds: s.settledIncentiveIds,
-              }));
-            // Background save back to document so it stays locked & permanent
-            setDoc(doc(db, 'public_statements', cleanId), { salaries: existingStatement.salaries }, { merge: true }).catch(() => {});
-          }
-        } catch (e) {
-          console.warn('Background settlements replenishment notice:', e);
-        }
-      }
-
-      // If existing statement has detailed advances or deliveries/salaries, return it
-      if (
-        (existingStatement.advances && existingStatement.advances.length > 0) ||
-        (existingStatement.salaries && existingStatement.salaries.length > 0) ||
-        (existingStatement.recentDeliveries && existingStatement.recentDeliveries.length > 0)
-      ) {
-        return existingStatement;
-      }
-    }
+    const isSyntheticSettlementAdv = (a: any) =>
+      Boolean(a?.id && String(a.id).startsWith('settlement_adv_'));
 
     // 2. Fetch rider profile document (prefer collectionGroup /workspaces/*/riders over legacy root /riders)
     let foundRider: Rider | null = null;
 
-    // Check collectionGroup('riders') first so workspace-authoritative data wins over stale root doc
     try {
       const qRider = query(collectionGroup(db, 'riders'), where('id', '==', cleanId), limit(1));
       const snapRider = await getDocs(qRider);
@@ -3051,7 +3037,6 @@ export async function fetchPublicRiderStatement(
       console.warn('collectionGroup riders notice:', err);
     }
 
-    // Check direct /riders/{id}
     if (!foundRider) {
       try {
         const riderDirectSnap = await getDoc(doc(db, 'riders', cleanId));
@@ -3066,7 +3051,6 @@ export async function fetchPublicRiderStatement(
       } catch {}
     }
 
-    // Check query on collection('riders')
     if (!foundRider) {
       try {
         const qDirect = query(collection(db, 'riders'), where('id', '==', cleanId), limit(1));
@@ -3077,7 +3061,6 @@ export async function fetchPublicRiderStatement(
       } catch {}
     }
 
-    // Local storage fallback
     if (!foundRider) {
       try {
         const raw = localStorage.getItem('cp_riders');
@@ -3089,274 +3072,204 @@ export async function fetchPublicRiderStatement(
       } catch {}
     }
 
-    // If foundRider not found, create a safe fallback statement object
-    const safeFallback: PublicRiderStatement = existingStatement || {
-      riderId: cleanId,
-      riderName: `राइडर (${cleanId})`,
-      riderPhone: '',
-      vehicleType: 'Hero Splendor (Bike)',
-      hubName: 'कूरियर डिलीवरी हब',
-      hubSignature: 'कूरियर डिलीवरी हब',
-      totalAdvance: 0,
-      advances: [],
-      salaries: [],
-      recentDeliveries: [],
-      updatedAt: new Date().toISOString(),
+    // 3. Merge advances across existingStatement, foundRider, collectionGroup('advances'), and root /advances
+    const deletedAdvIds = new Set<string>();
+    const advMap = new Map<string, RiderAdvanceEntry>();
+    const recordAdv = (a: any) => {
+      if (!a || !a.id) return;
+      const aId = String(a.id).trim();
+      if (!isNotDeleted(a)) {
+        deletedAdvIds.add(aId);
+        deletedAdvIds.add(aId.replace(/^adv-/, ''));
+        advMap.delete(aId);
+        return;
+      }
+      if (isSyntheticSettlementAdv(a)) return;
+      if (deletedAdvIds.has(aId) || deletedAdvIds.has(aId.replace(/^adv-/, ''))) return;
+      const prev = advMap.get(aId);
+      advMap.set(aId, prev ? { ...prev, ...a } : a);
     };
 
-    if (!foundRider) {
-      return safeFallback;
+    if (existingStatement && Array.isArray(existingStatement.advances)) {
+      existingStatement.advances.forEach(recordAdv);
+    }
+    if (foundRider && Array.isArray(foundRider.advances)) {
+      foundRider.advances.forEach(recordAdv);
     }
 
-    // 3. Merge advances from foundRider and collectionGroup('advances')
-    const advMap = new Map<string, RiderAdvanceEntry>();
-    (Array.isArray(foundRider.advances) ? foundRider.advances : []).forEach((a) => {
-      if (a && a.id) advMap.set(a.id, a);
-    });
     try {
-      const qAdv = query(collectionGroup(db, 'advances'), where('riderId', '==', cleanId));
-      const snapAdv = await getDocs(qAdv);
-      snapAdv.docs.forEach((d) => {
-        const a = d.data() as RiderAdvanceEntry;
-        if (a && a.id) {
-          const prev = advMap.get(a.id);
-          advMap.set(a.id, prev ? { ...prev, ...a } : a);
-        }
-      });
+      const qAdvGroup = query(collectionGroup(db, 'advances'), where('riderId', 'in', cleanId === decodedId ? [cleanId] : [cleanId, decodedId]));
+      const snapAdvGroup = await getDocs(qAdvGroup);
+      snapAdvGroup.docs.forEach((d) => recordAdv(d.data()));
     } catch {}
-    let advances: RiderAdvanceEntry[] = purgePhantomAdvances(Array.from(advMap.values()).filter(isNotDeleted));
+    try {
+      const qAdvRoot = query(collection(db, 'advances'), where('riderId', 'in', cleanId === decodedId ? [cleanId] : [cleanId, decodedId]));
+      const snapAdvRoot = await getDocs(qAdvRoot);
+      snapAdvRoot.docs.forEach((d) => recordAdv(d.data()));
+    } catch {}
 
-    // 3b. Merge incentives from foundRider and collectionGroup('incentives')
+    const advances: RiderAdvanceEntry[] = purgePhantomAdvances(Array.from(advMap.values()).filter(isNotDeleted));
+
+    // 3b. Merge incentives across existingStatement, foundRider, collectionGroup('incentives'), and root /incentives
+    const deletedIncIds = new Set<string>();
     const incMap = new Map<string, RiderIncentiveEntry>();
-    (Array.isArray(foundRider.incentives) ? foundRider.incentives : []).forEach((i) => {
-      if (i && i.id) incMap.set(i.id, i);
-    });
+    const recordInc = (i: any) => {
+      if (!i || !i.id) return;
+      const iId = String(i.id).trim();
+      if (!isNotDeleted(i)) {
+        deletedIncIds.add(iId);
+        incMap.delete(iId);
+        return;
+      }
+      if (deletedIncIds.has(iId)) return;
+      const prev = incMap.get(iId);
+      incMap.set(iId, prev ? { ...prev, ...i } : i);
+    };
+
+    if (existingStatement && Array.isArray(existingStatement.incentives)) {
+      existingStatement.incentives.forEach(recordInc);
+    }
+    if (foundRider && Array.isArray(foundRider.incentives)) {
+      foundRider.incentives.forEach(recordInc);
+    }
+
     try {
-      const qInc = query(collectionGroup(db, 'incentives'), where('riderId', '==', cleanId));
-      const snapInc = await getDocs(qInc);
-      snapInc.docs.forEach((d) => {
-        const i = d.data() as RiderIncentiveEntry;
-        if (i && i.id) {
-          const prev = incMap.get(i.id);
-          incMap.set(i.id, prev ? { ...prev, ...i } : i);
+      const qIncGroup = query(collectionGroup(db, 'incentives'), where('riderId', 'in', cleanId === decodedId ? [cleanId] : [cleanId, decodedId]));
+      const snapIncGroup = await getDocs(qIncGroup);
+      snapIncGroup.docs.forEach((d) => recordInc(d.data()));
+    } catch {}
+    try {
+      const qIncRoot = query(collection(db, 'incentives'), where('riderId', 'in', cleanId === decodedId ? [cleanId] : [cleanId, decodedId]));
+      const snapIncRoot = await getDocs(qIncRoot);
+      snapIncRoot.docs.forEach((d) => recordInc(d.data()));
+    } catch {}
+
+    const incentives: RiderIncentiveEntry[] = Array.from(incMap.values()).filter(
+      (i) => isNotDeleted(i) && (Number(i.amount) || 0) > 0
+    );
+
+    // 4. Fetch & merge settlements from existingStatement, collectionGroup('settlements'), and root /settlements
+    const salariesMap = new Map<string, any>();
+    const mapSalaryDoc = (s: any) => ({
+      id: s.id,
+      startDate: s.startDate,
+      endDate: s.endDate,
+      totalParcels: Number(s.totalParcels) || 0,
+      baseAmount: Number(s.baseAmount) || 0,
+      incentiveAmount: Number(s.incentiveAmount) || 0,
+      grossTotal: Number(s.grossTotal) || 0,
+      advanceAmount: Number(s.advanceAmount) || 0,
+      advanceDate: s.advanceDate,
+      advanceReason: s.advanceReason,
+      netTotal: Number(s.netTotal) || 0,
+      paidAt: s.paidAt,
+      status: s.status || 'PAID',
+      settledAdvanceIds: s.settledAdvanceIds,
+      settledIncentiveIds: s.settledIncentiveIds,
+    });
+
+    if (existingStatement && Array.isArray(existingStatement.salaries)) {
+      existingStatement.salaries.forEach((s: any) => {
+        if (s && !s.isDeleted) {
+          const key = s.id || `${s.startDate}_${s.endDate}`;
+          salariesMap.set(key, mapSalaryDoc(s));
         }
       });
-    } catch {}
-    let incentives: RiderIncentiveEntry[] = Array.from(incMap.values()).filter(isNotDeleted);
+    }
 
-    // 4. Fetch & merge settlements from BOTH collectionGroup('settlements') (workspace-authoritative) AND root settlements
-    const salariesMap = new Map<string, any>();
     try {
-      const qSettleGroup = query(collectionGroup(db, 'settlements'), where('riderId', '==', cleanId));
+      const qSettleGroup = query(collectionGroup(db, 'settlements'), where('riderId', 'in', cleanId === decodedId ? [cleanId] : [cleanId, decodedId]));
       const snapSettleGroup = await getDocs(qSettleGroup);
       snapSettleGroup.docs.forEach((d) => {
         const s = d.data() as SettlementRecord;
         if (s && !s.isDeleted) {
           const key = s.id || `${s.startDate}_${s.endDate}`;
-          salariesMap.set(key, {
-            id: s.id,
-            startDate: s.startDate,
-            endDate: s.endDate,
-            totalParcels: s.totalParcels,
-            baseAmount: s.baseAmount,
-            incentiveAmount: s.incentiveAmount,
-            grossTotal: s.grossTotal,
-            advanceAmount: s.advanceAmount || 0,
-            advanceDate: s.advanceDate,
-            advanceReason: s.advanceReason,
-            netTotal: s.netTotal,
-            paidAt: s.paidAt,
-            status: s.status || 'PAID',
-            settledAdvanceIds: s.settledAdvanceIds,
-            settledIncentiveIds: s.settledIncentiveIds,
-          });
+          salariesMap.set(key, mapSalaryDoc(s));
         }
       });
     } catch {}
+
     try {
-      const qSettlements = query(collection(db, 'settlements'), where('riderId', '==', cleanId));
+      const qSettlements = query(collection(db, 'settlements'), where('riderId', 'in', cleanId === decodedId ? [cleanId] : [cleanId, decodedId]));
       const snapSettlements = await getDocs(qSettlements);
       snapSettlements.docs.forEach((d) => {
         const s = d.data() as SettlementRecord;
         if (s && !s.isDeleted) {
           const key = s.id || `${s.startDate}_${s.endDate}`;
           if (!salariesMap.has(key)) {
-            salariesMap.set(key, {
-              id: s.id,
-              startDate: s.startDate,
-              endDate: s.endDate,
-              totalParcels: s.totalParcels,
-              baseAmount: s.baseAmount,
-              incentiveAmount: s.incentiveAmount,
-              grossTotal: s.grossTotal,
-              advanceAmount: s.advanceAmount || 0,
-              advanceDate: s.advanceDate,
-              advanceReason: s.advanceReason,
-              netTotal: s.netTotal,
-              paidAt: s.paidAt,
-              status: s.status || 'PAID',
-              settledAdvanceIds: s.settledAdvanceIds,
-              settledIncentiveIds: s.settledIncentiveIds,
-            });
+            salariesMap.set(key, mapSalaryDoc(s));
           }
         }
       });
     } catch {}
+
     let salaries: any[] = Array.from(salariesMap.values());
 
-    // Check localStorage settlements fallback
     if (salaries.length === 0) {
       try {
         const rawS = localStorage.getItem('cp_settlements');
         if (rawS) {
           const cachedS: SettlementRecord[] = JSON.parse(rawS);
           salaries = cachedS
-            .filter((s) => s.riderId === cleanId || s.riderId === decodedId)
-            .map((s) => ({
-              id: s.id,
-              startDate: s.startDate,
-              endDate: s.endDate,
-              totalParcels: s.totalParcels,
-              baseAmount: s.baseAmount,
-              incentiveAmount: s.incentiveAmount,
-              grossTotal: s.grossTotal,
-              advanceAmount: s.advanceAmount || 0,
-              netTotal: s.netTotal,
-              paidAt: s.paidAt,
-              status: s.status || 'PAID',
-            }));
+            .filter((s) => !s.isDeleted && (s.riderId === cleanId || s.riderId === decodedId))
+            .map(mapSalaryDoc);
         }
       } catch {}
     }
 
-    // 5. Fetch delivery entries (from root deliveries or collectionGroup)
-    let recentDeliveries: any[] = [];
-    try {
-      const qDel = query(collection(db, 'deliveries'), where('riderId', '==', cleanId), limit(100));
-      const snapDel = await getDocs(qDel);
-      if (!snapDel.empty) {
-        recentDeliveries = snapDel.docs.map((d) => {
-          const e = d.data() as DeliveryEntry;
-          return {
-            id: e.id,
-            date: e.date,
-            parcels: e.parcels,
-            totalEarnings: e.totalEarnings,
-            status: e.status,
-            settlementId: e.settlementId,
-          };
-        });
-      }
-    } catch {}
+    // 5. Preserve recentDeliveries if present (not rendered in ledger sheet)
+    const recentDeliveries: any[] =
+      existingStatement && Array.isArray(existingStatement.recentDeliveries)
+        ? existingStatement.recentDeliveries
+        : [];
 
-    if (recentDeliveries.length === 0) {
-      try {
-        const qEntries = query(collectionGroup(db, 'entries'), where('riderId', '==', cleanId), limit(100));
-        const snapEntries = await getDocs(qEntries);
-        if (!snapEntries.empty) {
-          recentDeliveries = snapEntries.docs.map((d) => {
-            const e = d.data() as DeliveryEntry;
-            return {
-              id: e.id,
-              date: e.date,
-              parcels: e.parcels,
-              totalEarnings: e.totalEarnings,
-              status: e.status,
-              settlementId: e.settlementId,
-            };
-          });
-        }
-      } catch {}
+    const effectiveRiderId = foundRider?.id || existingStatement?.riderId || cleanId;
+    const effectiveRiderName = foundRider?.name || existingStatement?.riderName || `राइडर (${cleanId})`;
+
+    if (!foundRider && !existingStatement && advances.length === 0 && incentives.length === 0 && salaries.length === 0) {
+      return {
+        riderId: cleanId,
+        riderName: `राइडर (${cleanId})`,
+        riderPhone: '',
+        vehicleType: 'Hero Splendor (Bike)',
+        hubName: 'कूरियर डिलीवरी हब',
+        hubSignature: 'कूरियर डिलीवरी हब',
+        totalAdvance: 0,
+        advances: [],
+        totalIncentive: 0,
+        incentives: [],
+        salaries: [],
+        recentDeliveries: [],
+        updatedAt: new Date().toISOString(),
+      };
     }
 
-    if (recentDeliveries.length === 0) {
-      try {
-        const qDeliveries = query(collectionGroup(db, 'deliveries'), where('riderId', 'in', [cleanId, decodedId]), limit(100));
-        const snapDeliveries = await getDocs(qDeliveries);
-        if (!snapDeliveries.empty) {
-          recentDeliveries = snapDeliveries.docs.map((d) => {
-            const e = d.data() as DeliveryEntry;
-            return {
-              id: e.id,
-              date: e.date,
-              parcels: e.parcels,
-              totalEarnings: e.totalEarnings,
-              status: e.status,
-            };
-          });
-        }
-      } catch {}
-    }
-
-    // Local storage deliveries fallback
-    if (recentDeliveries.length === 0) {
-      try {
-        const rawD = localStorage.getItem('cp_deliveries');
-        if (rawD) {
-          const cachedD: DeliveryEntry[] = JSON.parse(rawD);
-          recentDeliveries = cachedD
-            .filter((e) => e.riderId === cleanId || e.riderId === decodedId)
-            .slice(0, 100)
-            .map((e) => ({
-              id: e.id,
-              date: e.date,
-              parcels: e.parcels,
-              totalEarnings: e.totalEarnings,
-              status: e.status,
-            }));
-        }
-      } catch {}
-    }
-
-    // Include authentic advances from settlements if not already present in advances
-    salaries.forEach((s) => {
-      if (s.advanceAmount > 0) {
-        const hasMatch = advances.some(
-          (a) =>
-            a.id === `settlement_adv_${s.id}` ||
-            a.id === s.id ||
-            a.settlementId === s.id ||
-            a.settledPayoutId === s.id ||
-            ((s as any).settledAdvanceIds && (s as any).settledAdvanceIds.includes(a.id)) ||
-            (!a.settlementId && !a.settledPayoutId && Math.abs(Number(a.amount) - s.advanceAmount) < 0.01)
-        );
-        if (!hasMatch) {
-          advances.push({
-            id: `settlement_adv_${s.id}`,
-            riderId: foundRider.id,
-            amount: s.advanceAmount,
-            date: s.advanceDate || s.paidAt?.split('T')[0] || s.startDate,
-            createdAt: s.advanceDate || s.paidAt || s.startDate,
-            reason: s.advanceReason || `एडवांस राशि (पे-आउट सेटलमेंट ${s.startDate} से ${s.endDate})`,
-            isSettled: true,
-            isDeducted: true,
-            status: 'PAID',
-          });
-        }
-      }
-    });
+    const canonicalRawAdv = calculateActiveAdvanceTotal(advances, salaries as any, effectiveRiderId);
+    const canonicalRawInc = calculateActiveIncentiveTotal(incentives, salaries as any, effectiveRiderId);
 
     const constructedStatement: PublicRiderStatement = {
-      riderId: foundRider.id,
-      riderName: foundRider.name,
-      riderPhone: foundRider.phone,
-      vehicleType: foundRider.vehicleType || 'Hero Splendor (Bike)',
-      hubName: 'कूरियर डिलीवरी हब',
-      hubSignature: 'कूरियर डिलीवरी हब',
-      totalAdvance: typeof foundRider.totalAdvance === 'number' ? foundRider.totalAdvance : 0,
+      riderId: effectiveRiderId,
+      riderName: effectiveRiderName,
+      riderPhone: foundRider?.phone || existingStatement?.riderPhone || '',
+      vehicleType: foundRider?.vehicleType || existingStatement?.vehicleType || 'Hero Splendor (Bike)',
+      hubName: existingStatement?.hubName || 'कूरियर डिलीवरी हब',
+      hubSignature: existingStatement?.hubSignature || 'कूरियर डिलीवरी हब',
+      totalAdvance: Math.max(0, canonicalRawAdv - canonicalRawInc),
       advances,
-      totalIncentive: typeof foundRider.totalIncentive === 'number' ? foundRider.totalIncentive : 0,
+      totalIncentive: Math.max(0, canonicalRawInc - canonicalRawAdv),
       incentives,
       salaries,
       recentDeliveries,
       updatedAt: new Date().toISOString(),
     };
 
-    // Cache back to public_statements document for fast subsequent loads
-    try {
-      const docRefToSave = doc(db, 'public_statements', cleanId);
-      setDoc(docRefToSave, cleanForFirestore(constructedStatement), { merge: true }).catch(() => {});
-    } catch {}
+    // Cache merged result back to public_statements when authenticated admin/caller triggered replenishment
+    if (auth?.currentUser && (advances.length > (existingStatement?.advances?.length || 0) || incentives.length > (existingStatement?.incentives?.length || 0) || salaries.length > (existingStatement?.salaries?.length || 0))) {
+      try {
+        const docRefToSave = doc(db, 'public_statements', cleanId);
+        setDoc(docRefToSave, cleanForFirestore(constructedStatement), { merge: true }).catch(() => {});
+      } catch {}
+    }
 
     return constructedStatement;
   } catch (err) {
@@ -3376,6 +3289,8 @@ export async function fetchPublicRiderStatement(
             hubSignature: 'कूरियर डिलीवरी हब',
             totalAdvance: typeof matched.totalAdvance === 'number' ? matched.totalAdvance : 0,
             advances: Array.isArray(matched.advances) ? matched.advances : [],
+            totalIncentive: typeof matched.totalIncentive === 'number' ? matched.totalIncentive : 0,
+            incentives: Array.isArray(matched.incentives) ? matched.incentives : [],
             salaries: [],
             recentDeliveries: [],
             updatedAt: new Date().toISOString(),
@@ -3393,6 +3308,8 @@ export async function fetchPublicRiderStatement(
       hubSignature: 'कूरियर डिलीवरी हब',
       totalAdvance: 0,
       advances: [],
+      totalIncentive: 0,
+      incentives: [],
       salaries: [],
       recentDeliveries: [],
       updatedAt: new Date().toISOString(),
@@ -3418,6 +3335,494 @@ export async function syncAllRidersPublicStatements(
       console.warn('Notice syncing statement for rider:', r.name, e);
     }
   }
+}
+
+/**
+ * Recover historical Advances, Cash Recoveries, Incentives/Bonuses, and Settlements from
+ * workspace subcollections, root collections, legacy user subcollections, and public_statements.
+ *
+ * STRICT INVARIANTS:
+ * 1. Respects deleted tombstones, soft-deleted items (`isDeleted`, `status === 'DELETED'`), and `RESET_ARCHIVED`.
+ * 2. Preserves current active balances (`totalAdvance`, `totalIncentive`) with ZERO change:
+ *    newly recovered historical entries not already active on the rider are safely locked as `isSettled: true` (`PAID`)
+ *    whenever needed so active balances never shift by even ₹1.
+ * 3. Persists recovered history back to workspace collections & `public_statements/{riderId}`.
+ */
+export async function recoverRiderLedgerHistoryFromFirestore(
+  userId: string,
+  currentRiders: Rider[],
+  currentSettlements: SettlementRecord[] = [],
+  userEmail?: string | null,
+  deliveries: DeliveryEntry[] = [],
+  hubName?: string,
+  hubSignature?: string
+): Promise<{
+  recoveredRiders: Rider[];
+  recoveredSettlements: SettlementRecord[];
+  recoveredAdvanceCount: number;
+  recoveredIncentiveCount: number;
+  recoveredSettlementCount: number;
+  hasChanges: boolean;
+}> {
+  if (!userId || userId === 'guest' || !Array.isArray(currentRiders) || currentRiders.length === 0) {
+    return {
+      recoveredRiders: currentRiders || [],
+      recoveredSettlements: currentSettlements || [],
+      recoveredAdvanceCount: 0,
+      recoveredIncentiveCount: 0,
+      recoveredSettlementCount: 0,
+      hasChanges: false,
+    };
+  }
+
+  const isNotDeleted = (item: any) =>
+    Boolean(item) &&
+    item.isDeleted !== true &&
+    item.status !== 'DELETED' &&
+    item.status !== 'RESET_ARCHIVED';
+
+  const isSyntheticToken = (item: any) => {
+    const id = String(item?.id || '').trim();
+    return (
+      id.startsWith('settlement_adv_') ||
+      id.startsWith('adv_cf_') ||
+      id.startsWith('settle_adj') ||
+      id.startsWith('adv-settlement-implicit') ||
+      id.startsWith('adv_rem_') ||
+      id.startsWith('adv_deficit_') ||
+      id.endsWith('_rem')
+    );
+  };
+
+  // 1. Load tombstones so permanently deleted items are NEVER resurrected
+  const tombstones = await fetchMergedDeletedTombstones(userId).catch(() => getLocalDeletedTombstones(userId));
+  const deadRiderIds = new Set<string>(tombstones.riderIds || []);
+  const deadAdvIds = new Set<string>(tombstones.advanceIds || []);
+  const deadIncIds = new Set<string>();
+  const deadEntryOrSettleIds = new Set<string>(tombstones.entryIds || []);
+
+  const activeRiders = currentRiders.filter((r) => r && !r.isDeleted && !deadRiderIds.has(r.id));
+  const activeRiderIds = activeRiders.map((r) => r.id).filter(Boolean);
+  const phoneToRiderId = new Map<string, string>();
+  activeRiders.forEach((r) => {
+    const p = String(r.phone || '').replace(/\D/g, '').slice(-10);
+    if (p) phoneToRiderId.set(p, r.id);
+  });
+
+  const resolveTargetRiderId = (item: any, fallbackRiderId?: string): string | null => {
+    const rId = String(item?.riderId || fallbackRiderId || '').trim();
+    if (rId && activeRiderIds.includes(rId)) return rId;
+    const p = String(item?.riderPhone || '').replace(/\D/g, '').slice(-10);
+    if (p && phoneToRiderId.has(p)) return phoneToRiderId.get(p) || null;
+    return null;
+  };
+
+  // Chunk riderIds into groups of 10 for Firestore `in` queries
+  const riderIdChunks: string[][] = [];
+  for (let i = 0; i < activeRiderIds.length; i += 10) {
+    riderIdChunks.push(activeRiderIds.slice(i, i + 10));
+  }
+
+  // Track all recovered items per rider
+  const advPoolByRider = new Map<string, Map<string, RiderAdvanceEntry>>();
+  const incPoolByRider = new Map<string, Map<string, RiderIncentiveEntry>>();
+  const settledMap = new Map<string, SettlementRecord>();
+
+  activeRiders.forEach((r) => {
+    advPoolByRider.set(r.id, new Map());
+    incPoolByRider.set(r.id, new Map());
+    (r.advances || []).forEach((a) => {
+      if (!a || !a.id) return;
+      const cleanId = String(a.id).replace(/^adv-/, '').trim();
+      if (!isNotDeleted(a)) {
+        deadAdvIds.add(a.id);
+        deadAdvIds.add(cleanId);
+        return;
+      }
+      if (!isSyntheticToken(a)) {
+        advPoolByRider.get(r.id)!.set(a.id, a);
+      }
+    });
+    (r.incentives || []).forEach((i) => {
+      if (!i || !i.id) return;
+      if (!isNotDeleted(i)) {
+        deadIncIds.add(i.id);
+        return;
+      }
+      if ((Number(i.amount) || 0) > 0) {
+        incPoolByRider.get(r.id)!.set(i.id, i);
+      }
+    });
+  });
+
+  currentSettlements.forEach((s) => {
+    if (!s || !s.id) return;
+    if (s.isDeleted) {
+      deadEntryOrSettleIds.add(s.id);
+      return;
+    }
+    settledMap.set(s.id, s);
+  });
+
+  const collectAdvDoc = (raw: any, fallbackRiderId?: string) => {
+    if (!raw) return;
+    const id = String(raw.id || '').trim();
+    if (!id) return;
+    const cleanId = id.replace(/^adv-/, '').trim();
+    if (!isNotDeleted(raw)) {
+      deadAdvIds.add(id);
+      deadAdvIds.add(cleanId);
+      advPoolByRider.forEach((m) => {
+        m.delete(id);
+        m.delete(cleanId);
+      });
+      return;
+    }
+    if (deadAdvIds.has(id) || deadAdvIds.has(cleanId) || isSyntheticToken(raw) || isPhantomOrSyntheticAdvance(raw)) return;
+    const rId = resolveTargetRiderId(raw, fallbackRiderId);
+    if (!rId) return;
+    const map = advPoolByRider.get(rId);
+    if (!map) return;
+    const prev = map.get(id);
+    // Keep existing status if already in active rider list, otherwise add missing historical record
+    if (!prev) {
+      map.set(id, { ...raw, id, riderId: rId });
+    } else if (raw.reason && !prev.reason) {
+      map.set(id, { ...prev, reason: raw.reason });
+    }
+  };
+
+  const collectIncDoc = (raw: any, fallbackRiderId?: string) => {
+    if (!raw) return;
+    const id = String(raw.id || '').trim();
+    if (!id || (Number(raw.amount) || 0) <= 0) return;
+    if (!isNotDeleted(raw)) {
+      deadIncIds.add(id);
+      incPoolByRider.forEach((m) => m.delete(id));
+      return;
+    }
+    if (deadIncIds.has(id)) return;
+    const rId = resolveTargetRiderId(raw, fallbackRiderId);
+    if (!rId) return;
+    const map = incPoolByRider.get(rId);
+    if (!map) return;
+    const prev = map.get(id);
+    if (!prev) {
+      map.set(id, { ...raw, id, riderId: rId });
+    } else if (raw.reason && !prev.reason) {
+      map.set(id, { ...prev, reason: raw.reason });
+    }
+  };
+
+  const collectSettleDoc = (raw: any) => {
+    if (!raw || !raw.id) return;
+    if (raw.isDeleted) {
+      deadEntryOrSettleIds.add(raw.id);
+      settledMap.delete(raw.id);
+      return;
+    }
+    if (deadEntryOrSettleIds.has(raw.id)) return;
+    const rId = resolveTargetRiderId(raw);
+    if (!rId) return;
+    if (!settledMap.has(raw.id)) {
+      settledMap.set(raw.id, { ...raw, riderId: rId });
+    }
+  };
+
+  // 2. Gather from Workspace + Root + Legacy Users + Public Statements in parallel
+  const fetchTasks: Promise<void>[] = [];
+
+  // 2a. Workspace & Root advances scoped to userId / workspaceId
+  fetchTasks.push(
+    getDocs(collection(db, 'workspaces', userId, 'advances'))
+      .then((snap) => snap.docs.forEach((d) => collectAdvDoc({ id: d.id, ...d.data() })))
+      .catch(() => {})
+  );
+  fetchTasks.push(
+    getDocs(query(collection(db, 'advances'), where('workspaceId', '==', userId)))
+      .then((snap) => snap.docs.forEach((d) => collectAdvDoc({ id: d.id, ...d.data() })))
+      .catch(() => {})
+  );
+  fetchTasks.push(
+    getDocs(query(collection(db, 'advances'), where('userId', '==', userId)))
+      .then((snap) => snap.docs.forEach((d) => collectAdvDoc({ id: d.id, ...d.data() })))
+      .catch(() => {})
+  );
+
+  // 2b. Workspace & Root incentives scoped to userId / workspaceId
+  fetchTasks.push(
+    getDocs(collection(db, 'workspaces', userId, 'incentives'))
+      .then((snap) => snap.docs.forEach((d) => collectIncDoc({ id: d.id, ...d.data() })))
+      .catch(() => {})
+  );
+  fetchTasks.push(
+    getDocs(query(collection(db, 'incentives'), where('workspaceId', '==', userId)))
+      .then((snap) => snap.docs.forEach((d) => collectIncDoc({ id: d.id, ...d.data() })))
+      .catch(() => {})
+  );
+  fetchTasks.push(
+    getDocs(query(collection(db, 'incentives'), where('userId', '==', userId)))
+      .then((snap) => snap.docs.forEach((d) => collectIncDoc({ id: d.id, ...d.data() })))
+      .catch(() => {})
+  );
+
+  // 2c. Scoped riderId `in` queries on root /advances, /incentives, and /settlements
+  riderIdChunks.forEach((chunk) => {
+    fetchTasks.push(
+      getDocs(query(collection(db, 'advances'), where('riderId', 'in', chunk)))
+        .then((snap) => snap.docs.forEach((d) => collectAdvDoc({ id: d.id, ...d.data() })))
+        .catch(() => {})
+    );
+    fetchTasks.push(
+      getDocs(query(collection(db, 'incentives'), where('riderId', 'in', chunk)))
+        .then((snap) => snap.docs.forEach((d) => collectIncDoc({ id: d.id, ...d.data() })))
+        .catch(() => {})
+    );
+    fetchTasks.push(
+      getDocs(query(collection(db, 'settlements'), where('riderId', 'in', chunk)))
+        .then((snap) => snap.docs.forEach((d) => collectSettleDoc({ id: d.id, ...d.data() })))
+        .catch(() => {})
+    );
+  });
+
+  // 2d. Legacy users/{userId}/riders & root /riders & public_statements/{riderId}
+  fetchTasks.push(
+    getDocs(collection(db, 'users', userId, 'riders'))
+      .then((snap) => {
+        snap.docs.forEach((d) => {
+          const rData = d.data() as Rider;
+          const rId = resolveTargetRiderId({ ...rData, id: rData.id || d.id });
+          if (!rId) return;
+          (rData.advances || []).forEach((a) => collectAdvDoc(a, rId));
+          (rData.incentives || []).forEach((i) => collectIncDoc(i, rId));
+        });
+      })
+      .catch(() => {})
+  );
+
+  activeRiders.forEach((r) => {
+    fetchTasks.push(
+      getDoc(doc(db, 'riders', r.id))
+        .then((snap) => {
+          if (!snap.exists()) return;
+          const rData = snap.data() as Rider;
+          (rData.advances || []).forEach((a) => collectAdvDoc(a, r.id));
+          (rData.incentives || []).forEach((i) => collectIncDoc(i, r.id));
+        })
+        .catch(() => {})
+    );
+    fetchTasks.push(
+      getDoc(doc(db, 'public_statements', r.id))
+        .then((snap) => {
+          if (!snap.exists()) return;
+          const stmt = snap.data() as PublicRiderStatement;
+          (stmt.advances || []).forEach((a) => collectAdvDoc(a, r.id));
+          (stmt.incentives || []).forEach((i) => collectIncDoc(i, r.id));
+          (stmt.salaries || []).forEach((s) => {
+            if (s && s.id) {
+              collectSettleDoc({ ...s, riderId: r.id, riderName: r.name, riderPhone: r.phone });
+            }
+          });
+        })
+        .catch(() => {})
+    );
+  });
+
+  await Promise.allSettled(fetchTasks);
+
+  const recoveredSettlements = Array.from(settledMap.values()).sort(
+    (a, b) => new Date(b.paidAt || b.startDate).getTime() - new Date(a.paidAt || a.startDate).getTime()
+  );
+  const recoveredSettlementCount = Math.max(0, recoveredSettlements.length - currentSettlements.length);
+
+  let recoveredAdvanceCount = 0;
+  let recoveredIncentiveCount = 0;
+  let hasChanges = recoveredSettlementCount > 0;
+
+  const ridersToPersist: Rider[] = [];
+  const advancesToPersist: Array<{ rider: Rider; adv: RiderAdvanceEntry }> = [];
+  const incentivesToPersist: Array<{ rider: Rider; inc: RiderIncentiveEntry }> = [];
+
+  const recoveredRiders = currentRiders.map((rider) => {
+    if (!rider || rider.isDeleted || deadRiderIds.has(rider.id)) return rider;
+
+    const riderSettlements = recoveredSettlements.filter(
+      (s) => !s.isDeleted && (s.riderId === rider.id || (rider.phone && s.riderPhone === rider.phone))
+    );
+    const paidSettlements = riderSettlements.filter(
+      (s) => !s.status || s.status.trim().toUpperCase() === 'PAID' || s.status.trim().toUpperCase() === 'SETTLED'
+    );
+    const latestPaidDate = paidSettlements
+      .map((s) => s.endDate || (s.paidAt ? s.paidAt.split('T')[0] : ''))
+      .filter(Boolean)
+      .sort()
+      .pop() || '';
+    const settledAdvIds = new Set<string>();
+    const settledIncIds = new Set<string>();
+    paidSettlements.forEach((s) => {
+      (s.settledAdvanceIds || []).forEach((id) => settledAdvIds.add(String(id).trim()));
+      (s.settledIncentiveIds || []).forEach((id) => settledIncIds.add(String(id).trim()));
+    });
+
+    // Baseline active totals BEFORE recovery (MUST stay 100% unchanged!)
+    const baselineAdv = calculateActiveAdvanceTotal(rider.advances || [], currentSettlements, rider.id);
+    const baselineInc = calculateActiveIncentiveTotal(rider.incentives || [], currentSettlements, rider.id);
+
+    const existingAdvIds = new Set((rider.advances || []).map((a) => String(a.id || '').trim()).filter(Boolean));
+    const existingIncIds = new Set((rider.incentives || []).map((i) => String(i.id || '').trim()).filter(Boolean));
+
+    const pooledAdvs = Array.from(advPoolByRider.get(rider.id)?.values() || []);
+    const pooledIncs = Array.from(incPoolByRider.get(rider.id)?.values() || []);
+
+    const finalAdvs: RiderAdvanceEntry[] = [...(rider.advances || [])];
+    const finalIncs: RiderIncentiveEntry[] = [...(rider.incentives || [])];
+
+    let riderChanged = false;
+
+    pooledAdvs.forEach((cand) => {
+      if (!cand || !cand.id || existingAdvIds.has(cand.id)) return;
+      if (deadAdvIds.has(cand.id) || deadAdvIds.has(String(cand.id).replace(/^adv-/, ''))) return;
+
+      const candDate = (cand.date || cand.createdAt || '').split('T')[0];
+      const alreadyMarkedSettled = Boolean(
+        cand.isSettled ||
+        cand.isDeducted ||
+        (cand as any).status === 'PAID' ||
+        (cand as any).status === 'SETTLED' ||
+        cand.settlementId ||
+        cand.settledPayoutId ||
+        settledAdvIds.has(cand.id) ||
+        (latestPaidDate && candDate && candDate <= latestPaidDate)
+      );
+
+      // Balance Preservation Guard: never allow recovered history to raise current active advance above baselineAdv
+      const testAdv = alreadyMarkedSettled ? cand : { ...cand, isSettled: false };
+      const simulatedTotal = calculateActiveAdvanceTotal([...finalAdvs, testAdv], riderSettlements, rider.id);
+      const mustMarkSettled = alreadyMarkedSettled || simulatedTotal > baselineAdv + 0.01;
+
+      const finalizedAdv: RiderAdvanceEntry = mustMarkSettled
+        ? { ...cand, isSettled: true, isDeducted: true, status: 'PAID' }
+        : { ...cand, isSettled: false, isDeducted: false };
+
+      finalAdvs.push(finalizedAdv);
+      advancesToPersist.push({ rider, adv: finalizedAdv });
+      recoveredAdvanceCount++;
+      riderChanged = true;
+    });
+
+    pooledIncs.forEach((cand) => {
+      if (!cand || !cand.id || existingIncIds.has(cand.id)) return;
+      if (deadIncIds.has(cand.id)) return;
+
+      const candDate = (cand.date || cand.createdAt || '').split('T')[0];
+      const alreadyMarkedSettled = Boolean(
+        cand.isSettled ||
+        cand.isPaid ||
+        (cand as any).status === 'PAID' ||
+        (cand as any).status === 'SETTLED' ||
+        cand.settlementId ||
+        cand.settledPayoutId ||
+        cand.settledInPayoutId ||
+        settledIncIds.has(cand.id) ||
+        (latestPaidDate && candDate && candDate <= latestPaidDate)
+      );
+
+      const testInc = alreadyMarkedSettled ? cand : { ...cand, isSettled: false };
+      const simulatedTotal = calculateActiveIncentiveTotal([...finalIncs, testInc], riderSettlements, rider.id);
+      const mustMarkSettled = alreadyMarkedSettled || simulatedTotal > baselineInc + 0.01;
+
+      const finalizedInc: RiderIncentiveEntry = mustMarkSettled
+        ? { ...cand, isSettled: true, isPaid: true, status: 'PAID' }
+        : { ...cand, isSettled: false, isPaid: false };
+
+      finalIncs.push(finalizedInc);
+      incentivesToPersist.push({ rider, inc: finalizedInc });
+      recoveredIncentiveCount++;
+      riderChanged = true;
+    });
+
+    if (!riderChanged) return rider;
+
+    hasChanges = true;
+    const updatedRider: Rider = {
+      ...rider,
+      advances: finalAdvs,
+      incentives: finalIncs,
+      // Explicitly lock existing active balances
+      totalAdvance: Math.max(0, baselineAdv - baselineInc),
+      totalIncentive: Math.max(0, baselineInc - baselineAdv),
+    };
+    ridersToPersist.push(updatedRider);
+    return updatedRider;
+  });
+
+  // 3. Persist recovered records back to workspace Firestore & public_statements in background
+  if (hasChanges) {
+    const persistOps: Promise<any>[] = [];
+
+    ridersToPersist.forEach((r) => {
+      persistOps.push(saveRiderToFirestore(userId, r, userEmail).catch(() => {}));
+      persistOps.push(
+        syncPublicRiderStatement(
+          r,
+          r.advances || [],
+          recoveredSettlements,
+          deliveries,
+          hubName,
+          hubSignature
+        ).catch(() => {})
+      );
+    });
+
+    advancesToPersist.forEach(({ rider, adv }) => {
+      const payload = cleanForFirestore({
+        ...adv,
+        riderId: rider.id,
+        riderName: rider.name,
+        riderPhone: rider.phone,
+        workspaceId: userId,
+        userId,
+      });
+      persistOps.push(setDoc(doc(db, 'workspaces', userId, 'advances', adv.id), payload, { merge: true }).catch(() => {}));
+    });
+
+    incentivesToPersist.forEach(({ rider, inc }) => {
+      const payload = cleanForFirestore({
+        ...inc,
+        riderId: rider.id,
+        riderName: rider.name,
+        riderPhone: rider.phone,
+        workspaceId: userId,
+        userId,
+      });
+      persistOps.push(setDoc(doc(db, 'workspaces', userId, 'incentives', inc.id), payload, { merge: true }).catch(() => {}));
+    });
+
+    if (recoveredSettlementCount > 0) {
+      const existingIds = new Set(currentSettlements.map((s) => s.id));
+      recoveredSettlements
+        .filter((s) => !existingIds.has(s.id))
+        .forEach((s) => {
+          const payload = cleanForFirestore({
+            ...s,
+            workspaceId: userId,
+            userId,
+          });
+          persistOps.push(setDoc(doc(db, 'workspaces', userId, 'settlements', s.id), payload, { merge: true }).catch(() => {}));
+        });
+    }
+
+    await Promise.allSettled(persistOps);
+  }
+
+  return {
+    recoveredRiders,
+    recoveredSettlements,
+    recoveredAdvanceCount,
+    recoveredIncentiveCount,
+    recoveredSettlementCount,
+    hasChanges,
+  };
 }
 
 /**

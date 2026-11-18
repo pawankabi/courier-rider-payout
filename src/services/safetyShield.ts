@@ -222,7 +222,7 @@ export async function auditAndHealAllRiderLedgers(
     };
 
     // 2. Canonical Net Active Advance and Incentive:
-    // Pure Khatabook/Banking single source of truth:
+    // Pure Hisab Kitab/Banking single source of truth:
     // Net Advance = Math.max(0, ActiveUnsettledAdvances - ActiveUnsettledIncentives)
     // Net Incentive = Math.max(0, ActiveUnsettledIncentives - ActiveUnsettledAdvances)
     // Note: Daily operational delivery earnings belong to weekly salary/settlement and do NOT reduce

@@ -193,3 +193,65 @@ table {
   }
 }
 
+/* =========================================================================
+   MULTI-COLOR LIGHTING BRANDING FOR "हिसाब किताब"
+   ========================================================================= */
+@keyframes hisabLightingFlow {
+  0% {
+    background-position: 0% 50%;
+    filter: drop-shadow(0 0 6px rgba(255, 59, 130, 0.45)) drop-shadow(0 0 12px rgba(6, 182, 212, 0.35));
+  }
+  50% {
+    background-position: 100% 50%;
+    filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.45)) drop-shadow(0 0 14px rgba(168, 85, 247, 0.45));
+  }
+  100% {
+    background-position: 0% 50%;
+    filter: drop-shadow(0 0 6px rgba(255, 59, 130, 0.45)) drop-shadow(0 0 12px rgba(6, 182, 212, 0.35));
+  }
+}
+
+@keyframes hisabBorderGlow {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(236, 72, 153, 0.32), 0 0 18px rgba(6, 182, 212, 0.25), inset 0 0 8px rgba(250, 204, 21, 0.12);
+    border-color: rgba(56, 189, 248, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.35), 0 0 20px rgba(168, 85, 247, 0.32), inset 0 0 10px rgba(236, 72, 153, 0.14);
+    border-color: rgba(236, 72, 153, 0.55);
+  }
+}
+
+.hisab-kitab-lighting {
+  background-image: linear-gradient(
+    90deg,
+    #ff3b82 0%,
+    #ff9900 18%,
+    #fde047 36%,
+    #22c55e 54%,
+    #06b6d4 72%,
+    #8b5cf6 88%,
+    #ff3b82 100%
+  );
+  background-size: 240% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: hisabLightingFlow 4.5s linear infinite;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+}
+
+.hisab-kitab-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.14rem 0.55rem;
+  border-radius: 0.65rem;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(30, 27, 75, 0.95));
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  animation: hisabBorderGlow 4.5s ease-in-out infinite;
+}
+
+

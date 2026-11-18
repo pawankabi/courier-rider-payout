@@ -41,6 +41,7 @@ import {
   Banknote,
   Trash2
 } from 'lucide-react';
+import { HisabKitabLabel } from './HisabKitabLabel';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -2536,7 +2537,8 @@ export const CodStandaloneApp: React.FC<Props> = ({
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
               <h1 className="text-xs sm:text-base font-black text-white tracking-tight flex items-center gap-1.5 truncate">
-                <span className="truncate">COD हिसाब-किताब</span>
+                <span>COD</span>
+                <HisabKitabLabel text="हिसाब-किताब" />
                 <span className="hidden sm:inline">Portal</span>
               </h1>
               <span className="hidden md:inline-flex text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">

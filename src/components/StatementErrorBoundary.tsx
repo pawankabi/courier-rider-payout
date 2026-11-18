@@ -1,5 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { Receipt, RefreshCw } from 'lucide-react';
+import { HisabKitabLabel } from './HisabKitabLabel';
 
 interface Props {
   children: ReactNode;
@@ -15,7 +16,7 @@ interface State {
  * 
  * Prevents blank white screen on public statement view.
  * Displays:
- * - Header: "खाता लेजर (Khatabook Statement)"
+ * - Header: "हिसाब किताब"
  * - Friendly message: "खाता विवरण तैयार हो रहा है... कृपया 1 सेकंड बाद पुनः रीफ़्रेश करें।"
  * - Quick 1-tap reload button
  */
@@ -30,7 +31,7 @@ export class StatementErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Khatabook Statement ErrorBoundary captured error:', error, errorInfo);
+    console.error('Hisab Kitab Statement ErrorBoundary captured error:', error, errorInfo);
   }
 
   handleReload = () => {
@@ -48,7 +49,7 @@ export class StatementErrorBoundary extends Component<Props, State> {
 
             <div className="space-y-2">
               <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                हिसाब किताब (Hisab Kitab)
+                <HisabKitabLabel />
               </h1>
               <p className="text-slate-300 text-sm leading-relaxed">
                 खाता विवरण तैयार हो रहा है... कृपया 1 सेकंड बाद पुनः रीफ़्रेश करें।

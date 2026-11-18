@@ -37,6 +37,7 @@ import {
   Download
 } from 'lucide-react';
 import { Rider, DeliveryEntry, SettlementRecord, RiderAdvanceEntry, CodSettings } from '../types';
+import { HisabKitabLabel } from './HisabKitabLabel';
 import { RiderAdvanceModal } from './RiderAdvanceModal';
 import { RiderIncentiveModal } from './RiderIncentiveModal';
 import { generateStatementUrl, formatSalarySmsText, dispatchAutomatedSms, getWhatsAppUrl, getNativeSmsUrl } from '../services/smsService';
@@ -423,7 +424,7 @@ export const RidersTab: React.FC<Props> = ({
     if (phoneError) setPhoneError('');
   };
 
-  // Khatabook-style Phonebook Contact Picker
+  // Direct Phonebook Contact Picker
   const handlePickContact = async () => {
     try {
       setPhoneError('');
@@ -1047,7 +1048,7 @@ export const RidersTab: React.FC<Props> = ({
               <span>+ Add New Rider</span>
             </button>
 
-            {/* Khatabook Direct Pick from Contacts Button */}
+            {/* Direct Pick from Contacts Button */}
             <button
               type="button"
               onClick={async () => {
@@ -1080,7 +1081,8 @@ export const RidersTab: React.FC<Props> = ({
                 title="Open Multi-Company COD हिसाब-किताब & Staff PIN Portal"
               >
                 <Table className="w-4 h-4 text-emerald-400" />
-                <span>💰 COD हिसाब-किताब</span>
+                <span>💰 COD</span>
+                <HisabKitabLabel text="हिसाब-किताब" />
               </button>
             )}
           </div>
@@ -1098,7 +1100,8 @@ export const RidersTab: React.FC<Props> = ({
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-1.5">
-                      <span>COD हिसाब-किताब</span>
+                      <span>COD</span>
+                      <HisabKitabLabel text="हिसाब-किताब" />
                       <span className="text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                         Standalone Sub-App
                       </span>
@@ -1512,7 +1515,7 @@ export const RidersTab: React.FC<Props> = ({
               }
               return true;
             });
-            // STANDARD KHATABOOK / BANKING DOUBLE-ENTRY ACCRUALS (Timeless / State-Scoped)
+            // STANDARD HISAB KITAB / BANKING DOUBLE-ENTRY ACCRUALS (Timeless / State-Scoped)
             // NET OUTSTANDING ADVANCE (Point 2 Fix):
             // When rider took 3000 advance and repaid 2000 in incentive/repayments:
             // Net Advance = 3000 - 2000 = 1000! Net Incentive = 0!
@@ -1688,16 +1691,16 @@ export const RidersTab: React.FC<Props> = ({
                         <span>+ इंसेंटिव</span>
                       </button>
 
-                      {/* Single-Page Khatabook Statement Button */}
+                      {/* Single-Page Hisab Kitab Statement Button */}
                       {onViewLedger && (
                         <button
                           type="button"
                           onClick={() => onViewLedger(rider.id)}
-                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700/80 rounded-xl text-xs font-semibold flex items-center gap-1 transition active:scale-95 cursor-pointer"
-                          title="हिसाब किताब देखें (Hisab Kitab)"
+                          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-cyan-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-sm shadow-cyan-500/10"
+                          title="हिसाब किताब देखें"
                         >
-                          <Receipt className="w-3.5 h-3.5 text-blue-400" />
-                          <span className="hidden sm:inline">हिसाब किताब</span>
+                          <Receipt className="w-3.5 h-3.5 text-cyan-400" />
+                          <HisabKitabLabel className="hidden sm:inline" />
                         </button>
                       )}
 
@@ -1780,11 +1783,11 @@ export const RidersTab: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => onViewLedger(rider.id)}
-                      className="w-full py-2.5 px-2 bg-gradient-to-r from-blue-500/25 to-indigo-600/20 hover:from-blue-500/35 hover:to-indigo-600/30 active:scale-95 text-blue-300 hover:text-blue-100 border border-blue-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-blue-950/40 transition cursor-pointer"
-                      title="हिसाब किताब देखें (Hisab Kitab)"
+                      className="w-full py-2.5 px-2 bg-slate-900 hover:bg-slate-800 active:scale-95 border border-cyan-500/50 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-cyan-950/40 transition cursor-pointer"
+                      title="हिसाब किताब देखें"
                     >
-                      <Receipt className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                      <span className="truncate">हिसाब किताब</span>
+                      <Receipt className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <HisabKitabLabel className="truncate" />
                     </button>
                   )}
                 </div>

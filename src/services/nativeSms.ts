@@ -149,7 +149,7 @@ export interface SendNativeSmsResult {
 }
 
 /**
- * Dispatches an SMS directly via the device's native SIM card in the background (Khatabook style).
+ * Dispatches an SMS directly via the device's native SIM card in the background (Hisab Kitab style).
  * Automatically requests runtime permission and records into system sent messages.
  * Includes in-flight mutex + 60s content deduplication + 120s actionId deduplication.
  */

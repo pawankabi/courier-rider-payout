@@ -1,6 +1,10 @@
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import {
+  notifyPdfDownloaded,
+  savePdfToDeviceDownloadsNative,
+} from '../services/nativeDownload';
 
 export interface ExportFileOptions {
   filename: string;
@@ -10,6 +14,7 @@ export interface ExportFileOptions {
   text?: string;
   dialogTitle?: string;
   encoding?: 'utf8' | 'base64';
+  previewPages?: string[];
 }
 
 function sanitizeFileName(raw: string): string {
@@ -32,7 +37,11 @@ export function isShareCancelError(err: any): boolean {
 
 /**
  * Unified Android Capacitor APK + Web File Exporter.
- * Never uses broken `blob:` `<a download>` links inside native Android WebView.
+ * On Android APK:
+ *  - Saves directly into system public Downloads folder (File Manager -> Downloads) with ZERO browser redirect
+ *  - Fires in-app download notification overlay with instant "Open File" / "View Inside App" buttons
+ * On Web / Mobile Browser:
+ *  - Downloads directly via blob URL and (for PDFs) shows the in-app open/preview bar
  */
 export async function exportFileNativelyOrWeb(options: ExportFileOptions): Promise<void> {
   const safeFilename = sanitizeFileName(options.filename);
@@ -43,13 +52,50 @@ export async function exportFileNativelyOrWeb(options: ExportFileOptions): Promi
     text = `Report: ${safeFilename}`,
     dialogTitle = 'रिपोर्ट सेव या शेयर करें (Save / Share)',
     encoding = 'utf8',
+    previewPages,
   } = options;
 
+  const isPdf = mimeType === 'application/pdf' || safeFilename.toLowerCase().endsWith('.pdf');
+
   if (Capacitor.isNativePlatform()) {
+    // Convert UTF-8 payload to base64 when saving directly to MediaStore Downloads
+    const base64Payload =
+      encoding === 'base64'
+        ? content
+        : typeof window !== 'undefined'
+        ? btoa(unescape(encodeURIComponent(content)))
+        : Buffer.from(content, 'utf8').toString('base64');
+
+    // 1. Primary path: Direct save to Android public Downloads folder (MediaStore / File Manager visible)
+    const directDownload = await savePdfToDeviceDownloadsNative({
+      filename: safeFilename,
+      base64Data: base64Payload,
+      mimeType,
+    });
+
+    if (directDownload?.success) {
+      if (isPdf) {
+        notifyPdfDownloaded({
+          id: `${Date.now()}-${safeFilename}`,
+          filename: directDownload.filename || safeFilename,
+          title,
+          text,
+          mimeType,
+          contentUri: directDownload.contentUri,
+          savedInDownloads: directDownload.savedInDownloads,
+          locationLabel: directDownload.locationLabel || `Downloads/${directDownload.filename || safeFilename}`,
+          previewPages,
+          isNative: true,
+        });
+      }
+      return;
+    }
+
+    // 2. Legacy fallback if NativeDownload plugin is unavailable in an older pre-built shell
     const candidateDirs: Directory[] = [
+      Directory.Documents,
       Directory.Cache,
       Directory.Data,
-      Directory.Documents,
     ];
 
     let writtenUri: string | null = null;
@@ -79,6 +125,22 @@ export async function exportFileNativelyOrWeb(options: ExportFileOptions): Promi
       );
     }
 
+    if (isPdf) {
+      notifyPdfDownloaded({
+        id: `${Date.now()}-${safeFilename}`,
+        filename: safeFilename,
+        title,
+        text,
+        mimeType,
+        contentUri: writtenUri,
+        savedInDownloads: false,
+        locationLabel: safeFilename,
+        previewPages,
+        isNative: true,
+      });
+      return;
+    }
+
     try {
       await Share.share({
         title,
@@ -88,9 +150,8 @@ export async function exportFileNativelyOrWeb(options: ExportFileOptions): Promi
       });
     } catch (shareErr: any) {
       if (isShareCancelError(shareErr)) {
-        return; // User closed the share sheet intentionally; not an error
+        return;
       }
-      // Retry with files array for stricter Android Share intents
       try {
         await Share.share({
           title,
@@ -111,7 +172,7 @@ export async function exportFileNativelyOrWeb(options: ExportFileOptions): Promi
     return;
   }
 
-  // Standard Web Browser download
+  // Standard Web Browser download (no external tab redirect)
   const blob =
     encoding === 'base64'
       ? base64ToBlob(content, mimeType)
@@ -119,11 +180,29 @@ export async function exportFileNativelyOrWeb(options: ExportFileOptions): Promi
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
+  link.rel = 'noopener';
+  link.style.display = 'none';
   link.setAttribute('download', safeFilename);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+  if (isPdf) {
+    notifyPdfDownloaded({
+      id: `${Date.now()}-${safeFilename}`,
+      filename: safeFilename,
+      title,
+      text,
+      mimeType,
+      blobUrl: url,
+      savedInDownloads: true,
+      locationLabel: safeFilename,
+      previewPages,
+      isNative: false,
+    });
+  } else {
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
 }
 
 function base64ToBlob(base64: string, mimeType: string): Blob {

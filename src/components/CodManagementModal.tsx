@@ -33,6 +33,7 @@ import {
   Banknote,
   Trash2,
 } from 'lucide-react';
+import { HisabKitabLabel } from './HisabKitabLabel';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -1483,7 +1484,10 @@ export const CodManagementModal: React.FC<Props> = ({
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
-                  <span>COD हिसाब-किताब</span>
+                  <span className="flex items-center gap-1.5">
+                    <span>COD</span>
+                    <HisabKitabLabel text="हिसाब-किताब" />
+                  </span>
                   <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                     Excel Grid & PIN Portal
                   </span>

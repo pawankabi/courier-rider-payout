@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   FileSpreadsheet, 
-  Printer, 
   ArrowLeft, 
   Phone, 
   Download, 
@@ -23,8 +22,8 @@ import { fetchPublicRiderStatement, subscribeToPublicRiderStatement } from '../s
 import { generateStatementUrl } from '../services/smsService';
 import { loadRidersFromStorage, loadDeliveriesFromStorage, loadSettlementsFromStorage } from '../utils/storage';
 import { calculatePureRiderLedger, UnifiedTransactionItem } from '../utils/pureLedgerEngine';
-import { shareNativeTextNotice } from '../utils/fileExporter';
-import { Capacitor } from '@capacitor/core';
+import { generateRiderLedgerPDF } from '../utils/ledgerPdfGenerator';
+import { HisabKitabLabel } from './HisabKitabLabel';
 
 export type { UnifiedTransactionItem };
 
@@ -42,6 +41,7 @@ export interface RiderLedgerStatementProps {
   onDeleteIncentive?: (incId: string) => Promise<void>;
   onEditIncentive?: (incId: string, updated: { amount: number; reason: string; date: string }) => Promise<void>;
   onResetAccount?: () => Promise<void>;
+  onRecoverLedger?: () => Promise<void>;
 }
 
 export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
@@ -58,6 +58,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   onDeleteIncentive,
   onEditIncentive,
   onResetAccount,
+  onRecoverLedger,
 }) => {
   // Extract or resolve riderId from prop or window location (hash, query, or path)
   const resolvedRiderId = useMemo(() => {
@@ -196,10 +197,25 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   // In-App Confirm Reset Account State (Android WebView safe, zero window.confirm)
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [isResetting, setIsResetting] = useState<boolean>(false);
+  const [isRecovering, setIsRecovering] = useState<boolean>(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3000);
+  };
+
+  const handleRecoverLedgerClick = async () => {
+    if (!isAdmin || !onRecoverLedger || isRecovering) return;
+    setIsRecovering(true);
+    try {
+      await onRecoverLedger();
+      showToast('खाता इतिहास रिकवर और सिंक हो गया!');
+    } catch (err: any) {
+      showToast(`रिकवरी में त्रुटि: ${err?.message || 'अज्ञात समस्या'}`);
+    } finally {
+      setIsRecovering(false);
+    }
   };
 
   // Sync state if initialStatement updates from parent
@@ -222,8 +238,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
 
-    const historyToken = `khatabook-${Date.now()}`;
-    window.history.pushState({ khatabookModal: historyToken }, '');
+    const historyToken = `hisab-kitab-${Date.now()}`;
+    window.history.pushState({ hisabKitabModal: historyToken }, '');
     const handlePopState = () => {
       onBackToApp();
     };
@@ -303,23 +319,6 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     }
   };
 
-  const handlePrint = async () => {
-    if (Capacitor.isNativePlatform()) {
-      const rName = statement?.riderName || 'Rider';
-      await shareNativeTextNotice(
-        `${rName} - खाता विवरण (Ledger Statement)`,
-        `${rName} का लाइव खाता विवरण देखने के लिए लिंक खोलें:`,
-        statementUrl
-      );
-      return;
-    }
-    try {
-      window.print();
-    } catch (err) {
-      console.warn('Native window.print notice:', err);
-    }
-  };
-
   const isRider = !isAdmin;
 
   const effectiveSettlements = useMemo(() => {
@@ -369,6 +368,28 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
   } = useMemo(() => {
     return calculatePureRiderLedger(statement, sortOrder, isRider, effectiveSettlements, effectiveAdvances);
   }, [statement, sortOrder, isRider, effectiveSettlements, effectiveAdvances]);
+
+  const handleDownloadPdf = async () => {
+    if (!statement || isGeneratingPdf) return;
+    setIsGeneratingPdf(true);
+    try {
+      await generateRiderLedgerPDF({
+        statement,
+        timelineRows,
+        totalPlus,
+        totalMinus,
+        netBalance,
+        balanceStatus,
+        balanceLabel,
+      });
+      showToast('हिसाब किताब PDF सफलतापूर्वक तैयार/डाउनलोड हो गया!');
+    } catch (err: any) {
+      console.error('Ledger PDF download error:', err);
+      showToast(`PDF बनाने में त्रुटि: ${err?.message || 'अज्ञात समस्या'}`);
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
 
   // Admin Actions: Delete Row (Android WebView safe, zero window.confirm)
   const handleConfirmDeleteRow = async () => {
@@ -561,8 +582,10 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
         <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <h3 className="text-white text-base font-bold font-sans">
-          राइडर खाता बही लोड हो रहा है...
+        <h3 className="text-white text-base font-bold font-sans flex items-center gap-1.5">
+          <span>राइडर</span>
+          <HisabKitabLabel />
+          <span>लोड हो रहा है...</span>
         </h3>
         <p className="text-slate-400 text-xs mt-1 font-sans">
           कृपया प्रतीक्षा करें...
@@ -601,7 +624,7 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
 
   const cleanDigits = getCleanPhoneDigits(statement.riderPhone);
   const whatsappShareText = encodeURIComponent(
-    `*${statement.riderName} - कूरियर खाता बही*\n` +
+    `*${statement.riderName} - कूरियर हिसाब किताब*\n` +
     `हब: ${statement.hubName}\n` +
     `स्थिति: ${balanceLabel}\n` +
     `विवरण देखने के लिए लिंक खोलें:\n${statementUrl}`
@@ -619,23 +642,25 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
       )}
 
       {/* 1. TOP STICKY APPLICATION BAR (Hidden in Print) */}
-      <header className="sticky top-0 z-40 bg-slate-900 text-white border-b border-slate-800 px-4 py-3 print:hidden shadow-md">
-        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
-          {/* Back button & Title */}
-          <div className="flex items-center gap-2.5 min-w-0">
+      <header className="sticky top-0 z-40 bg-slate-900 text-white border-b border-slate-800 px-3 sm:px-4 py-2.5 print:hidden shadow-md">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          {/* Top Row / Left Side: Prominent Exit/Back Button & Rider Title */}
+          <div className="flex items-center gap-2.5 min-w-0 w-full sm:w-auto">
             {onBackToApp && (
               <button
                 type="button"
                 onClick={onBackToApp}
-                className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition active:scale-95 cursor-pointer"
+                className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold border border-slate-700 transition active:scale-95 cursor-pointer"
                 title="मुख्य ऐप पर वापस जाएं (Esc)"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-4 h-4 shrink-0" />
+                <span>वापस</span>
               </button>
             )}
-            <div className="min-w-0">
-              <h1 className="text-sm sm:text-base font-black truncate text-white">
-                राइडर खाता बही (Rider Khatabook Ledger)
+            <div className="min-w-0 flex-1">
+              <h1 className="text-sm sm:text-base font-black truncate text-white flex items-center gap-1.5">
+                <span>राइडर</span>
+                <HisabKitabLabel className="text-sm sm:text-base" />
               </h1>
               <p className="text-[11px] text-slate-400 truncate">
                 {statement.riderName} • {statement.hubName || 'कूरियर डिलीवरी हब'}
@@ -643,30 +668,33 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
             </div>
           </div>
 
-          {/* Quick Action Buttons */}
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Native Print / PDF Download Button */}
+          {/* Bottom Row on Mobile / Right Side on Desktop: Compact Action Buttons */}
+          <div className="flex items-center flex-wrap gap-1.5 sm:gap-2 shrink-0">
+            {/* Real PDF Download / Share Button (Web, Mobile Browser, Android APK, Rider Link) */}
             <button
               type="button"
-              onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition active:scale-95 shadow-xs cursor-pointer"
-              title="ब्राउज़र प्रिंट या PDF डाउनलोड करें"
+              onClick={handleDownloadPdf}
+              disabled={isGeneratingPdf}
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] sm:text-xs font-bold transition active:scale-95 shadow-xs cursor-pointer disabled:opacity-60"
+              title="हिसाब किताब PDF डाउनलोड करें"
             >
-              <Printer className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">PDF डाउनलोड / प्रिंट</span>
-              <span className="sm:hidden">प्रिंट</span>
+              {isGeneratingPdf ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+              ) : (
+                <Download className="w-3.5 h-3.5 shrink-0" />
+              )}
+              <span>{isGeneratingPdf ? 'PDF बन रहा है...' : 'PDF डाउनलोड'}</span>
             </button>
 
             {/* Copy Public Link */}
             <button
               type="button"
               onClick={handleCopyLink}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition active:scale-95 shadow-xs cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] sm:text-xs font-bold border border-slate-700 transition active:scale-95 shadow-xs cursor-pointer"
               title="राइडर के साथ शेयर करने के लिए लिंक कॉपी करें"
             >
-              {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span className="hidden sm:inline">{copiedLink ? 'कॉपी हो गया!' : 'लिंक कॉपी करें'}</span>
-              <span className="sm:hidden">{copiedLink ? 'कॉपी!' : 'लिंक'}</span>
+              {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> : <Copy className="w-3.5 h-3.5 shrink-0" />}
+              <span>{copiedLink ? 'कॉपी!' : 'लिंक'}</span>
             </button>
 
             {/* WhatsApp Share */}
@@ -674,23 +702,37 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               href={`https://wa.me/?text=${whatsappShareText}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-slate-950 text-xs font-bold transition active:scale-95 shadow-xs cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-slate-950 text-[11px] sm:text-xs font-bold transition active:scale-95 shadow-xs cursor-pointer"
               title="WhatsApp पर हिसाब किताब भेजें"
             >
-              <MessageCircle className="w-3.5 h-3.5" />
+              <MessageCircle className="w-3.5 h-3.5 shrink-0" />
               <span>WhatsApp</span>
             </a>
+
+            {/* Admin Recover & Sync History */}
+            {isAdmin && onRecoverLedger && (
+              <button
+                type="button"
+                onClick={handleRecoverLedgerClick}
+                disabled={isRecovering}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-900/70 hover:bg-emerald-800 text-emerald-200 text-[11px] sm:text-xs font-bold border border-emerald-700/70 transition active:scale-95 shadow-xs cursor-pointer disabled:opacity-50"
+                title="पुराना एडवांस व इंसेंटिव इतिहास रिकवर और सिंक करें"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isRecovering ? 'animate-spin' : ''}`} />
+                <span>{isRecovering ? 'रिकवर...' : 'रिकवर'}</span>
+              </button>
+            )}
 
             {/* Admin Reset Account */}
             {isAdmin && onResetAccount && (
               <button
                 type="button"
                 onClick={() => setShowResetConfirm(true)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-red-950/60 hover:bg-red-900 text-red-300 text-xs font-bold border border-red-800/60 transition active:scale-95 shadow-xs cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-950/60 hover:bg-red-900 text-red-300 text-[11px] sm:text-xs font-bold border border-red-800/60 transition active:scale-95 shadow-xs cursor-pointer"
                 title="खाता रीसेट (Zero Balance)"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">खाता रीसेट</span>
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                <span>रीसेट</span>
               </button>
             )}
           </div>
@@ -752,8 +794,9 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
           <div className="p-3.5 sm:p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2 print:bg-slate-100 print:border-slate-300">
             <div className="flex items-center gap-2">
               <FileSpreadsheet className="w-4 h-4 text-[#047857]" />
-              <h3 className="text-sm font-bold text-slate-900 print:text-black">
-                हिसाब किताब तालिका (Rider Ledger Sheet)
+              <h3 className="text-sm font-bold text-slate-900 print:text-black flex items-center gap-1.5 flex-wrap">
+                <HisabKitabLabel variant="badge" className="text-xs sm:text-sm" />
+                <span>तालिका</span>
               </h3>
             </div>
             
@@ -887,40 +930,48 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
                       {/* 6. एडमिन (Admin Actions - Strictly visible ONLY inside Admin login) */}
                       {isAdmin && (
                         <td className="py-3 px-3 sm:px-4 text-center align-top whitespace-nowrap print:hidden">
-                          {(row.type === 'advance' || row.type === 'incentive') && row.originalId !== 'opening-advance' ? (
-                            <div className="flex items-center justify-center gap-1">
-                              {row.type === 'advance' && onEditAdvance && (
+                          {(row.type === 'advance' || row.type === 'incentive') &&
+                          row.originalId !== 'opening-advance' &&
+                          row.originalId !== 'legacy-balance-reconciliation' ? (
+                            row.isSettled ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                ✓ सेटल
+                              </span>
+                            ) : (
+                              <div className="flex items-center justify-center gap-1">
+                                {row.type === 'advance' && !row.isRecovery && onEditAdvance && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditAdvance(row)}
+                                    disabled={actionInProgress === row.id}
+                                    className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                    title="एडवांस एडिट करें (Edit Advance)"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5 text-amber-600" />
+                                  </button>
+                                )}
+                                {row.type === 'incentive' && onEditIncentive && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditIncentive(row)}
+                                    disabled={actionInProgress === row.id}
+                                    className="p-1.5 text-slate-500 hover:text-[#047857] hover:bg-emerald-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                    title="इंसेंटिव एडिट करें (Edit Incentive)"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5 text-[#047857]" />
+                                  </button>
+                                )}
                                 <button
                                   type="button"
-                                  onClick={() => handleStartEditAdvance(row)}
+                                  onClick={() => setDeletingRow(row)}
                                   disabled={actionInProgress === row.id}
-                                  className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
-                                  title="एडवांस एडिट करें (Edit Advance)"
+                                  className="p-1.5 text-slate-500 hover:text-[#B91C1C] hover:bg-red-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
+                                  title={`${row.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'} एंट्री हटाएं (Delete Document)`}
                                 >
-                                  <Pencil className="w-3.5 h-3.5 text-amber-600" />
+                                  <Trash2 className={`w-3.5 h-3.5 ${actionInProgress === row.id ? 'animate-pulse text-[#B91C1C]' : ''}`} />
                                 </button>
-                              )}
-                              {row.type === 'incentive' && onEditIncentive && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleStartEditIncentive(row)}
-                                  disabled={actionInProgress === row.id}
-                                  className="p-1.5 text-slate-500 hover:text-[#047857] hover:bg-emerald-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
-                                  title="इंसेंटिव एडिट करें (Edit Incentive)"
-                                >
-                                  <Pencil className="w-3.5 h-3.5 text-[#047857]" />
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => setDeletingRow(row)}
-                                disabled={actionInProgress === row.id}
-                                className="p-1.5 text-slate-500 hover:text-[#B91C1C] hover:bg-red-50 rounded-lg transition active:scale-90 cursor-pointer disabled:opacity-40"
-                                title={`${row.type === 'advance' ? 'एडवांस' : 'इंसेंटिव'} एंट्री हटाएं (Delete Document)`}
-                              >
-                                <Trash2 className={`w-3.5 h-3.5 ${actionInProgress === row.id ? 'animate-pulse text-[#B91C1C]' : ''}`} />
-                              </button>
-                            </div>
+                              </div>
+                            )
                           ) : (
                             <span className="text-slate-400 text-xs">-</span>
                           )}

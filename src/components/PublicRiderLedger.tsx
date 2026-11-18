@@ -8,14 +8,14 @@ export interface PublicRiderLedgerProps {
 /**
  * PublicRiderLedger
  * 
- * Clean 100% Read-Only Khatabook Ledger Statement for Riders:
+ * Clean 100% Read-Only Hisab Kitab Ledger Statement for Riders:
  * Strictly delegates to RiderLedgerStatement with isAdmin={false}
  * - Admin delete buttons / actions are strictly hidden
  * - Account reset button is strictly hidden
  * - Header shows Rider Name, Phone, and Net Balance (⚪ हिसाब चुकता: ₹0 / लेना बाकी / देना बाकी)
- * - Clean Khatabook columns: तारीख व विवरण, आपने दिया, बना / मिला
+ * - Clean Hisab Kitab columns: तारीख व विवरण, आपने दिया, बना / मिला
  * - Grand Totals and Net Status at the bottom
- * - Download PDF / Print & WhatsApp share
+ * - Download PDF & WhatsApp share
  */
 export const PublicRiderLedger: React.FC<PublicRiderLedgerProps> = ({ riderId }) => {
   return <RiderLedgerStatement riderId={riderId} isAdmin={false} />;

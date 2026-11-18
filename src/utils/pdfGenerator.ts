@@ -2,9 +2,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { DeliveryEntry, Rider, UserRateConfig } from '../types';
 import { formatDateDisplay } from './formatters';
-import { Capacitor } from '@capacitor/core';
-import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Share } from '@capacitor/share';
+import { exportFileNativelyOrWeb } from './fileExporter';
 
 export interface PDFReportOptions {
   title?: string;
@@ -943,70 +941,22 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     doc.text(footerStr, pageWidth / 2, pageHeight - 18, { align: 'center' });
   }
 
-  // Save / Share the PDF (Android Capacitor Native + Web Browser)
+  // Save directly to Android Downloads (File Manager visible) or Web download + In-App Open option
   const cleanScope = String(riderFilterName || 'All_Riders').replace(/[^a-zA-Z0-9_-]/g, '_');
   const safeStart = String(startDate || 'start').replace(/[^a-zA-Z0-9_-]/g, '_');
   const safeEnd = String(endDate || 'end').replace(/[^a-zA-Z0-9_-]/g, '_');
   const filename = `Courier_Payout_${cleanScope}_${safeStart}_to_${safeEnd}.pdf`;
 
-  if (Capacitor.isNativePlatform()) {
-    const dataUri = doc.output('datauristring');
-    const base64Data = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
+  const dataUri = doc.output('datauristring');
+  const base64Data = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
 
-    const dirs: Directory[] = [Directory.Cache, Directory.Data, Directory.Documents];
-    let fileUri: string | null = null;
-    let writeErr: any = null;
-
-    for (const dir of dirs) {
-      try {
-        const fileResult = await Filesystem.writeFile({
-          path: filename,
-          data: base64Data,
-          directory: dir,
-          recursive: true,
-        });
-        if (fileResult?.uri) {
-          fileUri = fileResult.uri;
-          break;
-        }
-      } catch (err) {
-        writeErr = err;
-      }
-    }
-
-    if (!fileUri) {
-      throw new Error(`PDF सेव करने में त्रुटि हुई: ${writeErr?.message || 'Storage error'}`);
-    }
-
-    try {
-      await Share.share({
-        title: 'Courier Payout Report',
-        text: `Courier Rider Payout Report (${startDate} to ${endDate})`,
-        url: fileUri,
-        dialogTitle: 'PDF रिपोर्ट डाउनलोड / शेयर करें',
-      });
-    } catch (shareErr: any) {
-      const msg = String(shareErr?.message || shareErr || '').toLowerCase();
-      if (msg.includes('cancel') || msg.includes('dismiss') || msg.includes('abort') || msg.includes('user did not share')) {
-        return;
-      }
-      try {
-        await Share.share({
-          title: 'Courier Payout Report',
-          text: `Courier Rider Payout Report (${startDate} to ${endDate})`,
-          files: [fileUri],
-          dialogTitle: 'PDF रिपोर्ट डाउनलोड / शेयर करें',
-        });
-        return;
-      } catch (retryErr: any) {
-        const rMsg = String(retryErr?.message || retryErr || '').toLowerCase();
-        if (rMsg.includes('cancel') || rMsg.includes('dismiss') || rMsg.includes('abort') || rMsg.includes('user did not share')) {
-          return;
-        }
-        throw new Error(`PDF शेयर करने में त्रुटि: ${retryErr?.message || shareErr?.message || 'Share failed'}`);
-      }
-    }
-  } else {
-    doc.save(filename);
-  }
+  await exportFileNativelyOrWeb({
+    filename,
+    content: base64Data,
+    mimeType: 'application/pdf',
+    encoding: 'base64',
+    title: 'Courier Payout Report',
+    text: `Courier Rider Payout Report (${startDate} to ${endDate})`,
+    dialogTitle: 'PDF रिपोर्ट सेव या शेयर करें',
+  });
 }

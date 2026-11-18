@@ -230,7 +230,7 @@ export function calculateRiderFinancialState(
   const activeIncentives = cleanIncentives.filter((i) => isIncentiveActive(i, settlements, riderId));
   const rawIncentive = activeIncentives.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
 
-  // Net offset (Khatabook/Banking standard):
+  // Net offset (Hisab Kitab/Banking standard):
   const netAdvance = Math.max(0, rawAdvance - rawIncentive);
   const netIncentive = Math.max(0, rawIncentive - rawAdvance);
 

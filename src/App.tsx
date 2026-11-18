@@ -64,7 +64,8 @@ import {
   permanentlyDeleteDeliveryFromFirestore,
   permanentlyDeleteRiderFromFirestore,
   permanentlyDeleteAdvanceFromFirestore,
-  emptyAllTrashInFirestore
+  emptyAllTrashInFirestore,
+  recoverRiderLedgerHistoryFromFirestore
 } from './services/firestoreSync';
 import { 
   formatIncentiveSmsText, 
@@ -92,6 +93,7 @@ import {
 } from './types';
 import { RiderLedgerStatement } from './components/RiderLedgerStatement';
 import { StatementErrorBoundary } from './components/StatementErrorBoundary';
+import { DownloadedPdfOverlay } from './components/DownloadedPdfOverlay';
 import { 
   loadRidersFromStorage, 
   saveRidersToStorage, 
@@ -628,7 +630,7 @@ function MainCourierApp() {
     }
   };
 
-  // Real-time in-app statement compilation for instant 0ms Khatabook view
+  // Real-time in-app statement compilation for instant 0ms Hisab Kitab view
   const inAppLedgerInitialStatement = useMemo<PublicRiderStatement | null>(() => {
     if (!viewingLedgerRiderId) return null;
     const r = riders.find((x) => x.id === viewingLedgerRiderId);
@@ -1677,6 +1679,45 @@ function MainCourierApp() {
       console.warn('30-day trash auto-purge background notice:', err);
     });
   }, [isInitialized, isDataLoading, syncStatus, inspectedUser, currentUser, riders, entries]);
+
+  // RULE 6: AUTOMATIC & MANUAL LEDGER HISTORY RECOVERY (Advances, Cash Recoveries, Incentives & Settlements)
+  // Safely recovers historical settled entries across legacy/root/statement collections into riders' ledgers
+  // while keeping current active balances (`totalAdvance`, `totalIncentive`) untouched.
+  const ledgerHistoryRecoveryDoneRef = useRef<string | null>(null);
+  const handleRecoverRiderLedgerHistory = async () => {
+    const effectiveUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
+    if (!effectiveUid || ridersRef.current.length === 0) return;
+    const ownerEmail = inspectedUser ? (inspectedUser.email || '') : (currentUser?.email || '');
+    const res = await recoverRiderLedgerHistoryFromFirestore(
+      effectiveUid,
+      ridersRef.current,
+      settlementsRef.current,
+      ownerEmail,
+      entriesRef.current,
+      userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
+      userRateConfig.hubSignature
+    );
+    if (res.hasChanges) {
+      setRiders(res.recoveredRiders);
+      saveRidersToStorage(res.recoveredRiders, effectiveUid);
+      if (res.recoveredSettlementCount > 0) {
+        setSettlements(res.recoveredSettlements);
+        saveSettlementsToStorage(res.recoveredSettlements, effectiveUid);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!isInitialized || isDataLoading || syncStatus !== 'synced') return;
+    const effectiveUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
+    if (!effectiveUid || riders.length === 0) return;
+    if (ledgerHistoryRecoveryDoneRef.current === effectiveUid) return;
+
+    ledgerHistoryRecoveryDoneRef.current = effectiveUid;
+    handleRecoverRiderLedgerHistory().catch((err) => {
+      console.warn('Ledger history background recovery notice:', err);
+    });
+  }, [isInitialized, isDataLoading, syncStatus, inspectedUser, currentUser, riders.length]);
 
   // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
   useEffect(() => {
@@ -2792,7 +2833,8 @@ function MainCourierApp() {
           settlements,
           entries,
           userRateConfig.hubSignature || 'कूरियर डिलीवरी हब',
-          userRateConfig.hubSignature
+          userRateConfig.hubSignature,
+          { isAccountReset: true }
         );
       } catch (err) {
         console.warn('Error syncing reset statement:', err);
@@ -4066,7 +4108,7 @@ function MainCourierApp() {
         onOpenChangeSecurityPin={() => setIsChangePinModalOpen(true)}
       />
 
-      {/* In-App Khatabook Statement / Ledger Screen Overlay with sticky top Close/Back button */}
+      {/* In-App Hisab Kitab Statement / Ledger Screen Overlay with sticky top Close/Back button */}
       {viewingLedgerRiderId && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950 animate-in fade-in print:static print:overflow-visible print:bg-white print:p-0 print:m-0 print:h-auto print:w-auto">
           <RiderLedgerStatement
@@ -4167,6 +4209,7 @@ function MainCourierApp() {
             onResetAccount={async () => {
               await handleResetRiderAccount(viewingLedgerRiderId);
             }}
+            onRecoverLedger={handleRecoverRiderLedgerHistory}
           />
         </div>
       )}
@@ -4305,11 +4348,14 @@ export default function App() {
     const riderId = parseRiderStatementRoute() || '';
 
     return (
-      <div className="min-h-screen bg-slate-950 text-white">
-        <StatementErrorBoundary>
-          <RiderLedgerStatement riderId={riderId} settlements={loadSettlementsFromStorage()} isAdmin={false} />
-        </StatementErrorBoundary>
-      </div>
+      <>
+        <div className="min-h-screen bg-slate-950 text-white">
+          <StatementErrorBoundary>
+            <RiderLedgerStatement riderId={riderId} settlements={loadSettlementsFromStorage()} isAdmin={false} />
+          </StatementErrorBoundary>
+        </div>
+        <DownloadedPdfOverlay />
+      </>
     );
   }
 
@@ -4328,22 +4374,30 @@ export default function App() {
 
   if (isRiderFlavor || isCompanionRequested) {
     return (
-      <CodCompanionApp 
-        onBackToMainApp={isRiderFlavor ? undefined : () => {
-          try {
-            window.location.hash = '';
-            const url = new URL(window.location.href);
-            url.searchParams.delete('app');
-            url.searchParams.delete('cod');
-            window.history.pushState({}, '', url.pathname.includes('/cod') ? '/' : url.toString());
-          } catch {}
-          setUrlTick((t) => t + 1);
-        }}
-      />
+      <>
+        <CodCompanionApp 
+          onBackToMainApp={isRiderFlavor ? undefined : () => {
+            try {
+              window.location.hash = '';
+              const url = new URL(window.location.href);
+              url.searchParams.delete('app');
+              url.searchParams.delete('cod');
+              window.history.pushState({}, '', url.pathname.includes('/cod') ? '/' : url.toString());
+            } catch {}
+            setUrlTick((t) => t + 1);
+          }}
+        />
+        <DownloadedPdfOverlay />
+      </>
     );
   }
 
   // 3. Otherwise, render normal Admin App / Dashboard
-  return <MainCourierApp />;
+  return (
+    <>
+      <MainCourierApp />
+      <DownloadedPdfOverlay />
+    </>
+  );
 }
 

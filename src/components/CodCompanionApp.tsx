@@ -37,6 +37,7 @@ import {
   Smartphone,
   Download
 } from 'lucide-react';
+import { HisabKitabLabel } from './HisabKitabLabel';
 import { 
   CodDailyEntry, 
   CodStaffUser, 
@@ -316,8 +317,8 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   } | null>(null);
   const [isGeneratingQr, setIsGeneratingQr] = useState<boolean>(false);
 
-  // Rider Active Portal Tab: Daily Delivery / COD Submission vs Khatabook Passbook
-  const [riderActiveTab, setRiderActiveTab] = useState<'cod_entry' | 'khatabook'>('cod_entry');
+  // Rider Active Portal Tab: Daily Delivery / COD Submission vs Hisab Kitab Passbook
+  const [riderActiveTab, setRiderActiveTab] = useState<'cod_entry' | 'hisab_kitab'>('cod_entry');
   const isRiderFlavor = isRiderBuild();
 
   // Incharge / Supervisor Shortage Modal
@@ -2536,8 +2537,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight truncate">
-                  COD Entry <span className="text-indigo-600 font-hindi">(हिसाब किताब)</span>
+                <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight truncate flex items-center gap-1.5">
+                  <span>COD Entry</span>
+                  <HisabKitabLabel variant="badge" className="text-[11px] sm:text-xs" />
                 </h1>
                 {/* Role Badge */}
                 <span
@@ -2644,7 +2646,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       {/* Main Body */}
       <main className="max-w-6xl mx-auto w-full px-3 sm:px-6 pt-4 space-y-4">
 
-        {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Khatabook Statement */}
+        {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Hisab Kitab Statement */}
         {isRider && (
           <div className="bg-white border border-slate-200 rounded-2xl p-1.5 flex items-center gap-2 shadow-xs">
             <button
@@ -2661,20 +2663,21 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             </button>
             <button
               type="button"
-              onClick={() => setRiderActiveTab('khatabook')}
+              onClick={() => setRiderActiveTab('hisab_kitab')}
               className={`flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
-                riderActiveTab === 'khatabook'
-                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/20'
+                riderActiveTab === 'hisab_kitab'
+                  ? 'bg-slate-900 text-white shadow-sm ring-1 ring-cyan-400/50'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
               }`}
             >
-              <Receipt className="w-4 h-4" />
-              <span>📖 मेरा हिसाब किताब (Hisab Kitab)</span>
+              <Receipt className="w-4 h-4 shrink-0 text-cyan-500" />
+              <span>📖 मेरा</span>
+              <HisabKitabLabel variant={riderActiveTab === 'hisab_kitab' ? 'inline' : 'badge'} className="text-xs sm:text-sm" />
             </button>
           </div>
         )}
 
-        {isRider && riderActiveTab === 'khatabook' ? (
+        {isRider && riderActiveTab === 'hisab_kitab' ? (
           <div className="bg-white text-slate-900 rounded-2xl p-2 sm:p-4 shadow-sm border border-slate-200">
             <RiderLedgerStatement riderId={currentRiderId} isAdmin={false} />
           </div>
