@@ -382,7 +382,6 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
         balanceStatus,
         balanceLabel,
       });
-      showToast('हिसाब किताब PDF सफलतापूर्वक तैयार/डाउनलोड हो गया!');
     } catch (err: any) {
       console.error('Ledger PDF download error:', err);
       showToast(`PDF बनाने में त्रुटि: ${err?.message || 'अज्ञात समस्या'}`);

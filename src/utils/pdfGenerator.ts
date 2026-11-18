@@ -31,6 +31,105 @@ function getDayOfWeek(dateStr: string): string {
   }
 }
 
+/**
+ * Renders the top dark header banner onto a high-DPI offscreen canvas so
+ * Unicode Devanagari Hindi hub names render cleanly (no Helvetica mojibake)
+ * and the [Verified Logistics Hub] badge never overlaps the hub name.
+ */
+function drawPayoutHeaderBanner(
+  doc: jsPDF,
+  pageWidth: number,
+  hubName: string,
+  isVerifiedHub: boolean,
+  headerSub: string
+): void {
+  const bannerH = 78;
+  try {
+    if (typeof document !== 'undefined') {
+      const scale = 3;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(pageWidth * scale);
+      canvas.height = Math.round(bannerH * scale);
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.scale(scale, scale);
+        const fontFamily =
+          "-apple-system, BlinkMacSystemFont, 'Noto Sans Devanagari', 'Noto Sans', 'Segoe UI', Roboto, Arial, sans-serif";
+
+        ctx.fillStyle = '#0F172A';
+        ctx.fillRect(0, 0, pageWidth, bannerH);
+
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `800 15.5px ${fontFamily}`;
+        ctx.fillText('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 14);
+
+        // Hub Name + Verified Badge with measured spacing (never overlaps)
+        ctx.font = `700 10.5px ${fontFamily}`;
+        ctx.fillStyle = '#F8FAFC';
+        const safeHub = String(hubName || 'Courier Delivery Hub').trim();
+        ctx.fillText(safeHub, 36, 36);
+        const hubMeasuredW = ctx.measureText(safeHub).width;
+
+        if (isVerifiedHub) {
+          const badgeText = '✓ Verified Logistics Hub';
+          ctx.font = `700 8.5px ${fontFamily}`;
+          const badgeW = ctx.measureText(badgeText).width + 14;
+          const maxRight = pageWidth - 36;
+          const badgeX = Math.min(36 + hubMeasuredW + 10, maxRight - badgeW);
+          const badgeY = 34.5;
+
+          ctx.fillStyle = 'rgba(29, 155, 240, 0.18)';
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          if (typeof (ctx as any).roundRect === 'function') {
+            (ctx as any).roundRect(badgeX, badgeY, badgeW, 14.5, 4);
+          } else {
+            ctx.rect(badgeX, badgeY, badgeW, 14.5);
+          }
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#38BDF8';
+          ctx.fillText(badgeText, badgeX + 7, badgeY + 2.5);
+        }
+
+        ctx.font = `400 8.5px ${fontFamily}`;
+        ctx.fillStyle = '#CBD5E1';
+        ctx.fillText(headerSub, 36, 56);
+
+        const imgData = canvas.toDataURL('image/png');
+        doc.addImage(imgData, 'PNG', 0, 0, pageWidth, bannerH);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('Fallback vector header banner:', err);
+  }
+
+  // Fallback ASCII-safe vector rendering
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, bannerH, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(15.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 26);
+  const asciiHub = String(hubName || 'Courier Delivery Hub').replace(/[^\x20-\x7E]/g, '').trim() || 'Courier Delivery Hub';
+  doc.setFontSize(10);
+  doc.text(asciiHub, 36, 44);
+  if (isVerifiedHub) {
+    const hubW = doc.getTextWidth(asciiHub);
+    doc.setTextColor(56, 189, 248);
+    doc.setFontSize(8.5);
+    doc.text('[Verified Logistics Hub]', 36 + hubW + 8, 44);
+  }
+  doc.setFontSize(8.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(203, 213, 225);
+  doc.text(headerSub, 36, 60);
+}
+
 export async function generatePayoutPDF(options: PDFReportOptions): Promise<void> {
   const {
     riderFilterName,
@@ -127,36 +226,12 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     const { show: showIncentiveCol, baseRate: effBaseRate, incentiveRate: effIncentiveRate } =
       shouldShowRiderIncentive(riderId, entries);
 
-    // Header Banner
-    doc.setFillColor(...primaryColor);
-    doc.rect(0, 0, pageWidth, 75, 'F');
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.text('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 30);
-
+    // Header Banner (High-DPI Unicode Hindi safe + non-overlapping Verified badge)
     const effHubName = hubName || userRateConfig?.hubSignature || 'Courier Delivery Hub';
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(255, 255, 255);
-    doc.text(effHubName, 36, 45);
-    const hubW = doc.getTextWidth(effHubName);
-
-    if (isVerifiedHub) {
-      doc.setTextColor(29, 155, 240); // Official Blue #1D9BF0
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('[✓ Verified Logistics Hub]', 36 + hubW + 6, 45);
-    }
-
-    doc.setFontSize(8.5);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(203, 213, 225);
     const headerSub = showIncentiveCol
       ? `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${effBaseRate} | Incentive: Rs. ${effIncentiveRate}`
       : `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${effBaseRate}`;
-    doc.text(headerSub, 36, 58);
+    drawPayoutHeaderBanner(doc, pageWidth, effHubName, isVerifiedHub, headerSub);
 
     // Meta block
     doc.setTextColor(51, 65, 85);
@@ -237,7 +312,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     // Dynamic Columns depending on showIncentiveCol
     let headRow: string[];
     let tableRows: string[][];
-    let footRow: string[];
+    let footRow: any[];
     let columnStyles: Record<number, any>;
 
     if (showIncentiveCol) {
@@ -262,8 +337,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
         ];
       });
       footRow = [
-        'TOTAL',
-        `${sortedEntries.length} Days`,
+        { content: `TOTAL (${sortedEntries.length} Days)`, colSpan: 2, styles: { halign: 'left' } },
         '',
         `${totalParcels} pkts`,
         '',
@@ -304,8 +378,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
         ];
       });
       footRow = [
-        'TOTAL',
-        `${sortedEntries.length} Days`,
+        { content: `TOTAL (${sortedEntries.length} Days)`, colSpan: 2, styles: { halign: 'left' } },
         '',
         `${totalParcels} pkts`,
         '',
@@ -437,36 +510,12 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
         return r && typeof r.incentiveRate === 'number' && r.incentiveRate > 0 && r.incentiveEnabled !== false;
       });
 
-    // Header Banner
-    doc.setFillColor(...primaryColor);
-    doc.rect(0, 0, pageWidth, 75, 'F');
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.text('COURIER RIDER PAYOUT & DELIVERY REPORT', 36, 30);
-
+    // Header Banner (High-DPI Unicode Hindi safe + non-overlapping Verified badge)
     const effHubName = hubName || userRateConfig?.hubSignature || 'Courier Delivery Hub';
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(255, 255, 255);
-    doc.text(effHubName, 36, 45);
-    const hubW = doc.getTextWidth(effHubName);
-
-    if (isVerifiedHub) {
-      doc.setTextColor(29, 155, 240); // Official Blue #1D9BF0
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('[✓ Verified Logistics Hub]', 36 + hubW + 6, 45);
-    }
-
-    doc.setFontSize(8.5);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(203, 213, 225);
     const multiHeaderSub = hasAnyIncentiveInReport
       ? `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${defaultBaseRate} | Incentive: Rs. ${defaultIncentiveRate}`
       : `Official Delivery Logistics Hub Statement • Base Rate: Rs. ${defaultBaseRate}`;
-    doc.text(multiHeaderSub, 36, 58);
+    drawPayoutHeaderBanner(doc, pageWidth, effHubName, isVerifiedHub, multiHeaderSub);
 
     // Meta block
     doc.setTextColor(51, 65, 85);
@@ -524,7 +573,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
     // Master Roster Table Rows
     let rosterHead: string[];
     let rosterRows: string[][];
-    let rosterFoot: string[];
+    let rosterFoot: any[];
     let rosterColumnStyles: Record<number, any>;
 
     if (hasAnyIncentiveInReport) {
@@ -554,8 +603,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
         ];
       });
       rosterFoot = [
-        'TOTAL',
-        `${distinctRiderIds.length} Riders`,
+        { content: `TOTAL (${distinctRiderIds.length} Riders)`, colSpan: 2, styles: { halign: 'left' } },
         '',
         `${entries.length} Entries`,
         totalParcels.toLocaleString('en-IN'),
@@ -601,8 +649,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
         ];
       });
       rosterFoot = [
-        'TOTAL',
-        `${distinctRiderIds.length} Riders`,
+        { content: `TOTAL (${distinctRiderIds.length} Riders)`, colSpan: 2, styles: { halign: 'left' } },
         '',
         `${entries.length} Entries`,
         totalParcels.toLocaleString('en-IN'),
@@ -739,7 +786,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
 
       let subHead: string[];
       let subRows: string[][];
-      let subFoot: string[];
+      let subFoot: any[];
       let subStyles: Record<number, any>;
 
       if (rShowIncentive) {
@@ -764,8 +811,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
           ];
         });
         subFoot = [
-          'TOTAL',
-          `${rEntries.length} Days`,
+          { content: `TOTAL (${rEntries.length} Days)`, colSpan: 2, styles: { halign: 'left' } },
           '',
           `${rParcels} pkts`,
           '',
@@ -805,8 +851,7 @@ export async function generatePayoutPDF(options: PDFReportOptions): Promise<void
           ];
         });
         subFoot = [
-          'TOTAL',
-          `${rEntries.length} Days`,
+          { content: `TOTAL (${rEntries.length} Days)`, colSpan: 2, styles: { halign: 'left' } },
           '',
           `${rParcels} pkts`,
           '',

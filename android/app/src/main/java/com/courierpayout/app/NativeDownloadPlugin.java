@@ -2,6 +2,7 @@ package com.courierpayout.app;
 
 import android.Manifest;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
@@ -267,13 +268,18 @@ public class NativeDownloadPlugin extends Plugin {
 
         try {
             Uri uri = Uri.parse(contentUriStr);
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(uri, mimeType);
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent viewIntent = new Intent(Intent.ACTION_VIEW);
+            viewIntent.setDataAndType(uri, mimeType);
+            viewIntent.setClipData(ClipData.newRawUri(null, uri));
+            viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+            Intent chooser = Intent.createChooser(viewIntent, "PDF खोलने के लिए ऐप चुनें (Open with)");
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
             try {
-                getContext().startActivity(intent);
+                getContext().startActivity(chooser);
                 JSObject ret = new JSObject();
                 ret.put("opened", true);
                 call.resolve(ret);

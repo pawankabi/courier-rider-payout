@@ -123,14 +123,14 @@ function drawTableHeader(ctx: CanvasRenderingContext2D, y: number): number {
   ctx.fillText('तारीख व विवरण (Date & Details)', MARGIN_X + 14, y + 13);
 
   ctx.textAlign = 'center';
-  ctx.fillText('प्रकार', MARGIN_X + 456 + 75, y + 13);
+  ctx.fillText('प्रकार', MARGIN_X + 420 + 70, y + 13);
 
   ctx.textAlign = 'right';
   ctx.fillStyle = '#047857';
-  ctx.fillText('कुल कमाई (+)', MARGIN_X + 456 + 150 + 145 - 12, y + 13);
+  ctx.fillText('कुल कमाई (+)', MARGIN_X + 420 + 140 + 150 - 12, y + 13);
 
   ctx.fillStyle = '#B91C1C';
-  ctx.fillText('कटौती (-)', MARGIN_X + 456 + 150 + 145 + 145 - 12, y + 13);
+  ctx.fillText('कटौती (-)', MARGIN_X + 420 + 140 + 150 + 150 - 12, y + 13);
 
   ctx.fillStyle = '#1E293B';
   ctx.fillText('चालू बैलेंस', MARGIN_X + CONTENT_W - 14, y + 13);
@@ -293,7 +293,7 @@ export async function generateRiderLedgerPDF(options: RiderLedgerPdfOptions): Pr
     current.ctx.textAlign = 'left';
     y += 80;
   } else {
-    const col1MaxW = 428;
+    const col1MaxW = 394;
 
     timelineRows.forEach((row, index) => {
       current.ctx.font = `700 17px ${FONT_FAMILY}`;
@@ -350,20 +350,20 @@ export async function generateRiderLedgerPDF(options: RiderLedgerPdfOptions): Pr
       }
 
       // Col 2: Type Badge
-      const col2CenterX = MARGIN_X + 456 + 75;
+      const col2CenterX = MARGIN_X + 420 + 70;
       const isPlus = row.entryKind === 'PLUS_EARNING';
       drawRoundedRect(
         current.ctx,
-        col2CenterX - 66,
+        col2CenterX - 62,
         y + 13,
-        132,
+        124,
         28,
         14,
         isPlus ? '#ECFDF5' : '#FEF2F2',
         isPlus ? '#A7F3D0' : '#FECACA',
         1
       );
-      current.ctx.font = `700 13.5px ${FONT_FAMILY}`;
+      current.ctx.font = `700 13px ${FONT_FAMILY}`;
       current.ctx.fillStyle = isPlus ? '#047857' : '#B91C1C';
       current.ctx.textAlign = 'center';
       current.ctx.fillText(row.typeLabel || (isPlus ? '(+) कमाई' : '(-) कटौती'), col2CenterX, y + 19);
@@ -379,24 +379,24 @@ export async function generateRiderLedgerPDF(options: RiderLedgerPdfOptions): Pr
       current.ctx.font = `700 17px ${FONT_FAMILY}`;
       if (row.plusAmount > 0) {
         current.ctx.fillStyle = '#047857';
-        current.ctx.fillText(`+${formatINR(row.plusAmount)}`, MARGIN_X + 456 + 150 + 145 - 12, y + 16);
+        current.ctx.fillText(`+${formatINR(row.plusAmount)}`, MARGIN_X + 420 + 140 + 150 - 12, y + 16);
       } else {
         current.ctx.fillStyle = '#CBD5E1';
-        current.ctx.fillText('-', MARGIN_X + 456 + 150 + 145 - 12, y + 16);
+        current.ctx.fillText('-', MARGIN_X + 420 + 140 + 150 - 12, y + 16);
       }
 
       // Col 4: Minus Amount
       if (row.minusAmount > 0) {
         current.ctx.fillStyle = '#B91C1C';
-        current.ctx.fillText(`-${formatINR(row.minusAmount)}`, MARGIN_X + 456 + 150 + 145 + 145 - 12, y + 16);
+        current.ctx.fillText(`-${formatINR(row.minusAmount)}`, MARGIN_X + 420 + 140 + 150 + 150 - 12, y + 16);
       } else {
         current.ctx.fillStyle = '#CBD5E1';
-        current.ctx.fillText('-', MARGIN_X + 456 + 150 + 145 + 145 - 12, y + 16);
+        current.ctx.fillText('-', MARGIN_X + 420 + 140 + 150 + 150 - 12, y + 16);
       }
 
       // Col 5: Running Balance
       const cleanRunBal = String(row.runningBalanceLabel || '').replace(/[🔴🟢⚪]/g, '').trim();
-      current.ctx.font = `700 15.5px ${FONT_FAMILY}`;
+      current.ctx.font = `700 15px ${FONT_FAMILY}`;
       current.ctx.fillStyle =
         row.runningBalance < -0.01 ? '#B91C1C' : row.runningBalance > 0.01 ? '#047857' : '#334155';
       current.ctx.fillText(cleanRunBal, MARGIN_X + CONTENT_W - 14, y + 16);
@@ -406,31 +406,53 @@ export async function generateRiderLedgerPDF(options: RiderLedgerPdfOptions): Pr
     });
   }
 
-  // 5. Grand Totals & Signature Block
-  const footerBlockH = 188;
+  // 5. Grand Totals + Separate Final Balance Row + Signature Block
+  const footerBlockH = 236;
   if (y + footerBlockH > PAGE_H - BOTTOM_MARGIN) {
     current = createCanvasPage();
     pages.push(current);
     y = TOP_MARGIN;
   }
 
-  // Totals row
-  drawRoundedRect(current.ctx, MARGIN_X, y, CONTENT_W, 50, 0, '#F1F5F9', '#94A3B8', 1.5);
-  current.ctx.font = `800 18px ${FONT_FAMILY}`;
+  // Row A: Column-aligned Totals (short Net value inside Col 5 to prevent any overlap)
+  drawRoundedRect(current.ctx, MARGIN_X, y, CONTENT_W, 48, 0, '#F1F5F9', '#94A3B8', 1.5);
+  current.ctx.font = `800 17.5px ${FONT_FAMILY}`;
   current.ctx.fillStyle = '#0F172A';
   current.ctx.textAlign = 'left';
   current.ctx.fillText('कुल योग (Grand Totals)', MARGIN_X + 14, y + 15);
 
   current.ctx.textAlign = 'right';
   current.ctx.fillStyle = '#047857';
-  current.ctx.fillText(`+${formatINR(totalPlus)}`, MARGIN_X + 456 + 150 + 145 - 12, y + 15);
+  current.ctx.fillText(`+${formatINR(totalPlus)}`, MARGIN_X + 420 + 140 + 150 - 12, y + 15);
   current.ctx.fillStyle = '#B91C1C';
-  current.ctx.fillText(`-${formatINR(totalMinus)}`, MARGIN_X + 456 + 150 + 145 + 145 - 12, y + 15);
+  current.ctx.fillText(`-${formatINR(totalMinus)}`, MARGIN_X + 420 + 140 + 150 + 150 - 12, y + 15);
+
+  const shortNetText =
+    balanceStatus === 'rider_due'
+      ? `पाना: ${formatINR(netBalance)}`
+      : balanceStatus === 'payable'
+      ? `देना: ${formatINR(netBalance)}`
+      : 'चुकता: ₹0';
   current.ctx.fillStyle = pillText;
+  current.ctx.fillText(shortNetText, MARGIN_X + CONTENT_W - 14, y + 15);
+  current.ctx.textAlign = 'left';
+
+  y += 48;
+
+  // Row B: Full-width highlighted Final Net Balance row (zero overlap with columns above)
+  drawRoundedRect(current.ctx, MARGIN_X, y, CONTENT_W, 52, 0, pillFill, pillStroke, 1.5);
+  current.ctx.font = `700 17px ${FONT_FAMILY}`;
+  current.ctx.fillStyle = '#334155';
+  current.ctx.textAlign = 'left';
+  current.ctx.fillText('अंतिम शेष (Final Balance)', MARGIN_X + 14, y + 17);
+
+  current.ctx.font = `800 20px ${FONT_FAMILY}`;
+  current.ctx.fillStyle = pillText;
+  current.ctx.textAlign = 'right';
   current.ctx.fillText(cleanBalanceLabel, MARGIN_X + CONTENT_W - 14, y + 15);
   current.ctx.textAlign = 'left';
 
-  y += 78;
+  y += 76;
 
   // Signature Footer
   current.ctx.strokeStyle = '#CBD5E1';
