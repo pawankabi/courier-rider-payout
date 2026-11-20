@@ -542,6 +542,7 @@ export function isFestivalGreetingSentWithin24Hours(
 // -------------------------------------------------------------
 export interface QuickStatsSummary {
   totalUnpaidAmount: number;
+  totalUnpaidParcels?: number;
   totalAdvanceAmount: number;
   todayEarnings: number;
   todayParcels: number;
@@ -573,6 +574,7 @@ export function loadQuickStatsSummary(userId?: string): QuickStatsSummary | null
     if (!parsed || typeof parsed !== 'object') return null;
     return {
       totalUnpaidAmount: Number(parsed.totalUnpaidAmount) || 0,
+      totalUnpaidParcels: parsed.totalUnpaidParcels !== undefined ? (Number(parsed.totalUnpaidParcels) || 0) : undefined,
       totalAdvanceAmount: Number(parsed.totalAdvanceAmount) || 0,
       todayEarnings: Number(parsed.todayEarnings) || 0,
       todayParcels: Number(parsed.todayParcels) || 0,

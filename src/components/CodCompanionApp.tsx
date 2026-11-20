@@ -2536,9 +2536,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               <img src="/rider-logo.svg" alt="Rider App Logo" className="w-8 h-8 rounded-lg object-contain" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight truncate flex items-center gap-1.5">
-                  <span>COD Entry</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h1 className="text-xs sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-1.5 flex-wrap leading-tight">
+                  <span className="whitespace-nowrap">COD Entry</span>
                   <HisabKitabLabel variant="badge" className="text-[11px] sm:text-xs" />
                 </h1>
                 {/* Role Badge */}
@@ -2648,31 +2648,31 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
 
         {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Hisab Kitab Statement */}
         {isRider && (
-          <div className="bg-white border border-slate-200 rounded-2xl p-1.5 flex items-center gap-2 shadow-xs">
+          <div className="bg-white border border-slate-200 rounded-2xl p-1.5 flex items-center gap-1.5 sm:gap-2 shadow-xs">
             <button
               type="button"
               onClick={() => setRiderActiveTab('cod_entry')}
-              className={`flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+              className={`flex-1 py-2.5 px-2 sm:px-3 rounded-xl text-[11px] sm:text-sm font-bold flex items-center justify-center gap-1.5 sm:gap-2 transition cursor-pointer ${
                 riderActiveTab === 'cod_entry'
                   ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
               }`}
             >
-              <Bike className="w-4 h-4" />
-              <span>📦 दैनिक डिलीवरी व COD प्रविष्टि</span>
+              <Bike className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="leading-tight">📦 दैनिक डिलीवरी व COD</span>
             </button>
             <button
               type="button"
               onClick={() => setRiderActiveTab('hisab_kitab')}
-              className={`flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+              className={`flex-1 py-2.5 px-2 sm:px-3 rounded-xl text-[11px] sm:text-sm font-bold flex items-center justify-center gap-1 sm:gap-2 transition cursor-pointer ${
                 riderActiveTab === 'hisab_kitab'
                   ? 'bg-slate-900 text-white shadow-sm ring-1 ring-cyan-400/50'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
               }`}
             >
-              <Receipt className="w-4 h-4 shrink-0 text-cyan-500" />
-              <span>📖 मेरा</span>
-              <HisabKitabLabel variant={riderActiveTab === 'hisab_kitab' ? 'inline' : 'badge'} className="text-xs sm:text-sm" />
+              <Receipt className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-cyan-500" />
+              <span className="whitespace-nowrap">मेरा</span>
+              <HisabKitabLabel variant={riderActiveTab === 'hisab_kitab' ? 'inline' : 'badge'} className="text-[11px] sm:text-sm" />
             </button>
           </div>
         )}

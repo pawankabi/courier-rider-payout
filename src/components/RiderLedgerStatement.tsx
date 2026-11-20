@@ -657,8 +657,8 @@ export const RiderLedgerStatement: React.FC<RiderLedgerStatementProps> = ({
               </button>
             )}
             <div className="min-w-0 flex-1">
-              <h1 className="text-sm sm:text-base font-black truncate text-white flex items-center gap-1.5">
-                <span>राइडर</span>
+              <h1 className="text-sm sm:text-base font-black text-white flex items-center gap-1.5 flex-wrap leading-tight">
+                <span className="whitespace-nowrap">राइडर</span>
                 <HisabKitabLabel className="text-sm sm:text-base" />
               </h1>
               <p className="text-[11px] text-slate-400 truncate">

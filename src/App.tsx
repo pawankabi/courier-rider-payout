@@ -470,6 +470,7 @@ function MainCourierApp() {
   const [isPending, setIsPending] = useState(false);
   const [inspectedUser, setInspectedUser] = useState<AppUser | null>(null);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'local'>('local');
+  const [isAllCollectionsSynced, setIsAllCollectionsSynced] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup'>('signin');
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -1347,6 +1348,7 @@ function MainCourierApp() {
 
       if (user) {
         setSyncStatus('syncing');
+        setIsAllCollectionsSynced(false);
 
         // 1. Immediately load user-specific cached local data (0ms latency, no blocking)
         // Strictly filter out any records created by external Gmail accounts
@@ -1498,14 +1500,7 @@ function MainCourierApp() {
             (typeof window !== 'undefined' && (localStorage.getItem('cp_current_is_pro') === 'true' || localStorage.getItem(`cp_is_pro_${user.uid}`) === 'true'))
           );
 
-          // Instant 0ms load from authentic user local cache
-          const cachedRiders = loadRidersFromStorage(user.uid);
-          const cachedDeliveries = loadDeliveriesFromStorage([], user.uid);
-          const cachedSettlements = loadSettlementsFromStorage(user.uid);
-          setRiders(cachedRiders);
-          setEntries(cachedDeliveries);
-          setSettlements(cachedSettlements);
-          if (cachedRiders.length > 0 || cachedDeliveries.length > 0) {
+          if (ridersRef.current.length > 0 || entriesRef.current.length > 0) {
             setIsDataLoading(false);
           } else {
             setIsDataLoading(true);
@@ -1542,6 +1537,11 @@ function MainCourierApp() {
                 setSyncStatus('synced');
                 setIsDataLoading(false);
               },
+              onAllCollectionsSynced: () => {
+                setIsAllCollectionsSynced(true);
+                setSyncStatus('synced');
+                setIsDataLoading(false);
+              },
               onError: (err) => {
                 console.error('Firestore sync error:', err);
                 setSyncStatus('offline');
@@ -1564,6 +1564,7 @@ function MainCourierApp() {
         setUserRateConfig(DEFAULT_USER_RATE_CONFIG);
         setActiveTab((prev) => (prev === 'admin' ? 'entry' : prev));
         setSyncStatus('local');
+        setIsAllCollectionsSynced(true);
         const loadedRiders = loadRidersFromStorage();
         const loadedDeliveries = loadDeliveriesFromStorage();
         const loadedSettlements = loadSettlementsFromStorage();
@@ -1708,7 +1709,7 @@ function MainCourierApp() {
   };
 
   useEffect(() => {
-    if (!isInitialized || isDataLoading || syncStatus !== 'synced') return;
+    if (!isInitialized || isDataLoading || syncStatus !== 'synced' || !isAllCollectionsSynced) return;
     const effectiveUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
     if (!effectiveUid || riders.length === 0) return;
     if (ledgerHistoryRecoveryDoneRef.current === effectiveUid) return;
@@ -1717,7 +1718,7 @@ function MainCourierApp() {
     handleRecoverRiderLedgerHistory().catch((err) => {
       console.warn('Ledger history background recovery notice:', err);
     });
-  }, [isInitialized, isDataLoading, syncStatus, inspectedUser, currentUser, riders.length]);
+  }, [isInitialized, isDataLoading, syncStatus, isAllCollectionsSynced, inspectedUser, currentUser, riders.length]);
 
   // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
   useEffect(() => {
@@ -2888,6 +2889,7 @@ function MainCourierApp() {
   useEffect(() => {
     if (!inspectedUser) return;
     setSyncStatus('syncing');
+    setIsAllCollectionsSynced(false);
     const unsubscribe = subscribeToUserData(
       inspectedUser.uid,
       {
@@ -2904,6 +2906,10 @@ function MainCourierApp() {
         onSettlements: (newSettlements) => {
           const inspectedSettlements = newSettlements.filter((s) => isEntityOwnedByUser(s, inspectedUser.uid, inspectedUser.email));
           setSettlements(inspectedSettlements);
+          setSyncStatus('synced');
+        },
+        onAllCollectionsSynced: () => {
+          setIsAllCollectionsSynced(true);
           setSyncStatus('synced');
         },
         onError: (err) => {
@@ -3016,6 +3022,11 @@ function MainCourierApp() {
       .filter((e) => e.status === 'Unpaid')
       .reduce((sum, e) => sum + (e.totalEarnings || 0), 0);
   }, [dashboardEntries]);
+  const calculatedTotalUnpaidParcels = useMemo(() => {
+    return dashboardEntries
+      .filter((e) => e.status === 'Unpaid')
+      .reduce((sum, e) => sum + (Number(e.parcels) || 0), 0);
+  }, [dashboardEntries]);
   const calculatedTotalAdvanceAmount = useMemo(() => {
     return dashboardRiders.reduce((sum, r) => {
       return sum + calculateRiderFinancialState(r.advances, r.incentives, dashboardSettlements, r.id).netAdvance;
@@ -3039,13 +3050,16 @@ function MainCourierApp() {
     ? calculatedUnpaidCount 
     : (initialCachedStats?.unpaidCount || 0);
 
-  // Persist quick stats whenever dashboard figures settle with real records
+  // Persist quick stats ONLY when all cloud collections are fully hydrated (or in local guest mode)
   useEffect(() => {
-    // CRITICAL GUARD: Only overwrite cache if dashboardEntries has actually loaded real records.
-    // Never wipe out a confirmed cached unpaid amount with 0 during initial cold boot!
+    // CRITICAL GUARD: Only overwrite cache once all 5 collections have hydrated with real records.
+    // Never overwrite confirmed cached totals with partial or cold-boot figures!
+    const isCloudSession = Boolean(currentUser || inspectedUser);
+    if (isCloudSession && !isAllCollectionsSynced) return;
     if (dashboardEntries.length > 0) {
       saveQuickStatsSummary({
         totalUnpaidAmount: calculatedTotalUnpaidAmount,
+        totalUnpaidParcels: calculatedTotalUnpaidParcels,
         totalAdvanceAmount: calculatedTotalAdvanceAmount,
         todayEarnings: calculatedTodayEarnings,
         todayParcels: calculatedTodayParcels,
@@ -3053,7 +3067,19 @@ function MainCourierApp() {
         lastUpdated: Date.now(),
       }, targetUid);
     }
-  }, [calculatedTotalUnpaidAmount, calculatedTotalAdvanceAmount, calculatedTodayEarnings, calculatedTodayParcels, calculatedUnpaidCount, targetUid, dashboardEntries.length]);
+  }, [
+    calculatedTotalUnpaidAmount,
+    calculatedTotalUnpaidParcels,
+    calculatedTotalAdvanceAmount,
+    calculatedTodayEarnings,
+    calculatedTodayParcels,
+    calculatedUnpaidCount,
+    targetUid,
+    dashboardEntries.length,
+    isAllCollectionsSynced,
+    currentUser,
+    inspectedUser,
+  ]);
 
   if (!isInitialized) {
     return (

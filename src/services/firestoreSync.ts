@@ -1937,6 +1937,7 @@ export function subscribeToUserData(
     onRiders: (riders: Rider[]) => void;
     onDeliveries: (deliveries: DeliveryEntry[]) => void;
     onSettlements: (settlements: SettlementRecord[]) => void;
+    onAllCollectionsSynced?: () => void;
     onError?: (error: Error) => void;
   },
   userEmail?: string | null
@@ -1945,6 +1946,7 @@ export function subscribeToUserData(
     callbacks.onRiders([]);
     callbacks.onDeliveries([]);
     callbacks.onSettlements([]);
+    callbacks.onAllCollectionsSynced?.();
     return () => {};
   }
 
@@ -1958,6 +1960,16 @@ export function subscribeToUserData(
   const tombstonedEntries = new Set<string>(initialTombstones.entryIds);
   const tombstonedRiders = new Set<string>(initialTombstones.riderIds);
   const tombstonedAdvances = new Set<string>(initialTombstones.advanceIds);
+
+  // Atomic initial hydration barrier: wait for all 5 collections before first UI emit
+  // so Total Unpaid and Total Pending Advance NEVER flash inconsistent intermediate numbers.
+  let ridersReady = false;
+  let advancesReady = false;
+  let incentivesReady = false;
+  let entriesReady = false;
+  let settlementsReady = false;
+  let initialBatchEmitted = false;
+  let unsubscribed = false;
 
   const notifyRiders = () => {
     // Strictly isolate: only include riders created by or belonging to this user's workspace
@@ -2099,6 +2111,26 @@ export function subscribeToUserData(
     return data;
   };
 
+  const flushInitialBatchIfReady = (force = false) => {
+    if (unsubscribed || initialBatchEmitted) return;
+    if (!force && !(ridersReady && advancesReady && incentivesReady && entriesReady && settlementsReady)) {
+      return;
+    }
+    initialBatchEmitted = true;
+    // Emit all 3 collections together so React 18 batches them into one single consistent render
+    notifySettlements();
+    notifyRiders();
+    notifyDeliveries();
+    callbacks.onAllCollectionsSynced?.();
+  };
+
+  // Safety timeout (3s): ensures offline/slow-subcollection environments never stall initial render
+  const initialSyncSafetyTimer = setTimeout(() => {
+    if (!unsubscribed && !initialBatchEmitted && (ridersReady || entriesReady || settlementsReady)) {
+      flushInitialBatchIfReady(true);
+    }
+  }, 3000);
+
   const unsubRiders = onSnapshot(
     workspaceRidersRef,
     (snapshot) => {
@@ -2110,12 +2142,19 @@ export function subscribeToUserData(
         }
         ridersMap.set(docSnap.id, r);
       });
-      notifyRiders();
-      if (deliveriesMap.size > 0) notifyDeliveries();
-      if (settlementsMap.size > 0) notifySettlements();
+      ridersReady = true;
+      if (!initialBatchEmitted) {
+        flushInitialBatchIfReady();
+      } else {
+        notifyRiders();
+        if (deliveriesMap.size > 0) notifyDeliveries();
+        if (settlementsMap.size > 0) notifySettlements();
+      }
     },
     (error) => {
       console.warn('Warning listening to workspace riders collection:', error);
+      ridersReady = true;
+      flushInitialBatchIfReady();
       callbacks.onError?.(error);
     }
   );
@@ -2128,10 +2167,17 @@ export function subscribeToUserData(
         const adv = docSnap.data() as RiderAdvanceEntry;
         advancesMap.set(docSnap.id, adv);
       });
-      notifyRiders();
+      advancesReady = true;
+      if (!initialBatchEmitted) {
+        flushInitialBatchIfReady();
+      } else {
+        notifyRiders();
+      }
     },
     (error) => {
       console.warn('Warning listening to workspace advances collection:', error);
+      advancesReady = true;
+      flushInitialBatchIfReady();
     }
   );
 
@@ -2143,10 +2189,17 @@ export function subscribeToUserData(
         const inc = docSnap.data() as RiderIncentiveEntry;
         incentivesMap.set(docSnap.id, inc);
       });
-      notifyRiders();
+      incentivesReady = true;
+      if (!initialBatchEmitted) {
+        flushInitialBatchIfReady();
+      } else {
+        notifyRiders();
+      }
     },
     (error) => {
       console.warn('Warning listening to workspace incentives collection:', error);
+      incentivesReady = true;
+      flushInitialBatchIfReady();
     }
   );
 
@@ -2161,10 +2214,17 @@ export function subscribeToUserData(
         }
         deliveriesMap.set(docSnap.id, e);
       });
-      notifyDeliveries();
+      entriesReady = true;
+      if (!initialBatchEmitted) {
+        flushInitialBatchIfReady();
+      } else {
+        notifyDeliveries();
+      }
     },
     (error) => {
       console.warn('Warning listening to workspace entries collection:', error);
+      entriesReady = true;
+      flushInitialBatchIfReady();
       callbacks.onError?.(error);
     }
   );
@@ -2180,11 +2240,18 @@ export function subscribeToUserData(
         }
         settlementsMap.set(docSnap.id, s);
       });
-      notifySettlements();
-      notifyRiders();
+      settlementsReady = true;
+      if (!initialBatchEmitted) {
+        flushInitialBatchIfReady();
+      } else {
+        notifySettlements();
+        notifyRiders();
+      }
     },
     (error) => {
       console.warn('Warning listening to workspace settlements collection:', error);
+      settlementsReady = true;
+      flushInitialBatchIfReady();
       callbacks.onError?.(error);
     }
   );
@@ -2223,14 +2290,18 @@ export function subscribeToUserData(
       if (changed) {
         const syncedTombstones = mergeLocalDeletedTombstones(userId, { entryIds, riderIds, advanceIds });
         scrubTombstonesFromLocalCache(userId, syncedTombstones);
-        notifyRiders();
-        notifyDeliveries();
+        if (initialBatchEmitted) {
+          notifyRiders();
+          notifyDeliveries();
+        }
       }
     },
     () => {}
   );
 
   return () => {
+    unsubscribed = true;
+    clearTimeout(initialSyncSafetyTimer);
     unsubRiders();
     unsubAdvances();
     unsubIncentives();
@@ -3695,10 +3766,10 @@ export async function recoverRiderLedgerHistoryFromFirestore(
         (latestPaidDate && candDate && candDate <= latestPaidDate)
       );
 
-      // Balance Preservation Guard: never allow recovered history to raise current active advance above baselineAdv
+      // Balance Preservation Guard: NEVER allow recovered history to shift current active advance UP or DOWN by even ₹0.01
       const testAdv = alreadyMarkedSettled ? cand : { ...cand, isSettled: false };
       const simulatedTotal = calculateActiveAdvanceTotal([...finalAdvs, testAdv], riderSettlements, rider.id);
-      const mustMarkSettled = alreadyMarkedSettled || simulatedTotal > baselineAdv + 0.01;
+      const mustMarkSettled = alreadyMarkedSettled || Math.abs(simulatedTotal - baselineAdv) > 0.01;
 
       const finalizedAdv: RiderAdvanceEntry = mustMarkSettled
         ? { ...cand, isSettled: true, isDeducted: true, status: 'PAID' }
@@ -3729,7 +3800,7 @@ export async function recoverRiderLedgerHistoryFromFirestore(
 
       const testInc = alreadyMarkedSettled ? cand : { ...cand, isSettled: false };
       const simulatedTotal = calculateActiveIncentiveTotal([...finalIncs, testInc], riderSettlements, rider.id);
-      const mustMarkSettled = alreadyMarkedSettled || simulatedTotal > baselineInc + 0.01;
+      const mustMarkSettled = alreadyMarkedSettled || Math.abs(simulatedTotal - baselineInc) > 0.01;
 
       const finalizedInc: RiderIncentiveEntry = mustMarkSettled
         ? { ...cand, isSettled: true, isPaid: true, status: 'PAID' }

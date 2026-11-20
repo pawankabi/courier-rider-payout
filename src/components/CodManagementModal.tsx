@@ -1483,10 +1483,11 @@ export const CodManagementModal: React.FC<Props> = ({
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
-                  <span className="flex items-center gap-1.5">
+                <h2 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2 flex-wrap">
+                  <span className="flex items-center gap-1.5 flex-wrap">
                     <span>COD</span>
-                    <HisabKitabLabel text="हिसाब-किताब" />
+                    <HisabKitabLabel text="हिसाब किताब" />
+                    <span className="text-emerald-300 uppercase tracking-wide">PORTAL</span>
                   </span>
                   <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                     Excel Grid & PIN Portal

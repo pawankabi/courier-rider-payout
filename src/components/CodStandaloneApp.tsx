@@ -2536,10 +2536,10 @@ export const CodStandaloneApp: React.FC<Props> = ({
           {/* Title & Live Date & Role */}
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-              <h1 className="text-xs sm:text-base font-black text-white tracking-tight flex items-center gap-1.5 truncate">
-                <span>COD</span>
-                <HisabKitabLabel text="हिसाब-किताब" />
-                <span className="hidden sm:inline">Portal</span>
+              <h1 className="text-[11px] sm:text-base font-black text-white tracking-tight flex items-center gap-1 sm:gap-1.5 flex-wrap leading-tight">
+                <span className="shrink-0">COD</span>
+                <HisabKitabLabel text="हिसाब किताब" className="shrink-0" />
+                <span className="shrink-0 text-emerald-300 uppercase tracking-wide">PORTAL</span>
               </h1>
               <span className="hidden md:inline-flex text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
                 Standalone Sub-App
