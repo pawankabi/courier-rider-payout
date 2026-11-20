@@ -12,6 +12,8 @@
  *    plus clean Hindi alerts.
  */
 
+import { Capacitor } from '@capacitor/core';
+
 const IDB_SHIELD_DB = 'cp_offline_cache_v1';
 const IDB_SHIELD_STORE = 'kv';
 const SAFE_MEMORY_FLAG_KEY = 'cp_firestore_safe_memory_mode';
@@ -19,6 +21,41 @@ const SAFE_MEMORY_FLAG_KEY = 'cp_firestore_safe_memory_mode';
 // Keep total localStorage under ~2.2 MB (leaving >2.8 MB permanent headroom out of 5 MB quota)
 const SOFT_QUOTA_BYTES = 2_200_000;
 const AGGRESSIVE_QUOTA_BYTES = 1_200_000;
+
+// Platform-aware IndexedDB offline storage limits:
+// - Android Native APK: 200 MB rolling storage budget
+// - Web App / Browser: 20 MB rolling storage budget (saves device storage)
+export const ANDROID_OFFLINE_STORAGE_LIMIT_BYTES = 200 * 1024 * 1024;
+export const WEB_OFFLINE_STORAGE_LIMIT_BYTES = 20 * 1024 * 1024;
+
+export function isNativeAndroidStoragePlatform(): boolean {
+  try {
+    return Boolean(Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+  } catch {
+    return false;
+  }
+}
+
+export function getOfflineStorageBudgetBytes(): number {
+  return isNativeAndroidStoragePlatform()
+    ? ANDROID_OFFLINE_STORAGE_LIMIT_BYTES
+    : WEB_OFFLINE_STORAGE_LIMIT_BYTES;
+}
+
+interface IdbStoredEnvelope {
+  __cpIdbWrap: 1;
+  value: unknown;
+  updatedAt: number;
+  sizeBytes: number;
+}
+
+function estimateJsonBytes(value: unknown): number {
+  try {
+    return JSON.stringify(value).length * 2;
+  } catch {
+    return 0;
+  }
+}
 
 export function isQuotaExceededError(err: unknown): boolean {
   if (!err) return false;
@@ -66,6 +103,8 @@ function isProtectedEssentialKey(key: string): boolean {
     key.startsWith('courier_settings') ||
     key.startsWith('courier_user_rate_config') ||
     key.startsWith('cp_app_lock') ||
+    key.startsWith('cp_stats_summary_') ||
+    key.startsWith('cp_cache_settlements_') ||
     key === SAFE_MEMORY_FLAG_KEY
   );
 }
@@ -230,9 +269,9 @@ export function enforceLocalStorageHeadroom(
         if (currentBytes <= targetMaxBytes) break;
         const k = localStorage.key(i);
         if (!k || isProtectedEssentialKey(k)) continue;
+        // Never remove settlements or verified summaries (removing settlements causes inflated advance figures!)
         if (
           k.startsWith('cp_cache_deliveries_') ||
-          k.startsWith('cp_cache_settlements_') ||
           k.startsWith('cp_cod_withdrawals_') ||
           k.startsWith('cp_cod_audit_logs_')
         ) {
@@ -275,26 +314,287 @@ export function safeLocalStorageSet(
   }
 }
 
+function openShieldIndexedDB(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      const req = window.indexedDB.open(IDB_SHIELD_DB, 1);
+      req.onupgradeneeded = () => {
+        const database = req.result;
+        if (!database.objectStoreNames.contains(IDB_SHIELD_STORE)) {
+          database.createObjectStore(IDB_SHIELD_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function unwrapIdbRecord<T>(raw: unknown): T | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === 'object' && (raw as any).__cpIdbWrap === 1 && 'value' in (raw as any)) {
+    return ((raw as IdbStoredEnvelope).value ?? null) as T | null;
+  }
+  return raw as T;
+}
+
+/**
+ * Accounting-safe delivery trimmer used ONLY when total IndexedDB usage exceeds platform budget
+ * (200 MB on Android APK, 20 MB on Web App).
+ * STRICT INVARIANT:
+ * - NEVER removes any Unpaid delivery (status !== 'Paid')
+ * - NEVER removes any Trash/Deleted item
+ * - ONLY trims oldest Paid & Settled historical delivery rows to make room for new data.
+ */
+export function trimOldestPaidDeliveriesForBudget<T extends { status?: string; isDeleted?: boolean; date?: string }>(
+  deliveries: T[],
+  maxBytes: number
+): T[] {
+  if (!Array.isArray(deliveries) || deliveries.length === 0) return [];
+  if (estimateJsonBytes(deliveries) <= maxBytes) return deliveries;
+
+  const protectedItems = deliveries.filter((d) => Boolean(d?.isDeleted) || d?.status !== 'Paid');
+  const paidItems = deliveries
+    .filter((d) => !d?.isDeleted && d?.status === 'Paid')
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '')); // newest first, oldest at end
+
+  const protectedBytes = estimateJsonBytes(protectedItems);
+  const remainingBudget = Math.max(0, maxBytes - protectedBytes);
+  if (remainingBudget <= 0 || paidItems.length === 0) {
+    return protectedItems;
+  }
+
+  // Binary search maximum count of newest Paid records that fit safely within remainingBudget
+  let low = 0;
+  let high = paidItems.length;
+  let bestCount = 0;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const sliceBytes = estimateJsonBytes(paidItems.slice(0, mid));
+    if (sliceBytes <= remainingBudget) {
+      bestCount = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return [...protectedItems, ...paidItems.slice(0, bestCount)];
+}
+
+let idbBudgetPruneScheduled = false;
+
+/**
+ * Enforces the platform-aware rolling IndexedDB storage budget:
+ * - Android Native APK: 200 MB
+ * - Web App / Browser: 20 MB
+ * When full, oldest non-essential backups/logs roll off first, then oldest Paid deliveries only.
+ * Riders, Settlements, Unpaid deliveries, Advances, and Incentives are ALWAYS 100% preserved.
+ */
+export async function enforceIndexedDBRollingBudget(): Promise<void> {
+  const database = await openShieldIndexedDB();
+  if (!database) return;
+
+  const budgetBytes = getOfflineStorageBudgetBytes();
+  const targetBytes = Math.floor(budgetBytes * 0.88);
+
+  try {
+    const records: Array<{ key: string; raw: unknown; sizeBytes: number; updatedAt: number }> = await new Promise(
+      (resolve) => {
+        const items: Array<{ key: string; raw: unknown; sizeBytes: number; updatedAt: number }> = [];
+        try {
+          const tx = database.transaction(IDB_SHIELD_STORE, 'readonly');
+          const store = tx.objectStore(IDB_SHIELD_STORE);
+          const cursorReq = store.openCursor();
+          cursorReq.onsuccess = () => {
+            const cursor = cursorReq.result;
+            if (!cursor) {
+              resolve(items);
+              return;
+            }
+            const key = String(cursor.key);
+            const raw = cursor.value;
+            const isWrapped = Boolean(raw && typeof raw === 'object' && (raw as any).__cpIdbWrap === 1);
+            const sizeBytes = isWrapped
+              ? Number((raw as IdbStoredEnvelope).sizeBytes) || estimateJsonBytes((raw as IdbStoredEnvelope).value)
+              : estimateJsonBytes(raw);
+            const updatedAt = isWrapped ? Number((raw as IdbStoredEnvelope).updatedAt) || 0 : 0;
+            items.push({ key, raw, sizeBytes, updatedAt });
+            cursor.continue();
+          };
+          cursorReq.onerror = () => resolve(items);
+        } catch {
+          resolve(items);
+        }
+      }
+    );
+
+    let totalBytes = records.reduce((sum, r) => sum + r.sizeBytes, 0);
+    if (totalBytes <= budgetBytes) {
+      database.close();
+      return;
+    }
+
+    // Stage 1: Delete oldest rolling backups, safety snapshots, and old COD logs first
+    const isEvictableHistoryKey = (k: string) =>
+      k.startsWith('cp_auto_backup_') ||
+      k.startsWith('cp_safety_shield_') ||
+      k.startsWith('cp_cod_sheet_') ||
+      k.startsWith('cp_cod_audit_logs_');
+
+    const evictable = records
+      .filter((r) => isEvictableHistoryKey(r.key))
+      .sort((a, b) => a.updatedAt - b.updatedAt || a.key.localeCompare(b.key));
+
+    const keysToDelete: string[] = [];
+    for (const rec of evictable) {
+      if (totalBytes <= targetBytes) break;
+      keysToDelete.push(rec.key);
+      totalBytes -= rec.sizeBytes;
+    }
+
+    if (keysToDelete.length > 0) {
+      await new Promise<void>((resolve) => {
+        try {
+          const tx = database.transaction(IDB_SHIELD_STORE, 'readwrite');
+          const store = tx.objectStore(IDB_SHIELD_STORE);
+          keysToDelete.forEach((k) => store.delete(k));
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        } catch {
+          resolve();
+        }
+      });
+    }
+
+    // Stage 2: If STILL over budget, trim ONLY oldest Paid & Settled deliveries inside delivery/atomic caches
+    if (totalBytes > targetBytes) {
+      const deliveryHoldingRecords = records.filter(
+        (r) =>
+          !keysToDelete.includes(r.key) &&
+          (r.key.startsWith('cp_cache_deliveries_') || r.key.startsWith('cp_atomic_workspace_'))
+      );
+
+      for (const rec of deliveryHoldingRecords) {
+        if (totalBytes <= targetBytes) break;
+        const unwrapped = unwrapIdbRecord<any>(rec.raw);
+        if (!unwrapped) continue;
+
+        const excessBytes = totalBytes - targetBytes;
+        const maxRecordBytes = Math.max(512 * 1024, rec.sizeBytes - excessBytes);
+
+        let updatedValue: unknown = null;
+        if (rec.key.startsWith('cp_cache_deliveries_') && Array.isArray(unwrapped)) {
+          const trimmed = trimOldestPaidDeliveriesForBudget(unwrapped, maxRecordBytes);
+          if (trimmed.length < unwrapped.length) {
+            updatedValue = trimmed;
+          }
+        } else if (rec.key.startsWith('cp_atomic_workspace_') && Array.isArray(unwrapped.deliveries)) {
+          const nonDeliveryBytes = Math.max(
+            0,
+            rec.sizeBytes - estimateJsonBytes(unwrapped.deliveries)
+          );
+          const allowedDeliveryBytes = Math.max(256 * 1024, maxRecordBytes - nonDeliveryBytes);
+          const trimmed = trimOldestPaidDeliveriesForBudget(unwrapped.deliveries, allowedDeliveryBytes);
+          if (trimmed.length < unwrapped.deliveries.length) {
+            updatedValue = { ...unwrapped, deliveries: trimmed };
+          }
+        }
+
+        if (updatedValue !== null) {
+          const newSize = estimateJsonBytes(updatedValue);
+          const envelope: IdbStoredEnvelope = {
+            __cpIdbWrap: 1,
+            value: updatedValue,
+            updatedAt: Date.now(),
+            sizeBytes: newSize,
+          };
+          await new Promise<void>((resolve) => {
+            try {
+              const tx = database.transaction(IDB_SHIELD_STORE, 'readwrite');
+              tx.objectStore(IDB_SHIELD_STORE).put(envelope, rec.key);
+              tx.oncomplete = () => resolve();
+              tx.onerror = () => resolve();
+            } catch {
+              resolve();
+            }
+          });
+          totalBytes = totalBytes - rec.sizeBytes + newSize;
+        }
+      }
+    }
+  } catch {
+    // Non-blocking safeguard
+  } finally {
+    try {
+      database.close();
+    } catch {}
+  }
+}
+
+export function loadBlobFromIndexedDB<T = unknown>(key: string): Promise<T | null> {
+  return openShieldIndexedDB().then((database) => {
+    if (!database) return null;
+    return new Promise<T | null>((resolve) => {
+      try {
+        const tx = database.transaction(IDB_SHIELD_STORE, 'readonly');
+        const req = tx.objectStore(IDB_SHIELD_STORE).get(key);
+        req.onsuccess = () => {
+          const result = unwrapIdbRecord<T>(req.result);
+          database.close();
+          resolve(result);
+        };
+        req.onerror = () => {
+          database.close();
+          resolve(null);
+        };
+      } catch {
+        try {
+          database.close();
+        } catch {}
+        resolve(null);
+      }
+    });
+  });
+}
+
 export function saveBlobToIndexedDB(key: string, value: unknown): void {
   if (typeof window === 'undefined' || !('indexedDB' in window)) return;
-  try {
-    const req = window.indexedDB.open(IDB_SHIELD_DB, 1);
-    req.onupgradeneeded = () => {
-      const database = req.result;
-      if (!database.objectStoreNames.contains(IDB_SHIELD_STORE)) {
-        database.createObjectStore(IDB_SHIELD_STORE);
-      }
-    };
-    req.onsuccess = () => {
+  const sizeBytes = estimateJsonBytes(value);
+  const envelope: IdbStoredEnvelope = {
+    __cpIdbWrap: 1,
+    value,
+    updatedAt: Date.now(),
+    sizeBytes,
+  };
+
+  openShieldIndexedDB().then((database) => {
+    if (!database) return;
+    try {
+      const tx = database.transaction(IDB_SHIELD_STORE, 'readwrite');
+      tx.objectStore(IDB_SHIELD_STORE).put(envelope, key);
+      tx.oncomplete = () => {
+        database.close();
+        if (!idbBudgetPruneScheduled) {
+          idbBudgetPruneScheduled = true;
+          setTimeout(() => {
+            idbBudgetPruneScheduled = false;
+            enforceIndexedDBRollingBudget().catch(() => {});
+          }, 1200);
+        }
+      };
+      tx.onerror = () => database.close();
+    } catch {
       try {
-        const database = req.result;
-        const tx = database.transaction(IDB_SHIELD_STORE, 'readwrite');
-        tx.objectStore(IDB_SHIELD_STORE).put(value, key);
-        tx.oncomplete = () => database.close();
-        tx.onerror = () => database.close();
+        database.close();
       } catch {}
-    };
-  } catch {}
+    }
+  });
 }
 
 export function shouldBootFirestoreInMemoryMode(): boolean {

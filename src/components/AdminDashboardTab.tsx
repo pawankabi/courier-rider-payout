@@ -51,7 +51,8 @@ import {
   Building2,
   Scale,
   RotateCcw,
-  Lock
+  Lock,
+  Database
 } from 'lucide-react';
 import { 
   AppUser, 
@@ -99,6 +100,7 @@ import { SingleRiderDetailModal } from './SingleRiderDetailModal';
 import { AdminBillingExpiryAndSlips } from './AdminBillingExpiryAndSlips';
 import { FreeToPaidConversionModal } from './FreeToPaidConversionModal';
 import { AdminPaymentHistoryModal } from './AdminPaymentHistoryModal';
+import { AdminFirebaseStoragePanel } from './AdminFirebaseStoragePanel';
 
 export interface AdminDashboardTabProps {
   currentAdminEmail?: string | null;
@@ -130,8 +132,8 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
   const [showSubConfigModal, setShowSubConfigModal] = useState(false);
   const [savingSubConfig, setSavingSubConfig] = useState(false);
 
-  // Navigation between User Management and Subscription & Billing Management
-  const [activeAdminSection, setActiveAdminSection] = useState<'users' | 'subscriptions'>('users');
+  // Navigation between User Management, Subscription & Billing, and Firebase Storage & Balance
+  const [activeAdminSection, setActiveAdminSection] = useState<'users' | 'subscriptions' | 'storage'>('users');
 
   // Subscription filters & search
   const [subFilter, setSubFilter] = useState<'all' | 'paid' | 'free' | 'verification_pending' | 'expired'>('all');
@@ -1119,6 +1121,25 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
               </span>
             )}
+          </button>
+
+          <button
+            id="admin-nav-storage-tab"
+            type="button"
+            onClick={() => setActiveAdminSection('storage')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition cursor-pointer ${
+              activeAdminSection === 'storage'
+                ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Database className="w-4 h-4" />
+            <span>Firebase मेमोरी व बैलेंस</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeAdminSection === 'storage' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-300'
+            }`}>
+              1 GB
+            </span>
           </button>
         </div>
 
@@ -2808,6 +2829,8 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({
         )}
       </div>
       </div>
+      ) : activeAdminSection === 'storage' ? (
+        <AdminFirebaseStoragePanel users={users} />
       ) : (
         <div className="space-y-6 animate-in fade-in">
           {/* Top-Level Expiry Alerts (48-Hour) & Pending Slips Approval Section */}

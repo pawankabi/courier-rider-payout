@@ -1937,7 +1937,8 @@ export function subscribeToUserData(
     onRiders: (riders: Rider[]) => void;
     onDeliveries: (deliveries: DeliveryEntry[]) => void;
     onSettlements: (settlements: SettlementRecord[]) => void;
-    onAllCollectionsSynced?: () => void;
+    onAllCollectionsSynced?: (fromServer: boolean) => void;
+    shouldSuppressOfflineCache?: () => boolean;
     onError?: (error: Error) => void;
   },
   userEmail?: string | null
@@ -1946,7 +1947,7 @@ export function subscribeToUserData(
     callbacks.onRiders([]);
     callbacks.onDeliveries([]);
     callbacks.onSettlements([]);
-    callbacks.onAllCollectionsSynced?.();
+    callbacks.onAllCollectionsSynced?.(false);
     return () => {};
   }
 
@@ -1961,14 +1962,23 @@ export function subscribeToUserData(
   const tombstonedRiders = new Set<string>(initialTombstones.riderIds);
   const tombstonedAdvances = new Set<string>(initialTombstones.advanceIds);
 
-  // Atomic initial hydration barrier: wait for all 5 collections before first UI emit
-  // so Total Unpaid and Total Pending Advance NEVER flash inconsistent intermediate numbers.
-  let ridersReady = false;
-  let advancesReady = false;
-  let incentivesReady = false;
-  let entriesReady = false;
-  let settlementsReady = false;
-  let initialBatchEmitted = false;
+  // Server-Confirmed Atomic Hydration Barrier:
+  // Stale Firestore IndexedDB snapshots (`snapshot.metadata.fromCache === true`) MUST NOT unlock
+  // the barrier while online — otherwise UI flashes stale cache (#2) then 5 staggered server updates (#3).
+  let ridersSeen = false;
+  let advancesSeen = false;
+  let incentivesSeen = false;
+  let entriesSeen = false;
+  let settlementsSeen = false;
+
+  let ridersServerReady = false;
+  let advancesServerReady = false;
+  let incentivesServerReady = false;
+  let entriesServerReady = false;
+  let settlementsServerReady = false;
+
+  let serverBatchSynced = false;
+  let offlineFallbackEmitted = false;
   let unsubscribed = false;
 
   const notifyRiders = () => {
@@ -2111,147 +2121,247 @@ export function subscribeToUserData(
     return data;
   };
 
-  const flushInitialBatchIfReady = (force = false) => {
-    if (unsubscribed || initialBatchEmitted) return;
-    if (!force && !(ridersReady && advancesReady && incentivesReady && entriesReady && settlementsReady)) {
-      return;
-    }
-    initialBatchEmitted = true;
-    // Emit all 3 collections together so React 18 batches them into one single consistent render
+  const allFiveServerReady = () =>
+    ridersServerReady &&
+    advancesServerReady &&
+    incentivesServerReady &&
+    entriesServerReady &&
+    settlementsServerReady;
+
+  const allFiveSeen = () =>
+    ridersSeen && advancesSeen && incentivesSeen && entriesSeen && settlementsSeen;
+
+  const flushServerBatchIfReady = () => {
+    if (unsubscribed || serverBatchSynced) return;
+    if (!allFiveServerReady()) return;
+    serverBatchSynced = true;
+    offlineFallbackEmitted = true;
+    // Emit all 3 collections together in ONE synchronous tick -> single React 18 render with 100% accurate totals
     notifySettlements();
     notifyRiders();
     notifyDeliveries();
-    callbacks.onAllCollectionsSynced?.();
+    callbacks.onAllCollectionsSynced?.(true);
   };
 
-  // Safety timeout (3s): ensures offline/slow-subcollection environments never stall initial render
-  const initialSyncSafetyTimer = setTimeout(() => {
-    if (!unsubscribed && !initialBatchEmitted && (ridersReady || entriesReady || settlementsReady)) {
-      flushInitialBatchIfReady(true);
+  const flushOfflineFallbackIfNeeded = (allowPartial = false) => {
+    if (unsubscribed || serverBatchSynced || offlineFallbackEmitted) return;
+    if (!allowPartial && !allFiveSeen()) return;
+    // If App.tsx already hydrated a verified Atomic IndexedDB Snapshot, do NOT let potentially stale
+    // Firestore local cache overwrite it while offline — wait cleanly for serverBatchSynced!
+    if (callbacks.shouldSuppressOfflineCache?.()) {
+      offlineFallbackEmitted = true;
+      callbacks.onAllCollectionsSynced?.(false);
+      return;
     }
-  }, 3000);
+    // Never overwrite a valid Atomic IndexedDB snapshot with an empty Firestore offline cache
+    if (ridersMap.size === 0 && deliveriesMap.size === 0 && settlementsMap.size === 0) {
+      return;
+    }
+    offlineFallbackEmitted = true;
+    notifySettlements();
+    notifyRiders();
+    notifyDeliveries();
+    callbacks.onAllCollectionsSynced?.(false);
+  };
+
+  const isCurrentlyOffline = () =>
+    typeof navigator !== 'undefined' && navigator.onLine === false;
+
+  // Offline / Slow-Network Fallback Timer (5s):
+  // If the device is offline or the network is stalled, still release complete local cache cleanly
+  // while keeping `serverBatchSynced = false` so when internet returns all 5 server snapshots wait together.
+  const initialSyncSafetyTimer = setTimeout(() => {
+    if (!unsubscribed && !serverBatchSynced && !offlineFallbackEmitted) {
+      flushOfflineFallbackIfNeeded(true);
+    }
+  }, 5000);
 
   const unsubRiders = onSnapshot(
     workspaceRidersRef,
+    { includeMetadataChanges: true },
     (snapshot) => {
-      ridersMap.clear();
-      snapshot.forEach((docSnap) => {
-        const r = normalizeWorkspaceDoc(docSnap.data() as Rider);
-        if (!isEntityOwnedByUser(r, userId, effectiveEmail)) {
-          return;
+      const hasDocChanges = snapshot.docChanges().length > 0;
+      if (!serverBatchSynced || hasDocChanges) {
+        ridersMap.clear();
+        snapshot.forEach((docSnap) => {
+          const r = normalizeWorkspaceDoc(docSnap.data() as Rider);
+          if (!isEntityOwnedByUser(r, userId, effectiveEmail)) {
+            return;
+          }
+          ridersMap.set(docSnap.id, r);
+        });
+      }
+      ridersSeen = true;
+      if (!snapshot.metadata.fromCache) {
+        ridersServerReady = true;
+      }
+
+      if (serverBatchSynced) {
+        if (hasDocChanges) {
+          notifyRiders();
+          if (deliveriesMap.size > 0) notifyDeliveries();
+          if (settlementsMap.size > 0) notifySettlements();
         }
-        ridersMap.set(docSnap.id, r);
-      });
-      ridersReady = true;
-      if (!initialBatchEmitted) {
-        flushInitialBatchIfReady();
-      } else {
-        notifyRiders();
-        if (deliveriesMap.size > 0) notifyDeliveries();
-        if (settlementsMap.size > 0) notifySettlements();
+      } else if (allFiveServerReady()) {
+        flushServerBatchIfReady();
+      } else if (isCurrentlyOffline() && allFiveSeen()) {
+        flushOfflineFallbackIfNeeded(false);
       }
     },
     (error) => {
       console.warn('Warning listening to workspace riders collection:', error);
-      ridersReady = true;
-      flushInitialBatchIfReady();
+      ridersSeen = true;
+      ridersServerReady = true;
+      flushServerBatchIfReady();
       callbacks.onError?.(error);
     }
   );
 
   const unsubAdvances = onSnapshot(
     workspaceAdvancesRef,
+    { includeMetadataChanges: true },
     (snapshot) => {
-      advancesMap.clear();
-      snapshot.forEach((docSnap) => {
-        const adv = docSnap.data() as RiderAdvanceEntry;
-        advancesMap.set(docSnap.id, adv);
-      });
-      advancesReady = true;
-      if (!initialBatchEmitted) {
-        flushInitialBatchIfReady();
-      } else {
-        notifyRiders();
+      const hasDocChanges = snapshot.docChanges().length > 0;
+      if (!serverBatchSynced || hasDocChanges) {
+        advancesMap.clear();
+        snapshot.forEach((docSnap) => {
+          const adv = docSnap.data() as RiderAdvanceEntry;
+          advancesMap.set(docSnap.id, adv);
+        });
+      }
+      advancesSeen = true;
+      if (!snapshot.metadata.fromCache) {
+        advancesServerReady = true;
+      }
+
+      if (serverBatchSynced) {
+        if (hasDocChanges) {
+          notifyRiders();
+        }
+      } else if (allFiveServerReady()) {
+        flushServerBatchIfReady();
+      } else if (isCurrentlyOffline() && allFiveSeen()) {
+        flushOfflineFallbackIfNeeded(false);
       }
     },
     (error) => {
       console.warn('Warning listening to workspace advances collection:', error);
-      advancesReady = true;
-      flushInitialBatchIfReady();
+      advancesSeen = true;
+      advancesServerReady = true;
+      flushServerBatchIfReady();
     }
   );
 
   const unsubIncentives = onSnapshot(
     workspaceIncentivesRef,
+    { includeMetadataChanges: true },
     (snapshot) => {
-      incentivesMap.clear();
-      snapshot.forEach((docSnap) => {
-        const inc = docSnap.data() as RiderIncentiveEntry;
-        incentivesMap.set(docSnap.id, inc);
-      });
-      incentivesReady = true;
-      if (!initialBatchEmitted) {
-        flushInitialBatchIfReady();
-      } else {
-        notifyRiders();
+      const hasDocChanges = snapshot.docChanges().length > 0;
+      if (!serverBatchSynced || hasDocChanges) {
+        incentivesMap.clear();
+        snapshot.forEach((docSnap) => {
+          const inc = docSnap.data() as RiderIncentiveEntry;
+          incentivesMap.set(docSnap.id, inc);
+        });
+      }
+      incentivesSeen = true;
+      if (!snapshot.metadata.fromCache) {
+        incentivesServerReady = true;
+      }
+
+      if (serverBatchSynced) {
+        if (hasDocChanges) {
+          notifyRiders();
+        }
+      } else if (allFiveServerReady()) {
+        flushServerBatchIfReady();
+      } else if (isCurrentlyOffline() && allFiveSeen()) {
+        flushOfflineFallbackIfNeeded(false);
       }
     },
     (error) => {
       console.warn('Warning listening to workspace incentives collection:', error);
-      incentivesReady = true;
-      flushInitialBatchIfReady();
+      incentivesSeen = true;
+      incentivesServerReady = true;
+      flushServerBatchIfReady();
     }
   );
 
   const unsubEntries = onSnapshot(
     workspaceEntriesRef,
+    { includeMetadataChanges: true },
     (snapshot) => {
-      deliveriesMap.clear();
-      snapshot.forEach((docSnap) => {
-        const e = normalizeWorkspaceDoc(docSnap.data() as DeliveryEntry);
-        if (!isEntityOwnedByUser(e, userId, effectiveEmail)) {
-          return;
+      const hasDocChanges = snapshot.docChanges().length > 0;
+      if (!serverBatchSynced || hasDocChanges) {
+        deliveriesMap.clear();
+        snapshot.forEach((docSnap) => {
+          const e = normalizeWorkspaceDoc(docSnap.data() as DeliveryEntry);
+          if (!isEntityOwnedByUser(e, userId, effectiveEmail)) {
+            return;
+          }
+          deliveriesMap.set(docSnap.id, e);
+        });
+      }
+      entriesSeen = true;
+      if (!snapshot.metadata.fromCache) {
+        entriesServerReady = true;
+      }
+
+      if (serverBatchSynced) {
+        if (hasDocChanges) {
+          notifyDeliveries();
         }
-        deliveriesMap.set(docSnap.id, e);
-      });
-      entriesReady = true;
-      if (!initialBatchEmitted) {
-        flushInitialBatchIfReady();
-      } else {
-        notifyDeliveries();
+      } else if (allFiveServerReady()) {
+        flushServerBatchIfReady();
+      } else if (isCurrentlyOffline() && allFiveSeen()) {
+        flushOfflineFallbackIfNeeded(false);
       }
     },
     (error) => {
       console.warn('Warning listening to workspace entries collection:', error);
-      entriesReady = true;
-      flushInitialBatchIfReady();
+      entriesSeen = true;
+      entriesServerReady = true;
+      flushServerBatchIfReady();
       callbacks.onError?.(error);
     }
   );
 
   const unsubSettlements = onSnapshot(
     workspaceSettlementsRef,
+    { includeMetadataChanges: true },
     (snapshot) => {
-      settlementsMap.clear();
-      snapshot.forEach((docSnap) => {
-        const s = normalizeWorkspaceDoc(docSnap.data() as SettlementRecord);
-        if (!isEntityOwnedByUser(s, userId, effectiveEmail)) {
-          return;
+      const hasDocChanges = snapshot.docChanges().length > 0;
+      if (!serverBatchSynced || hasDocChanges) {
+        settlementsMap.clear();
+        snapshot.forEach((docSnap) => {
+          const s = normalizeWorkspaceDoc(docSnap.data() as SettlementRecord);
+          if (!isEntityOwnedByUser(s, userId, effectiveEmail)) {
+            return;
+          }
+          settlementsMap.set(docSnap.id, s);
+        });
+      }
+      settlementsSeen = true;
+      if (!snapshot.metadata.fromCache) {
+        settlementsServerReady = true;
+      }
+
+      if (serverBatchSynced) {
+        if (hasDocChanges) {
+          notifySettlements();
+          notifyRiders();
         }
-        settlementsMap.set(docSnap.id, s);
-      });
-      settlementsReady = true;
-      if (!initialBatchEmitted) {
-        flushInitialBatchIfReady();
-      } else {
-        notifySettlements();
-        notifyRiders();
+      } else if (allFiveServerReady()) {
+        flushServerBatchIfReady();
+      } else if (isCurrentlyOffline() && allFiveSeen()) {
+        flushOfflineFallbackIfNeeded(false);
       }
     },
     (error) => {
       console.warn('Warning listening to workspace settlements collection:', error);
-      settlementsReady = true;
-      flushInitialBatchIfReady();
+      settlementsSeen = true;
+      settlementsServerReady = true;
+      flushServerBatchIfReady();
       callbacks.onError?.(error);
     }
   );
@@ -2290,7 +2400,7 @@ export function subscribeToUserData(
       if (changed) {
         const syncedTombstones = mergeLocalDeletedTombstones(userId, { entryIds, riderIds, advanceIds });
         scrubTombstonesFromLocalCache(userId, syncedTombstones);
-        if (initialBatchEmitted) {
+        if (serverBatchSynced) {
           notifyRiders();
           notifyDeliveries();
         }

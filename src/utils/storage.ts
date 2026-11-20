@@ -3,6 +3,9 @@ import {
   enforceLocalStorageHeadroom,
   safeLocalStorageSet,
   saveBlobToIndexedDB,
+  loadBlobFromIndexedDB,
+  getOfflineStorageBudgetBytes,
+  trimOldestPaidDeliveriesForBudget,
   isQuotaExceededError,
 } from '../services/appStorageAndFirebaseShield';
 
@@ -45,15 +48,128 @@ function getSettlementsKey(userId?: string) {
   return uid ? `cp_cache_settlements_${uid}` : 'cp_cache_settlements_guest';
 }
 
-/**
- * Lightweight IndexedDB backing store so full historical delivery/rider/settlement caches
- * remain available locally even when localStorage (~5MB) is full.
- */
-const IDB_NAME = 'cp_offline_cache_v1';
-const IDB_STORE = 'kv';
+function getAtomicWorkspaceKey(userId?: string) {
+  const uid = userId || getCachedAuthUserId();
+  return uid ? `cp_atomic_workspace_${uid}` : 'cp_atomic_workspace_guest';
+}
 
 function saveToIndexedDB(key: string, value: unknown): void {
   saveBlobToIndexedDB(key, value);
+}
+
+export interface AtomicWorkspaceSnapshot {
+  userId: string;
+  riders: Rider[];
+  deliveries: DeliveryEntry[];
+  settlements: SettlementRecord[];
+  totalUnpaidAmount: number;
+  totalUnpaidParcels: number;
+  totalAdvanceAmount: number;
+  verifiedFromServer: boolean;
+  savedAt: number;
+}
+
+/**
+ * Saves the complete workspace (Riders + Deliveries + Settlements + Verified Totals)
+ * together as ONE atomic packet in IndexedDB.
+ * Respects platform rolling budget (200 MB Android APK / 20 MB Web App):
+ * if oversized, trims ONLY oldest Paid & Settled deliveries while preserving 100% of
+ * Riders, Settlements, Active Advances/Incentives, and Unpaid Deliveries.
+ */
+export function saveAtomicWorkspaceSnapshotToIDB(
+  userId: string | undefined,
+  snapshot: Omit<AtomicWorkspaceSnapshot, 'userId' | 'savedAt'>
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const uid = userId || getCachedAuthUserId() || 'guest';
+    const cleanRiders = (snapshot.riders || []).filter((r) => !isSampleRider(r));
+    const cleanDeliveries = (snapshot.deliveries || []).filter((d) => !isSampleDelivery(d));
+    const cleanSettlements = Array.isArray(snapshot.settlements) ? snapshot.settlements : [];
+
+    // Cap atomic snapshot safely within 80% of platform budget (160MB Android / 16MB Web)
+    const maxSnapshotBytes = Math.floor(getOfflineStorageBudgetBytes() * 0.8);
+    const baseNonDeliveryBytes = JSON.stringify({ riders: cleanRiders, settlements: cleanSettlements }).length * 2;
+    const allowedDeliveryBytes = Math.max(512 * 1024, maxSnapshotBytes - baseNonDeliveryBytes);
+    const budgetSafeDeliveries = trimOldestPaidDeliveriesForBudget(cleanDeliveries, allowedDeliveryBytes);
+
+    const payload: AtomicWorkspaceSnapshot = {
+      userId: uid,
+      riders: cleanRiders,
+      deliveries: budgetSafeDeliveries,
+      settlements: cleanSettlements,
+      totalUnpaidAmount: Number(snapshot.totalUnpaidAmount) || 0,
+      totalUnpaidParcels: Number(snapshot.totalUnpaidParcels) || 0,
+      totalAdvanceAmount: Number(snapshot.totalAdvanceAmount) || 0,
+      verifiedFromServer: Boolean(snapshot.verifiedFromServer),
+      savedAt: Date.now(),
+    };
+
+    saveToIndexedDB(getAtomicWorkspaceKey(uid), payload);
+  } catch (err) {
+    console.warn('Notice saving atomic workspace snapshot to IndexedDB:', err);
+  }
+}
+
+/**
+ * Loads the complete atomic offline snapshot from IndexedDB (200MB Android / 20MB Web).
+ * Guarantees offline mode has all Riders + Deliveries + Settlements together without
+ * localStorage 5MB truncation or missing settlements!
+ */
+export async function loadAtomicWorkspaceSnapshotFromIDB(
+  userId?: string
+): Promise<AtomicWorkspaceSnapshot | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const uid = userId || getCachedAuthUserId() || 'guest';
+    const atomic = await loadBlobFromIndexedDB<AtomicWorkspaceSnapshot>(getAtomicWorkspaceKey(uid));
+    if (
+      atomic &&
+      Array.isArray(atomic.riders) &&
+      Array.isArray(atomic.deliveries) &&
+      Array.isArray(atomic.settlements) &&
+      (atomic.riders.length > 0 || atomic.deliveries.length > 0)
+    ) {
+      return {
+        ...atomic,
+        riders: atomic.riders.filter((r) => !isSampleRider(r)),
+        deliveries: atomic.deliveries.filter((d) => !isSampleDelivery(d)),
+      };
+    }
+
+    // Upgrade fallback: reconstruct from legacy per-collection IndexedDB blobs if already present
+    const [idbRiders, idbDeliveries, idbSettlements] = await Promise.all([
+      loadBlobFromIndexedDB<Rider[]>(getRidersKey(uid)),
+      loadBlobFromIndexedDB<DeliveryEntry[]>(getDeliveriesKey(uid)),
+      loadBlobFromIndexedDB<SettlementRecord[]>(getSettlementsKey(uid)),
+    ]);
+
+    if (
+      Array.isArray(idbRiders) &&
+      Array.isArray(idbDeliveries) &&
+      Array.isArray(idbSettlements) &&
+      (idbRiders.length > 0 || idbDeliveries.length > 0)
+    ) {
+      const cleanRiders = idbRiders.filter((r) => !isSampleRider(r));
+      const cleanDeliveries = idbDeliveries.filter((d) => !isSampleDelivery(d));
+      const unpaidDeliveries = cleanDeliveries.filter((d) => !d.isDeleted && d.status === 'Unpaid');
+      return {
+        userId: uid,
+        riders: cleanRiders,
+        deliveries: cleanDeliveries,
+        settlements: idbSettlements,
+        totalUnpaidAmount: unpaidDeliveries.reduce((s, d) => s + (Number(d.totalEarnings) || 0), 0),
+        totalUnpaidParcels: unpaidDeliveries.reduce((s, d) => s + (Number(d.parcels) || 0), 0),
+        totalAdvanceAmount: 0,
+        verifiedFromServer: false,
+        savedAt: Date.now(),
+      };
+    }
+    return null;
+  } catch (err) {
+    console.warn('Notice loading atomic workspace snapshot from IndexedDB:', err);
+    return null;
+  }
 }
 
 export function reclaimLocalStorageSpace(activeUid?: string | null): void {
@@ -547,6 +663,7 @@ export interface QuickStatsSummary {
   todayEarnings: number;
   todayParcels: number;
   unpaidCount: number;
+  verifiedFromServer?: boolean;
   lastUpdated: number;
 }
 
@@ -579,6 +696,7 @@ export function loadQuickStatsSummary(userId?: string): QuickStatsSummary | null
       todayEarnings: Number(parsed.todayEarnings) || 0,
       todayParcels: Number(parsed.todayParcels) || 0,
       unpaidCount: Number(parsed.unpaidCount) || 0,
+      verifiedFromServer: Boolean(parsed.verifiedFromServer),
       lastUpdated: Number(parsed.lastUpdated) || 0,
     };
   } catch {

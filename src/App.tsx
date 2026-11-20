@@ -95,6 +95,7 @@ import { RiderLedgerStatement } from './components/RiderLedgerStatement';
 import { StatementErrorBoundary } from './components/StatementErrorBoundary';
 import { DownloadedPdfOverlay } from './components/DownloadedPdfOverlay';
 import { 
+  getCachedAuthUserId,
   loadRidersFromStorage, 
   saveRidersToStorage, 
   loadDeliveriesFromStorage, 
@@ -106,8 +107,14 @@ import {
   hasUserCachedData,
   purgeLegacyMockStorage,
   loadQuickStatsSummary,
-  saveQuickStatsSummary
+  saveQuickStatsSummary,
+  loadAtomicWorkspaceSnapshotFromIDB,
+  saveAtomicWorkspaceSnapshotToIDB
 } from './utils/storage';
+import {
+  reportCurrentUserStorageFootprintOncePerDay,
+  runSafeFirebaseRollingRetentionCheck,
+} from './services/firebaseStorageManager';
 import {
   calculateActiveAdvanceTotal,
   calculateActiveIncentiveTotal,
@@ -452,16 +459,59 @@ function MainCourierApp() {
     setViewingLedgerRiderId(riderId);
   };
   
-  // Instant Cache-First initialization: load authentic user data directly from localStorage in 0.0s!
-  const [settlements, setSettlements] = useState<SettlementRecord[]>(() => loadSettlementsFromStorage());
+  // Safe Atomic Cold-Start Initialization:
+  // For authenticated cloud sessions, wait ~10ms for the Atomic IndexedDB Snapshot (200MB Android / 20MB Web)
+  // while QuickStatsSummary renders exact verified totals at 0ms — preventing 5MB localStorage mismatch flashes (e.g. ₹60,000 advance spike).
+  const initialCachedUidRef = useRef<string | null>(getCachedAuthUserId());
+  const isConsistentLocalCache = (
+    cachedRiders: Rider[],
+    cachedDeliveries: DeliveryEntry[],
+    cachedSettlements: SettlementRecord[]
+  ): boolean => {
+    if (cachedRiders.length === 0) return true;
+    if (cachedDeliveries.length === 0) return false;
+    if (cachedSettlements.length === 0) {
+      const hasAnySettledRecord = cachedRiders.some(
+        (r) =>
+          (r.advances || []).some(
+            (a) => a && (a.status === 'Settled' || a.status === 'ADJUSTED' || Boolean((a as any).settlementId))
+          ) ||
+          (r.incentives || []).some(
+            (i) => i && (i.status === 'Settled' || i.status === 'ADJUSTED' || Boolean((i as any).settlementId))
+          )
+      );
+      if (hasAnySettledRecord) return false;
+    }
+    return true;
+  };
+
+  const [settlements, setSettlements] = useState<SettlementRecord[]>(() => {
+    if (initialCachedUidRef.current) return [];
+    const rawRiders = loadRidersFromStorage();
+    const rawDeliveries = loadDeliveriesFromStorage();
+    const rawSettlements = loadSettlementsFromStorage();
+    return isConsistentLocalCache(rawRiders, rawDeliveries, rawSettlements) ? rawSettlements : [];
+  });
   const [riders, setRiders] = useState<Rider[]>(() => {
     purgeLegacyMockStorage();
+    if (initialCachedUidRef.current) return [];
     const rawRiders = loadRidersFromStorage();
+    const rawDeliveries = loadDeliveriesFromStorage();
     const rawSettlements = loadSettlementsFromStorage();
+    if (!isConsistentLocalCache(rawRiders, rawDeliveries, rawSettlements)) return [];
     return reindexAndSanitizeRiderBalances(rawRiders, rawSettlements).updatedRiders;
   });
-  const [entries, setEntries] = useState<DeliveryEntry[]>(() => loadDeliveriesFromStorage());
-  const [isDataLoading, setIsDataLoading] = useState<boolean>(() => !hasUserCachedData());
+  const [entries, setEntries] = useState<DeliveryEntry[]>(() => {
+    if (initialCachedUidRef.current) return [];
+    const rawRiders = loadRidersFromStorage();
+    const rawDeliveries = loadDeliveriesFromStorage();
+    const rawSettlements = loadSettlementsFromStorage();
+    return isConsistentLocalCache(rawRiders, rawDeliveries, rawSettlements) ? rawDeliveries : [];
+  });
+  const [isDataLoading, setIsDataLoading] = useState<boolean>(() => {
+    if (initialCachedUidRef.current) return true;
+    return !hasUserCachedData();
+  });
   const [isInitialized, setIsInitialized] = useState(true);
 
   // Authentication & Cloud Sync state
@@ -471,6 +521,9 @@ function MainCourierApp() {
   const [inspectedUser, setInspectedUser] = useState<AppUser | null>(null);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'local'>('local');
   const [isAllCollectionsSynced, setIsAllCollectionsSynced] = useState<boolean>(false);
+  const [isServerCollectionsSynced, setIsServerCollectionsSynced] = useState<boolean>(false);
+  const atomicIdbLoadedRef = useRef<string | null>(null);
+  const serverSyncedForUidRef = useRef<string | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup'>('signin');
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -1349,29 +1402,70 @@ function MainCourierApp() {
       if (user) {
         setSyncStatus('syncing');
         setIsAllCollectionsSynced(false);
-
-        // 1. Immediately load user-specific cached local data (0ms latency, no blocking)
-        // Strictly filter out any records created by external Gmail accounts
-        const rawCachedRiders = loadRidersFromStorage(user.uid);
-        const cachedRiders = rawCachedRiders.filter((r) => isEntityOwnedByUser(r, user.uid, user.email));
-        const allowedRiderIds = new Set(cachedRiders.map((r) => r.id));
-
-        const rawCachedDeliveries = loadDeliveriesFromStorage(cachedRiders, user.uid);
-        const cachedDeliveries = rawCachedDeliveries.filter((d) => {
-          if (d.riderId && !allowedRiderIds.has(d.riderId)) return false;
-          return isEntityOwnedByUser(d, user.uid, user.email);
-        });
-
-        const rawCachedSettlements = loadSettlementsFromStorage(user.uid);
-        const cachedSettlements = rawCachedSettlements.filter((s) => {
-          if (s.riderId && !allowedRiderIds.has(s.riderId)) return false;
-          return isEntityOwnedByUser(s, user.uid, user.email);
-        });
-
-        setRiders(cachedRiders);
-        setEntries(cachedDeliveries);
-        setSettlements(cachedSettlements);
+        setIsServerCollectionsSynced(false);
+        serverSyncedForUidRef.current = null;
+        atomicIdbLoadedRef.current = null;
         setIsInitialized(true);
+
+        // 1. Atomic IndexedDB Snapshot Hydration (~10ms, 200MB Android / 20MB Web rolling budget):
+        // Loads Riders + Deliveries + Settlements together in ONE atomic batch so offline & startup
+        // figures are 100% consistent without 5MB localStorage truncation or ₹60,000 advance spikes.
+        loadAtomicWorkspaceSnapshotFromIDB(user.uid)
+          .then((atomicSnap) => {
+            if (lastAuthUidRef.current !== user.uid || serverSyncedForUidRef.current === user.uid) {
+              return;
+            }
+            if (atomicSnap && (atomicSnap.riders.length > 0 || atomicSnap.deliveries.length > 0)) {
+              const idbRiders = atomicSnap.riders.filter((r) => isEntityOwnedByUser(r, user.uid, user.email));
+              const allowedIds = new Set(idbRiders.map((r) => r.id));
+              const idbDeliveries = atomicSnap.deliveries.filter((d) => {
+                if (d.isDeleted) return isEntityOwnedByUser(d, user.uid, user.email);
+                if (d.riderId && !allowedIds.has(d.riderId)) return false;
+                return isEntityOwnedByUser(d, user.uid, user.email);
+              });
+              const idbSettlements = atomicSnap.settlements.filter((s) => {
+                if (s.isDeleted) return isEntityOwnedByUser(s, user.uid, user.email);
+                if (s.riderId && !allowedIds.has(s.riderId)) return false;
+                return isEntityOwnedByUser(s, user.uid, user.email);
+              });
+              const sanitizedRiders = reindexAndSanitizeRiderBalances(idbRiders, idbSettlements).updatedRiders;
+              atomicIdbLoadedRef.current = user.uid;
+              setSettlements(idbSettlements);
+              setRiders(sanitizedRiders);
+              setEntries(idbDeliveries);
+              setIsDataLoading(false);
+              return;
+            }
+
+            // First-upgrade fallback: only use localStorage if Riders + Deliveries + Settlements are consistent
+            const rawCachedRiders = loadRidersFromStorage(user.uid);
+            const cachedRiders = rawCachedRiders.filter((r) => isEntityOwnedByUser(r, user.uid, user.email));
+            const allowedRiderIds = new Set(cachedRiders.map((r) => r.id));
+            const rawCachedDeliveries = loadDeliveriesFromStorage(cachedRiders, user.uid);
+            const cachedDeliveries = rawCachedDeliveries.filter((d) => {
+              if (d.riderId && !allowedRiderIds.has(d.riderId)) return false;
+              return isEntityOwnedByUser(d, user.uid, user.email);
+            });
+            const rawCachedSettlements = loadSettlementsFromStorage(user.uid);
+            const cachedSettlements = rawCachedSettlements.filter((s) => {
+              if (s.riderId && !allowedRiderIds.has(s.riderId)) return false;
+              return isEntityOwnedByUser(s, user.uid, user.email);
+            });
+
+            if (
+              (cachedRiders.length > 0 || cachedDeliveries.length > 0) &&
+              isConsistentLocalCache(cachedRiders, cachedDeliveries, cachedSettlements)
+            ) {
+              const sanitized = reindexAndSanitizeRiderBalances(cachedRiders, cachedSettlements).updatedRiders;
+              setSettlements(cachedSettlements);
+              setRiders(sanitized);
+              setEntries(cachedDeliveries);
+              setIsDataLoading(false);
+            }
+          })
+          .catch((idbErr) => {
+            console.warn('Atomic IndexedDB snapshot load notice:', idbErr);
+          });
 
         // 2. Real-time subscription to user document in all_users (immediate status, rateConfig, and permissions)
         unsubscribeUserDoc = subscribeToCurrentUserDoc(user.uid, user.email, (docData) => {
@@ -1537,11 +1631,20 @@ function MainCourierApp() {
                 setSyncStatus('synced');
                 setIsDataLoading(false);
               },
-              onAllCollectionsSynced: () => {
+              onAllCollectionsSynced: (fromServer) => {
                 setIsAllCollectionsSynced(true);
-                setSyncStatus('synced');
+                if (fromServer) {
+                  serverSyncedForUidRef.current = user.uid;
+                  setIsServerCollectionsSynced(true);
+                  setSyncStatus('synced');
+                } else {
+                  setSyncStatus(
+                    typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'synced'
+                  );
+                }
                 setIsDataLoading(false);
               },
+              shouldSuppressOfflineCache: () => atomicIdbLoadedRef.current === user.uid,
               onError: (err) => {
                 console.error('Firestore sync error:', err);
                 setSyncStatus('offline');
@@ -1565,13 +1668,41 @@ function MainCourierApp() {
         setActiveTab((prev) => (prev === 'admin' ? 'entry' : prev));
         setSyncStatus('local');
         setIsAllCollectionsSynced(true);
-        const loadedRiders = loadRidersFromStorage();
-        const loadedDeliveries = loadDeliveriesFromStorage();
-        const loadedSettlements = loadSettlementsFromStorage();
-        setRiders(loadedRiders);
-        setEntries(loadedDeliveries);
-        setSettlements(loadedSettlements);
-        setIsDataLoading(false);
+        setIsServerCollectionsSynced(false);
+        serverSyncedForUidRef.current = null;
+        atomicIdbLoadedRef.current = null;
+
+        loadAtomicWorkspaceSnapshotFromIDB('guest')
+          .then((guestSnap) => {
+            if (lastAuthUidRef.current !== null) return;
+            if (guestSnap && (guestSnap.riders.length > 0 || guestSnap.deliveries.length > 0)) {
+              const sanitized = reindexAndSanitizeRiderBalances(guestSnap.riders, guestSnap.settlements).updatedRiders;
+              atomicIdbLoadedRef.current = 'guest';
+              setSettlements(guestSnap.settlements);
+              setRiders(sanitized);
+              setEntries(guestSnap.deliveries);
+              setIsDataLoading(false);
+              return;
+            }
+            const loadedRiders = loadRidersFromStorage();
+            const loadedDeliveries = loadDeliveriesFromStorage();
+            const loadedSettlements = loadSettlementsFromStorage();
+            atomicIdbLoadedRef.current = 'guest';
+            setSettlements(loadedSettlements);
+            setRiders(reindexAndSanitizeRiderBalances(loadedRiders, loadedSettlements).updatedRiders);
+            setEntries(loadedDeliveries);
+            setIsDataLoading(false);
+          })
+          .catch(() => {
+            const loadedRiders = loadRidersFromStorage();
+            const loadedDeliveries = loadDeliveriesFromStorage();
+            const loadedSettlements = loadSettlementsFromStorage();
+            atomicIdbLoadedRef.current = 'guest';
+            setSettlements(loadedSettlements);
+            setRiders(loadedRiders);
+            setEntries(loadedDeliveries);
+            setIsDataLoading(false);
+          });
       }
       setIsInitialized(true);
     });
@@ -1591,6 +1722,8 @@ function MainCourierApp() {
   // Run a global ledger re-index so every rider's ledger sheet immediately recalculates correctly.
   // Any rider whose previous settlements are PAID will immediately flip from red "लेना बाकी" to green/neutral "हिसाब चुकता: ₹0".
   useEffect(() => {
+    const isCloudSession = Boolean(currentUser || inspectedUser);
+    if (isCloudSession && !isAllCollectionsSynced && !atomicIdbLoadedRef.current) return;
     if (riders.length > 0) {
       const { updatedRiders, hasChanges } = reindexAndSanitizeRiderBalances(riders, settlements);
       if (hasChanges) {
@@ -1599,7 +1732,7 @@ function MainCourierApp() {
         saveRidersToStorage(updatedRiders, targetUid);
       }
     }
-  }, [settlements, riders.length]);
+  }, [settlements, riders.length, isAllCollectionsSynced, currentUser, inspectedUser]);
 
   // RULE 5: 30-DAY AUTOMATIC TRASH BIN PURGE (Storage Optimization for Firebase & Device)
   // Runs after cloud hydration completes (`syncStatus === 'synced'`) so expired cloud trash records are also auto-purged.
@@ -1709,7 +1842,7 @@ function MainCourierApp() {
   };
 
   useEffect(() => {
-    if (!isInitialized || isDataLoading || syncStatus !== 'synced' || !isAllCollectionsSynced) return;
+    if (!isInitialized || isDataLoading || syncStatus !== 'synced' || !isServerCollectionsSynced) return;
     const effectiveUid = inspectedUser ? inspectedUser.uid : currentUser?.uid;
     if (!effectiveUid || riders.length === 0) return;
     if (ledgerHistoryRecoveryDoneRef.current === effectiveUid) return;
@@ -1718,7 +1851,27 @@ function MainCourierApp() {
     handleRecoverRiderLedgerHistory().catch((err) => {
       console.warn('Ledger history background recovery notice:', err);
     });
-  }, [isInitialized, isDataLoading, syncStatus, isAllCollectionsSynced, inspectedUser, currentUser, riders.length]);
+  }, [isInitialized, isDataLoading, syncStatus, isServerCollectionsSynced, inspectedUser, currentUser, riders.length]);
+
+  // RULE 7: SMART FIREBASE 1 GB STORAGE MONITOR & SAFE 2-YEAR ROLLING RETENTION (1x / 24h)
+  // - Reports workspace storage footprint to all_users/{uid} (max once/12h) for Admin leaderboard.
+  // - ONLY prunes >2-year-old PAID deliveries if Admin's global Firebase usage crosses threshold (>=85% of 1 GB).
+  // - If Firebase space is available (<85%), keeps >2-year-old data 100% untouched!
+  const fbStorageCheckDoneRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isInitialized || isDataLoading || syncStatus !== 'synced' || !isServerCollectionsSynced) return;
+    if (inspectedUser || !currentUser?.uid) return;
+    if (fbStorageCheckDoneRef.current === currentUser.uid) return;
+    if (riders.length === 0 && entries.length === 0) return;
+
+    fbStorageCheckDoneRef.current = currentUser.uid;
+    const uid = currentUser.uid;
+    const email = currentUser.email || '';
+    const displayName = currentUser.displayName || email || 'Hub User';
+
+    reportCurrentUserStorageFootprintOncePerDay(uid, email, displayName, riders, entries, settlements).catch(() => {});
+    runSafeFirebaseRollingRetentionCheck(uid, entries).catch(() => {});
+  }, [isInitialized, isDataLoading, syncStatus, isServerCollectionsSynced, inspectedUser, currentUser, riders.length, entries.length]);
 
   // Listen for global plan activation (Razorpay payment / restore) for instant, seamless state transition
   useEffect(() => {
@@ -2890,6 +3043,7 @@ function MainCourierApp() {
     if (!inspectedUser) return;
     setSyncStatus('syncing');
     setIsAllCollectionsSynced(false);
+    setIsServerCollectionsSynced(false);
     const unsubscribe = subscribeToUserData(
       inspectedUser.uid,
       {
@@ -2908,9 +3062,16 @@ function MainCourierApp() {
           setSettlements(inspectedSettlements);
           setSyncStatus('synced');
         },
-        onAllCollectionsSynced: () => {
+        onAllCollectionsSynced: (fromServer) => {
           setIsAllCollectionsSynced(true);
-          setSyncStatus('synced');
+          if (fromServer) {
+            setIsServerCollectionsSynced(true);
+            setSyncStatus('synced');
+          } else {
+            setSyncStatus(
+              typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'synced'
+            );
+          }
         },
         onError: (err) => {
           console.error('Inspected user sync error:', err);
@@ -3029,7 +3190,9 @@ function MainCourierApp() {
   }, [dashboardEntries]);
   const calculatedTotalAdvanceAmount = useMemo(() => {
     return dashboardRiders.reduce((sum, r) => {
-      return sum + calculateRiderFinancialState(r.advances, r.incentives, dashboardSettlements, r.id).netAdvance;
+      const adv = calculateActiveAdvanceTotal(r.advances, dashboardSettlements, r.id);
+      const inc = calculateActiveIncentiveTotal(r.incentives, dashboardSettlements, r.id);
+      return sum + Math.max(0, adv - inc);
     }, 0);
   }, [dashboardRiders, dashboardSettlements]);
 
@@ -3050,12 +3213,14 @@ function MainCourierApp() {
     ? calculatedUnpaidCount 
     : (initialCachedStats?.unpaidCount || 0);
 
-  // Persist quick stats ONLY when all cloud collections are fully hydrated (or in local guest mode)
+  // Persist quick stats ONLY when cloud collections are server-verified or offline edits occur on a verified Atomic IDB snapshot
   useEffect(() => {
-    // CRITICAL GUARD: Only overwrite cache once all 5 collections have hydrated with real records.
-    // Never overwrite confirmed cached totals with partial or cold-boot figures!
     const isCloudSession = Boolean(currentUser || inspectedUser);
-    if (isCloudSession && !isAllCollectionsSynced) return;
+    const isTrustworthyState =
+      !isCloudSession ||
+      isServerCollectionsSynced ||
+      (Boolean(targetUid) && atomicIdbLoadedRef.current === targetUid && isAllCollectionsSynced);
+    if (!isTrustworthyState) return;
     if (dashboardEntries.length > 0) {
       saveQuickStatsSummary({
         totalUnpaidAmount: calculatedTotalUnpaidAmount,
@@ -3064,6 +3229,7 @@ function MainCourierApp() {
         todayEarnings: calculatedTodayEarnings,
         todayParcels: calculatedTodayParcels,
         unpaidCount: calculatedUnpaidCount,
+        verifiedFromServer: !isCloudSession || isServerCollectionsSynced,
         lastUpdated: Date.now(),
       }, targetUid);
     }
@@ -3077,8 +3243,49 @@ function MainCourierApp() {
     targetUid,
     dashboardEntries.length,
     isAllCollectionsSynced,
+    isServerCollectionsSynced,
     currentUser,
     inspectedUser,
+  ]);
+
+  // Persist complete Atomic Workspace Snapshot to IndexedDB (200 MB Android APK / 20 MB Web App rolling cap)
+  // Guarantees 100% accurate offline calculations and instant startup without 5MB localStorage truncation.
+  useEffect(() => {
+    if (inspectedUser) return;
+    const isCloudSession = Boolean(currentUser);
+    const activeUid = currentUser?.uid || 'guest';
+    const isTrustworthySnapshot = isCloudSession
+      ? isServerCollectionsSynced || (atomicIdbLoadedRef.current === activeUid && isAllCollectionsSynced)
+      : isInitialized && !isDataLoading;
+    if (!isTrustworthySnapshot) return;
+    if (riders.length === 0 && entries.length === 0) return;
+
+    const timer = setTimeout(() => {
+      saveAtomicWorkspaceSnapshotToIDB(activeUid, {
+        riders,
+        deliveries: entries,
+        settlements,
+        totalUnpaidAmount: calculatedTotalUnpaidAmount,
+        totalUnpaidParcels: calculatedTotalUnpaidParcels,
+        totalAdvanceAmount: calculatedTotalAdvanceAmount,
+        verifiedFromServer: !isCloudSession || isServerCollectionsSynced,
+      });
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [
+    riders,
+    entries,
+    settlements,
+    calculatedTotalUnpaidAmount,
+    calculatedTotalUnpaidParcels,
+    calculatedTotalAdvanceAmount,
+    currentUser,
+    inspectedUser,
+    isInitialized,
+    isDataLoading,
+    isAllCollectionsSynced,
+    isServerCollectionsSynced,
   ]);
 
   if (!isInitialized) {
