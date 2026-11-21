@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Courier Payout Pro</string>
     <string name="title_activity_main">Courier Payout Pro</string>
-    <string name="package_name">com.courierpayout.app</string>
-    <string name="custom_url_scheme">com.courierpayout.app</string>
+    <string name="package_name">com.courierpayout.pro</string>
+    <string name="custom_url_scheme">com.courierpayout.pro</string>
 </resources>

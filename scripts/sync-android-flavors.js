@@ -37,7 +37,7 @@ fs.rmSync(path.join(mainAssetsDir, 'assets', 'aistudio'), { recursive: true, for
 
 // Write flavor-specific capacitor.config.json for Admin
 const adminCapConfig = {
-  appId: 'com.courierpayout.app',
+  appId: 'com.courierpayout.pro',
   appName: 'Courier Payout Pro',
   webDir: 'public',
   server: {

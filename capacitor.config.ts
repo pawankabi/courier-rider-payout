@@ -6,7 +6,7 @@ const isCompanion =
   process.env.CAPACITOR_APP_ID === 'com.courierpayout.rider';
 
 const config: CapacitorConfig = {
-  appId: isCompanion ? 'com.courierpayout.rider' : 'com.courierpayout.app',
+  appId: isCompanion ? 'com.courierpayout.rider' : 'com.courierpayout.pro',
   appName: isCompanion ? 'COD Entry (Rider)' : 'Courier Payout Pro',
   webDir: 'dist',
   server: {

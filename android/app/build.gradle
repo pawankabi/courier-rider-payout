@@ -4,11 +4,11 @@ android {
     namespace = "com.courierpayout.app"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.courierpayout.app"
+        applicationId "com.courierpayout.pro"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 44
-        versionName "1.0.66"
+        versionCode 100075
+        versionName "1.0.75"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,24 +16,57 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+
+    signingConfigs {
+        adminRelease {
+            def adminPlayKey = file('keystore/admin-playstore-release.keystore')
+            if (adminPlayKey.exists()) {
+                storeFile adminPlayKey
+                storeType 'PKCS12'
+                storePassword 'CPPro@2026#PlayKey'
+                keyAlias 'courierpayout_pro_release'
+                keyPassword 'CPPro@2026#PlayKey'
+            } else {
+                initWith signingConfigs.debug
+            }
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+        riderRelease {
+            def riderKey = file('keystore/release.keystore')
+            if (riderKey.exists()) {
+                storeFile riderKey
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            } else {
+                initWith signingConfigs.debug
+            }
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
+
     flavorDimensions "version"
     productFlavors {
         admin {
             dimension "version"
-            applicationId "com.courierpayout.app"
-            versionCode 44
-            versionName "1.0.66"
+            applicationId "com.courierpayout.pro"
+            versionCode 100075
+            versionName "1.0.75"
+            signingConfig signingConfigs.adminRelease
             manifestPlaceholders = [
                 appName: "Courier Payout Pro",
-                appAuth: "com.courierpayout.app.fileprovider",
-                customUrlScheme: "com.courierpayout.app"
+                appAuth: "com.courierpayout.pro.fileprovider",
+                customUrlScheme: "com.courierpayout.pro"
             ]
         }
         rider {
             dimension "version"
             applicationId "com.courierpayout.rider"
-            versionCode 44
-            versionName "1.0.66"
+            versionCode 100075
+            versionName "1.0.75"
+            signingConfig signingConfigs.riderRelease
             manifestPlaceholders = [
                 appName: "COD Entry (Rider)",
                 appAuth: "com.courierpayout.rider.fileprovider",
@@ -54,30 +87,14 @@ android {
         }
     }
 
-    signingConfigs {
-        release {
-            def customKey = file('keystore/release.keystore')
-            if (customKey.exists()) {
-                storeFile customKey
-                storePassword 'android'
-                keyAlias 'androiddebugkey'
-                keyPassword 'android'
-            } else {
-                // Fallback to default signing so build NEVER crashes
-                initWith signingConfigs.debug
-            }
-            v1SigningEnabled true
-            v2SigningEnabled true
-        }
-    }
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            // Leave signingConfig unset here so adminRelease and riderRelease flavor configs apply cleanly
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
         debug {
-            signingConfig signingConfigs.release
+            // Uses each flavor's signingConfig
         }
     }
     lintOptions {

@@ -55,7 +55,7 @@ const syncOrGenerateApk = (flavor, fileName) => {
     // Generate valid distinct standalone placeholder ZIP with internal flavor package metadata
     const manifestContent = JSON.stringify({
       flavor: flavor,
-      package: flavor === 'rider' ? 'com.courierpayout.rider' : 'com.courierpayout.app',
+      package: flavor === 'rider' ? 'com.courierpayout.rider' : 'com.courierpayout.pro',
       appName: flavor === 'rider' ? 'COD Entry (Rider)' : 'Courier Payout Pro',
       version: currentAppVersion,
       builtAt: new Date().toISOString()
@@ -115,7 +115,7 @@ try {
   fs.rmSync(path.join(mainAssetsDir, 'assets', 'aistudio'), { recursive: true, force: true });
 
   const adminCapConfig = {
-    appId: 'com.courierpayout.app',
+    appId: 'com.courierpayout.pro',
     appName: 'Courier Payout Pro',
     webDir: 'public',
     server: {

@@ -79,20 +79,25 @@ jobs:
           echo "Verified Admin Assets: $(ls -1 android/app/src/admin/assets/public | wc -l) entries."
           echo "Verified Rider Assets: $(ls -1 android/app/src/rider/assets/public | wc -l) entries."
 
-      - name: Setup Keystore
+      - name: Setup Keystores (Admin Play Store & Rider Legacy)
         run: |
           mkdir -p android/app/keystore
+          if [ -f android/app/keystore/admin-playstore-release.keystore.base64 ]; then
+            echo "Restoring Admin Play Store commercial release keystore..."
+            base64 -d android/app/keystore/admin-playstore-release.keystore.base64 > android/app/keystore/admin-playstore-release.keystore
+            keytool -list -keystore android/app/keystore/admin-playstore-release.keystore -storetype PKCS12 -storepass 'CPPro@2026#PlayKey' -alias courierpayout_pro_release
+          fi
           if [ -f android/app/keystore/release.keystore.base64 ]; then
-            echo "Restoring permanent release.keystore from repository base64..."
+            echo "Restoring permanent Rider release.keystore from repository base64..."
             base64 -d android/app/keystore/release.keystore.base64 > android/app/keystore/release.keystore
           elif [ ! -f android/app/keystore/release.keystore ]; then
-            echo "Warning: permanent keystore not found, generating fallback..."
+            echo "Warning: Rider keystore not found, generating fallback..."
             keytool -genkey -v -keystore android/app/keystore/release.keystore \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=CourierPayout,O=CourierPayout,C=IN"
           fi
-          ls -lh android/app/keystore/release.keystore
+          ls -lh android/app/keystore/*.keystore
 
       - name: Extract Version Info
         id: get_version
@@ -141,24 +146,24 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Compile Both Release APKs (COD Rider Companion & Admin)
+      - name: Compile Release APKs & Play Store AAB (Admin & COD Rider)
         run: |
           cd android
           GRADLE_CMD="gradle"
           if [ -f "./gradlew" ] && [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
             GRADLE_CMD="./gradlew"
           fi
-          $GRADLE_CMD assembleRiderRelease assembleAdminRelease \
+          $GRADLE_CMD assembleRiderRelease assembleAdminRelease bundleAdminRelease \
             -x checkRiderReleaseAarMetadata -x checkAdminReleaseAarMetadata \
             --no-daemon --stacktrace \
           || (echo "Retrying Gradle build with --refresh-dependencies..." && \
-              $GRADLE_CMD assembleRiderRelease assembleAdminRelease \
+              $GRADLE_CMD assembleRiderRelease assembleAdminRelease bundleAdminRelease \
                 -x checkRiderReleaseAarMetadata -x checkAdminReleaseAarMetadata \
                 --no-daemon --refresh-dependencies --stacktrace)
 
-      - name: Collect & Standardize Release APKs
+      - name: Collect & Standardize Release APKs & Play Store AAB
         run: |
-          echo "🔍 Searching for generated APK artifacts..."
+          echo "🔍 Searching for generated APK & AAB artifacts..."
           
           # 1. Locate and copy Rider Companion Release APK (Rider Flavor)
           RIDER_APK=$(find android/app/build/outputs/apk/rider/release -name "*.apk" | head -n 1)
@@ -169,13 +174,22 @@ jobs:
             echo "❌ Fatal Error: Rider Companion Release APK not found in android/app/build/outputs/apk/rider/release!" && exit 1
           fi
 
-          # 2. Locate and copy Admin Release APK (Admin Flavor)
+          # 2. Locate and copy Admin Release APK (Admin Flavor - com.courierpayout.pro)
           ADMIN_APK=$(find android/app/build/outputs/apk/admin/release -name "*.apk" | head -n 1)
           if [ -f "$ADMIN_APK" ]; then
             cp -v "$ADMIN_APK" Admin-Payout-Release.apk
             echo "✅ Verified Admin APK: $ADMIN_APK -> Admin-Payout-Release.apk ($(ls -lh Admin-Payout-Release.apk | awk '{print $5}'))"
           else
             echo "❌ Fatal Error: Admin Release APK not found in android/app/build/outputs/apk/admin/release!" && exit 1
+          fi
+
+          # 3. Locate and copy Admin Play Store AAB Bundle (Admin Flavor - com.courierpayout.pro)
+          ADMIN_AAB=$(find android/app/build/outputs/bundle/adminRelease -name "*.aab" | head -n 1)
+          if [ -f "$ADMIN_AAB" ]; then
+            cp -v "$ADMIN_AAB" Admin-Payout-PlayStore.aab
+            echo "✅ Verified Admin Play Store AAB: $ADMIN_AAB -> Admin-Payout-PlayStore.aab ($(ls -lh Admin-Payout-PlayStore.aab | awk '{print $5}'))"
+          else
+            echo "❌ Fatal Error: Admin Play Store AAB not found in android/app/build/outputs/bundle/adminRelease!" && exit 1
           fi
 
       - name: Upload Admin Payout Release APK Artifact
@@ -185,6 +199,13 @@ jobs:
           path: Admin-Payout-Release.apk
           retention-days: 30
 
+      - name: Upload Admin Play Store AAB Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Admin-Payout-PlayStore-AAB-v${{ steps.get_version.outputs.version_name }}
+          path: Admin-Payout-PlayStore.aab
+          retention-days: 30
+
       - name: Upload COD Entry Rider Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -192,7 +213,7 @@ jobs:
           path: COD-Entry-Rider-Release.apk
           retention-days: 30
 
-      - name: Publish Official GitHub Release with Both Standalone APKs
+      - name: Publish Official GitHub Release with Standalone APKs & Play Store AAB
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.get_version.outputs.version_name }}
@@ -202,6 +223,7 @@ jobs:
           make_latest: true
           files: |
             Admin-Payout-Release.apk
+            Admin-Payout-PlayStore.aab
             COD-Entry-Rider-Release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
