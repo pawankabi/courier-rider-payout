@@ -29,9 +29,11 @@ console.log('📂 [2/4] Syncing Admin web assets strictly to android/app/src/adm
 fs.mkdirSync(adminAssetsDir, { recursive: true });
 fs.cpSync('dist', adminAssetsDir, { recursive: true });
 fs.rmSync(path.join(adminAssetsDir, 'downloads'), { recursive: true, force: true });
+fs.rmSync(path.join(adminAssetsDir, 'assets', 'aistudio'), { recursive: true, force: true });
 fs.mkdirSync(mainAssetsDir, { recursive: true });
 fs.cpSync('dist', mainAssetsDir, { recursive: true });
 fs.rmSync(path.join(mainAssetsDir, 'downloads'), { recursive: true, force: true });
+fs.rmSync(path.join(mainAssetsDir, 'assets', 'aistudio'), { recursive: true, force: true });
 
 // Write flavor-specific capacitor.config.json for Admin
 const adminCapConfig = {
@@ -41,7 +43,7 @@ const adminCapConfig = {
   server: {
     androidScheme: 'https',
     hostname: 'courier-rider-payout.firebaseapp.com',
-    cleartext: true,
+    cleartext: false,
     allowNavigation: [
       '*.firebaseapp.com',
       '*.googleapis.com',
@@ -68,6 +70,7 @@ console.log('📂 [4/4] Syncing Rider Companion web assets strictly to android/a
 fs.mkdirSync(riderAssetsDir, { recursive: true });
 fs.cpSync('dist-companion', riderAssetsDir, { recursive: true });
 fs.rmSync(path.join(riderAssetsDir, 'downloads'), { recursive: true, force: true });
+fs.rmSync(path.join(riderAssetsDir, 'assets', 'aistudio'), { recursive: true, force: true });
 
 // Write flavor-specific capacitor.config.json for Rider
 const riderCapConfig = {
@@ -77,7 +80,7 @@ const riderCapConfig = {
   server: {
     androidScheme: 'https',
     hostname: 'cod-entry-rider.firebaseapp.com',
-    cleartext: true,
+    cleartext: false,
     allowNavigation: [
       '*.firebaseapp.com',
       '*.googleapis.com',

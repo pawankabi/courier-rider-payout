@@ -12,7 +12,7 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: 'https',
     hostname: isCompanion ? 'cod-entry-rider.firebaseapp.com' : 'courier-rider-payout.firebaseapp.com',
-    cleartext: true,
+    cleartext: false,
     allowNavigation: [
       'ais-pre-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',
       'ais-dev-2ld7nak662g7pg4ixrragv-515426382523.asia-east1.run.app',

@@ -107,10 +107,12 @@ try {
   fs.mkdirSync(adminAssetsDir, { recursive: true });
   fs.cpSync(distDir, adminAssetsDir, { recursive: true });
   fs.rmSync(path.join(adminAssetsDir, 'downloads'), { recursive: true, force: true });
+  fs.rmSync(path.join(adminAssetsDir, 'assets', 'aistudio'), { recursive: true, force: true });
 
   fs.mkdirSync(mainAssetsDir, { recursive: true });
   fs.cpSync(distDir, mainAssetsDir, { recursive: true });
   fs.rmSync(path.join(mainAssetsDir, 'downloads'), { recursive: true, force: true });
+  fs.rmSync(path.join(mainAssetsDir, 'assets', 'aistudio'), { recursive: true, force: true });
 
   const adminCapConfig = {
     appId: 'com.courierpayout.app',
@@ -119,7 +121,7 @@ try {
     server: {
       androidScheme: 'https',
       hostname: 'courier-rider-payout.firebaseapp.com',
-      cleartext: true,
+      cleartext: false,
       allowNavigation: [
         '*.firebaseapp.com',
         '*.googleapis.com',
@@ -157,6 +159,7 @@ try {
   fs.mkdirSync(riderAssetsDir, { recursive: true });
   fs.cpSync(companionDir, riderAssetsDir, { recursive: true });
   fs.rmSync(path.join(riderAssetsDir, 'downloads'), { recursive: true, force: true });
+  fs.rmSync(path.join(riderAssetsDir, 'assets', 'aistudio'), { recursive: true, force: true });
 
   const riderCapConfig = {
     appId: 'com.courierpayout.rider',
@@ -165,7 +168,7 @@ try {
     server: {
       androidScheme: 'https',
       hostname: 'cod-entry-rider.firebaseapp.com',
-      cleartext: true,
+      cleartext: false,
       allowNavigation: [
         '*.firebaseapp.com',
         '*.googleapis.com',
