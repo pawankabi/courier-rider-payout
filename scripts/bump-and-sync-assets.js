@@ -78,13 +78,16 @@ if (fs.existsSync(versionTsPath)) {
 }
 
 // 3. Update android/app/build.gradle
-let nextVersionCode = parts[2] || 44;
+// Derive a strictly monotonic Android versionCode from semver (e.g. 1.0.75 -> 100075)
+// and ensure it is always strictly greater than any existing versionCode in build.gradle
+// so Android Package Installer always allows direct in-place updates over older builds.
+const semverVersionCode = parts[0] * 100000 + parts[1] * 1000 + parts[2];
+let nextVersionCode = semverVersionCode;
 if (existingGradleContent) {
   let bg = existingGradleContent;
   const vcMatch = bg.match(/versionCode\s+(\d+)/);
-  if (vcMatch) {
-    nextVersionCode = parseInt(vcMatch[1], 10) + 1;
-  }
+  const existingVc = vcMatch ? parseInt(vcMatch[1], 10) : 0;
+  nextVersionCode = Math.max(existingVc + 1, semverVersionCode);
   bg = bg.replace(/versionCode\s+\d+/g, `versionCode ${nextVersionCode}`);
   bg = bg.replace(/versionName\s+"[^"]+"/g, `versionName "${nextVersion}"`);
   fs.writeFileSync(buildGradlePath, bg);
