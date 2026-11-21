@@ -106,9 +106,11 @@ console.log('📦 Isolating Admin assets into android/app/src/admin/assets/publi
 try {
   fs.mkdirSync(adminAssetsDir, { recursive: true });
   fs.cpSync(distDir, adminAssetsDir, { recursive: true });
+  fs.rmSync(path.join(adminAssetsDir, 'downloads'), { recursive: true, force: true });
 
   fs.mkdirSync(mainAssetsDir, { recursive: true });
   fs.cpSync(distDir, mainAssetsDir, { recursive: true });
+  fs.rmSync(path.join(mainAssetsDir, 'downloads'), { recursive: true, force: true });
 
   const adminCapConfig = {
     appId: 'com.courierpayout.app',
@@ -154,6 +156,7 @@ try {
 
   fs.mkdirSync(riderAssetsDir, { recursive: true });
   fs.cpSync(companionDir, riderAssetsDir, { recursive: true });
+  fs.rmSync(path.join(riderAssetsDir, 'downloads'), { recursive: true, force: true });
 
   const riderCapConfig = {
     appId: 'com.courierpayout.rider',

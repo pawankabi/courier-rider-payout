@@ -28,8 +28,10 @@ execSync('npx vite build --outDir dist', {
 console.log('📂 [2/4] Syncing Admin web assets strictly to android/app/src/admin/assets/public & main assets...');
 fs.mkdirSync(adminAssetsDir, { recursive: true });
 fs.cpSync('dist', adminAssetsDir, { recursive: true });
+fs.rmSync(path.join(adminAssetsDir, 'downloads'), { recursive: true, force: true });
 fs.mkdirSync(mainAssetsDir, { recursive: true });
 fs.cpSync('dist', mainAssetsDir, { recursive: true });
+fs.rmSync(path.join(mainAssetsDir, 'downloads'), { recursive: true, force: true });
 
 // Write flavor-specific capacitor.config.json for Admin
 const adminCapConfig = {
@@ -65,6 +67,7 @@ execSync('npx vite build --outDir dist-companion', {
 console.log('📂 [4/4] Syncing Rider Companion web assets strictly to android/app/src/rider/assets/public...');
 fs.mkdirSync(riderAssetsDir, { recursive: true });
 fs.cpSync('dist-companion', riderAssetsDir, { recursive: true });
+fs.rmSync(path.join(riderAssetsDir, 'downloads'), { recursive: true, force: true });
 
 // Write flavor-specific capacitor.config.json for Rider
 const riderCapConfig = {
