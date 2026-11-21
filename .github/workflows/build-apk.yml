@@ -5,6 +5,10 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+concurrency:
+  group: android-apk-build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -30,7 +34,28 @@ jobs:
           java-version: '21'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure Resilient Maven Central Mirrors for All Gradle Projects
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          cat << 'EOF' > "$HOME/.gradle/init.d/maven-mirrors.gradle"
+          allprojects {
+              buildscript {
+                  repositories {
+                      maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }
+                      google()
+                      mavenCentral()
+                      gradlePluginPortal()
+                  }
+              }
+              repositories {
+                  maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
 
       - name: Install Dependencies
         run: npm ci || npm install
@@ -38,6 +63,7 @@ jobs:
       - name: Clean & Build Multi-App Web Assets (Admin & Rider Companion)
         env:
           CI: false
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm run sync:flavors
 
@@ -117,11 +143,17 @@ jobs:
       - name: Compile Both Release APKs (COD Rider Companion & Admin)
         run: |
           cd android
+          GRADLE_CMD="gradle"
           if [ -f "./gradlew" ] && [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            ./gradlew assembleRiderRelease assembleAdminRelease -x checkRiderReleaseAarMetadata -x checkAdminReleaseAarMetadata --no-daemon
-          else
-            gradle assembleRiderRelease assembleAdminRelease -x checkRiderReleaseAarMetadata -x checkAdminReleaseAarMetadata --no-daemon
+            GRADLE_CMD="./gradlew"
           fi
+          $GRADLE_CMD assembleRiderRelease assembleAdminRelease \
+            -x checkRiderReleaseAarMetadata -x checkAdminReleaseAarMetadata \
+            --no-daemon --stacktrace \
+          || (echo "Retrying Gradle build with --refresh-dependencies..." && \
+              $GRADLE_CMD assembleRiderRelease assembleAdminRelease \
+                -x checkRiderReleaseAarMetadata -x checkAdminReleaseAarMetadata \
+                --no-daemon --refresh-dependencies --stacktrace)
 
       - name: Collect & Standardize Release APKs
         run: |

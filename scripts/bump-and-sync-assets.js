@@ -34,8 +34,15 @@ if (fs.existsSync(buildGradlePath)) {
 try {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2000);
+  const ghHeaders = {
+    'User-Agent': 'CourierPayout-AutoBump',
+    Accept: 'application/vnd.github.v3+json',
+  };
+  if (process.env.GITHUB_TOKEN) {
+    ghHeaders.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
   const ghRes = await fetch('https://api.github.com/repos/pawankabi/courier-rider-payout/releases/latest', {
-    headers: { 'User-Agent': 'CourierPayout-AutoBump', Accept: 'application/vnd.github.v3+json' },
+    headers: ghHeaders,
     signal: controller.signal,
   });
   clearTimeout(timer);

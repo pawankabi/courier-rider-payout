@@ -6,6 +6,7 @@ ext {
 buildscript {
     repositories {
         google()
+        maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
         mavenCentral()
     }
     dependencies {
@@ -35,6 +36,7 @@ android {
 
 repositories {
     google()
+    maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
     mavenCentral()
     flatDir{
         dirs 'src/main/libs', 'libs'
