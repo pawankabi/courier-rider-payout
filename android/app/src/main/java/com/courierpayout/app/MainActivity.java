@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BackgroundSmsPlugin.class);
         registerPlugin(NativeDownloadPlugin.class);
+        registerPlugin(KabiChatNotificationPlugin.class);
         //registerPlugin(UpiPayPlugin.class);
         super.onCreate(savedInstanceState);
     }

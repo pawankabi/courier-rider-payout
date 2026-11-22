@@ -145,10 +145,48 @@ service cloud.firestore {
       }
     }
 
-    // Isolated Hub paths for multi-tenant COD sheets, immutable auto-archives, and auto-backups
+    // Isolated Hub paths for multi-tenant COD sheets, immutable auto-archives, auto-backups, and KabiTech Solution SMS
     match /hubs/{hubId} {
       allow read, create, update: if true;
       allow delete: if false;
+
+      // KabiTech Solution SMS: Hub-isolated 1-on-1 & Group Chats
+      match /kabi_chats/{chatId} {
+        allow read: if true;
+        allow create, update: if request.resource != null
+          && request.resource.data.get('hubId', hubId) == hubId
+          && request.resource.data.get('name', '').size() <= 140
+          && request.resource.data.get('lastMessageText', '').size() <= 4000
+          && request.resource.data.get('participantIds', []).size() <= 200;
+        allow delete: if request.auth != null && (request.auth.uid == hubId || isSuperAdmin());
+
+        match /messages/{messageId} {
+          allow read: if true;
+          allow create, update: if request.resource != null
+            && request.resource.data.get('hubId', hubId) == hubId
+            && request.resource.data.get('text', '').size() <= 4000
+            && request.resource.data.get('senderName', '').size() <= 120;
+          allow delete: if request.auth != null && (request.auth.uid == hubId || isSuperAdmin());
+        }
+      }
+
+      // KabiTech Solution SMS: Real-time Online / Last Seen Presence
+      match /kabi_presence/{participantId} {
+        allow read: if true;
+        allow create, update: if request.resource != null
+          && request.resource.data.get('name', '').size() <= 120;
+        allow delete: if false;
+      }
+
+      // KabiTech Solution SMS: 24-Hour Hub Status Updates
+      match /kabi_statuses/{statusId} {
+        allow read: if true;
+        allow create, update: if request.resource != null
+          && request.resource.data.get('hubId', hubId) == hubId
+          && request.resource.data.get('text', '').size() <= 1200;
+        allow delete: if true;
+      }
+
       match /{allSubpaths=**} {
         allow read, create, update: if true;
         allow delete: if false;

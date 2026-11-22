@@ -148,6 +148,83 @@
         "updatedAt": { "type": "string" },
         "createdBy": { "type": "string" }
       }
+    },
+    "kabi_chats": {
+      "fields": {
+        "id": { "type": "string" },
+        "hubId": { "type": "string" },
+        "type": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "adminIds": { "type": "array" },
+        "participantIds": { "type": "array" },
+        "participantProfiles": { "type": "object" },
+        "lastMessageText": { "type": "string" },
+        "lastMessageType": { "type": "string" },
+        "lastMessageAt": { "type": "number" },
+        "lastMessageSenderId": { "type": "string" },
+        "lastMessageSenderName": { "type": "string" },
+        "unreadCounts": { "type": "object" },
+        "pinnedBy": { "type": "object" },
+        "mutedBy": { "type": "object" },
+        "typing": { "type": "object" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "kabi_messages": {
+      "fields": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "hubId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string" },
+        "text": { "type": "string" },
+        "type": { "type": "string" },
+        "imageDataUrl": { "type": "string" },
+        "videoDataUrl": { "type": "string" },
+        "videoDurationSec": { "type": "number" },
+        "audioDataUrl": { "type": "string" },
+        "audioDurationSec": { "type": "number" },
+        "originalSizeBytes": { "type": "number" },
+        "compressedSizeBytes": { "type": "number" },
+        "replyTo": { "type": "object" },
+        "forwarded": { "type": "boolean" },
+        "reactions": { "type": "object" },
+        "readBy": { "type": "object" },
+        "starredBy": { "type": "object" },
+        "deletedFor": { "type": "object" },
+        "deletedForEveryone": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "editedAt": { "type": "number" }
+      }
+    },
+    "kabi_presence": {
+      "fields": {
+        "participantId": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "online": { "type": "boolean" },
+        "lastSeenAt": { "type": "number" }
+      }
+    },
+    "kabi_statuses": {
+      "fields": {
+        "id": { "type": "string" },
+        "hubId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorRole": { "type": "string" },
+        "text": { "type": "string" },
+        "bgColor": { "type": "string" },
+        "imageDataUrl": { "type": "string" },
+        "viewedBy": { "type": "object" },
+        "createdAt": { "type": "number" },
+        "expiresAt": { "type": "number" }
+      }
     }
   },
   "firestore": {
@@ -194,6 +271,22 @@
     "/hubs/{hubId}/daily_cod_sheets/{sheetId}": {
       "schema": "deliveries",
       "description": "Multi-tenant hub-isolated daily COD sheets avoiding cross-hub rider leakage"
+    },
+    "/hubs/{hubId}/kabi_chats/{chatId}": {
+      "schema": "kabi_chats",
+      "description": "Hub-isolated WhatsApp-style 1-on-1 and group chats for KabiTech Solution SMS"
+    },
+    "/hubs/{hubId}/kabi_chats/{chatId}/messages/{messageId}": {
+      "schema": "kabi_messages",
+      "description": "Individual messages inside KabiTech Solution SMS chats with read receipts and reactions"
+    },
+    "/hubs/{hubId}/kabi_presence/{participantId}": {
+      "schema": "kabi_presence",
+      "description": "Real-time online and last-seen status for hub participants"
+    },
+    "/hubs/{hubId}/kabi_statuses/{statusId}": {
+      "schema": "kabi_statuses",
+      "description": "24-hour hub updates and rider status stories"
     }
   }
 }

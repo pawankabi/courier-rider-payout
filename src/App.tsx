@@ -171,6 +171,14 @@ import { VerifiedBadge } from './components/VerifiedBadge';
 import { ProfileSettingsModal } from './components/ProfileSettingsModal';
 import { CodStandaloneApp } from './components/CodStandaloneApp';
 import { CodCompanionApp } from './components/CodCompanionApp';
+import { KabiTechSmsApp } from './components/kabiSms/KabiTechSmsApp';
+import { KabiSmsLauncherButton, KabiSmsIncomingBanner } from './components/kabiSms/KabiSmsLauncherButton';
+import { useKabiChatNotifications } from './hooks/useKabiChatNotifications';
+import {
+  ADMIN_PARTICIPANT_ID,
+  KabiParticipant,
+  getRiderChatParticipantId,
+} from './services/kabiChatService';
 import { ShareAppModal } from './components/ShareAppModal';
 import { isRiderBuild } from './utils/shareLink';
 import { liveUpdateService, syncLatestManifestToFirestore } from './services/liveUpdateService';
@@ -532,6 +540,9 @@ function MainCourierApp() {
   const [isLegalPoliciesModalOpen, setIsLegalPoliciesModalOpen] = useState(false);
   const [isCodStandaloneOpen, setIsCodStandaloneOpen] = useState(false);
   const [isCodCompanionOpen, setIsCodCompanionOpen] = useState(false);
+  const [isKabiSmsOpen, setIsKabiSmsOpen] = useState(false);
+  const [kabiSmsInitialChatId, setKabiSmsInitialChatId] = useState<string | null>(null);
+  const [kabiSmsActiveChatId, setKabiSmsActiveChatId] = useState<string | null>(null);
   const [isShareAppModalOpen, setIsShareAppModalOpen] = useState(false);
   const [isSafetyShieldModalOpen, setIsSafetyShieldModalOpen] = useState(false);
   const [isAdminToolsDrawerOpen, setIsAdminToolsDrawerOpen] = useState(false);
@@ -3148,6 +3159,49 @@ function MainCourierApp() {
     return delEnt + delRid + delAdv;
   }, [entries, riders]);
 
+  // KabiTech Solution SMS — Admin Identity, Hub Riders Directory & Always-On Notification Hook
+  const kabiHubId = (targetUid || '').trim();
+  const kabiAdminMe = useMemo<KabiParticipant | null>(() => {
+    if (!kabiHubId || kabiHubId === 'guest') return null;
+    return {
+      id: ADMIN_PARTICIPANT_ID,
+      name: (activeHubName || currentUser?.displayName || 'हब एडमिन').trim(),
+      phone: '',
+      role: 'admin',
+    };
+  }, [kabiHubId, activeHubName, currentUser?.displayName]);
+
+  const kabiHubContacts = useMemo<KabiParticipant[]>(() => {
+    const seen = new Set<string>();
+    const list: KabiParticipant[] = [];
+    for (const r of dashboardRiders || []) {
+      if (!r || r.isDeleted) continue;
+      const pid = getRiderChatParticipantId(r.phone, r.id);
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      list.push({
+        id: pid,
+        name: (r.name || 'राइडर').trim(),
+        phone: (r.phone || '').replace(/\D/g, '').slice(-10),
+        role: 'rider',
+        riderDocId: r.id,
+      });
+    }
+    return list;
+  }, [dashboardRiders]);
+
+  const {
+    hubChats: kabiHubChats,
+    totalUnreadCount: kabiTotalUnread,
+    incomingBanner: kabiIncomingBanner,
+    dismissIncomingBanner: dismissKabiIncomingBanner,
+  } = useKabiChatNotifications({
+    hubId: kabiHubId === 'guest' ? '' : kabiHubId,
+    me: kabiAdminMe,
+    isKabiAppOpen: isKabiSmsOpen,
+    activeChatId: kabiSmsActiveChatId,
+  });
+
   // Live master fleet advances aggregated from dashboard riders - EXACT data source powering Advances Tab
   const advances = useMemo(() => {
     const list: RiderAdvanceEntry[] = [];
@@ -3423,6 +3477,34 @@ function MainCourierApp() {
           }}
         />
       )}
+      {/* Dedicated Full-Screen Standalone App Overlay: KabiTech Solution SMS (never unmounts main dashboard state) */}
+      {isKabiSmsOpen && kabiHubId && kabiHubId !== 'guest' && kabiAdminMe && (
+        <KabiTechSmsApp
+          hubId={kabiHubId}
+          hubName={activeHubName}
+          me={kabiAdminMe}
+          isHubAdmin={true}
+          hubContacts={kabiHubContacts}
+          hubChats={kabiHubChats}
+          initialChatId={kabiSmsInitialChatId}
+          onActiveChatChange={setKabiSmsActiveChatId}
+          onExit={() => {
+            setIsKabiSmsOpen(false);
+            setKabiSmsInitialChatId(null);
+            setKabiSmsActiveChatId(null);
+          }}
+        />
+      )}
+      {/* Floating Real-Time KabiTech Solution SMS Incoming Notification Banner */}
+      <KabiSmsIncomingBanner
+        banner={kabiIncomingBanner}
+        onOpenChat={(chatId) => {
+          dismissKabiIncomingBanner();
+          setKabiSmsInitialChatId(chatId);
+          setIsKabiSmsOpen(true);
+        }}
+        onDismiss={dismissKabiIncomingBanner}
+      />
       {/* Admin Inspection Banner */}
       {inspectedUser && (
         <div 
@@ -3516,30 +3598,42 @@ function MainCourierApp() {
           className="hidden"
         />
 
-        {/* Primary Header Row: Clean, Ultra-Prominent Brand & Fast Access */}
-        <div className="max-w-6xl mx-auto px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3">
-          {/* Brand Logo & Name: 100% Unobstructed & Bold */}
-          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-500 p-0.5 shadow-lg shadow-blue-900/30 flex items-center justify-center shrink-0">
-              <img src="/admin-logo.svg" alt="Courier App Logo" className="w-8 h-8 sm:w-9 sm:h-9 rounded-[10px] object-contain" />
+        {/* Primary Header Row: Clean, Ultra-Prominent Brand & Fast Access (Zero Mobile Overflow) */}
+        <div className="max-w-6xl mx-auto px-2.5 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
+          {/* Brand Logo & Name: Flexible on narrow phones so right controls are NEVER clipped */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-500 p-0.5 shadow-lg shadow-blue-900/30 flex items-center justify-center shrink-0">
+              <img src="/admin-logo.svg" alt="Courier App Logo" className="w-7 h-7 sm:w-9 sm:h-9 rounded-[10px] object-contain" />
             </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1.5">
-                <span className="font-black text-base sm:text-xl text-white tracking-tight leading-tight whitespace-nowrap">
+            <div className="flex flex-col min-w-0">
+              <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
+                <span className="font-black text-sm sm:text-xl text-white tracking-tight leading-tight truncate">
                   Courier Payout Pro
                 </span>
-                <span className="px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-gradient-to-r from-blue-600 to-cyan-500 text-white tracking-wider">
+                <span className="px-1.5 py-0.2 rounded text-[9px] sm:text-[10px] font-extrabold bg-gradient-to-r from-blue-600 to-cyan-500 text-white tracking-wider shrink-0">
                   PRO
                 </span>
               </div>
-              <span className="text-[11px] text-slate-400 font-medium leading-tight whitespace-nowrap">
+              <span className="text-[10px] sm:text-[11px] text-slate-400 font-medium leading-tight truncate">
                 स्मार्ट डिलीवरी एवं पे-आउट लेजर
               </span>
             </div>
           </div>
 
-          {/* Right Header Controls: Clean & Uncrowded */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Right Header Controls: Compact & 100% Visible on all phones */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            {/* 3D KabiTech Solution SMS Standalone Launcher with Live Unread Count Badge */}
+            {kabiAdminMe && (
+              <KabiSmsLauncherButton
+                unreadCount={kabiTotalUnread}
+                variant="header-dark"
+                onClick={() => {
+                  dismissKabiIncomingBanner();
+                  setKabiSmsInitialChatId(null);
+                  setIsKabiSmsOpen(true);
+                }}
+              />
+            )}
 
             {/* Slide-out Admin Tools Drawer Button (Exclusive to Master Admin / Owner) */}
             {isSuperAdminUser && (
@@ -3547,7 +3641,7 @@ function MainCourierApp() {
                 id="header-admin-tools-drawer-btn"
                 type="button"
                 onClick={() => setIsAdminToolsDrawerOpen(true)}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-indigo-600/15 hover:bg-indigo-600/25 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-bold transition active:scale-95 cursor-pointer shadow-sm shrink-0"
+                className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl bg-indigo-600/15 hover:bg-indigo-600/25 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-bold transition active:scale-95 cursor-pointer shadow-sm shrink-0"
                 title="त्वरित एडमिन टूल्स (Quick Tools)"
               >
                 <Wrench className="w-3.5 h-3.5 text-indigo-400" />
@@ -3578,20 +3672,32 @@ function MainCourierApp() {
         </div>
 
         {/* Dedicated Hub Context Strip (Clear Hub Identity without cluttering Header) */}
-        <div className="border-t border-slate-800/80 bg-slate-900/70 px-4 py-1.5 backdrop-blur-sm">
-          <div className="max-w-6xl mx-auto flex items-center justify-between gap-3 text-xs flex-wrap">
+        <div className="border-t border-slate-800/80 bg-slate-900/70 px-2.5 sm:px-4 py-1.5 backdrop-blur-sm">
+          <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 sm:gap-3 text-xs">
             <div className="flex items-center gap-2 min-w-0">
               <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
-              <span className="font-bold text-white truncate max-w-[200px] sm:max-w-none">{activeHubName}</span>
+              <span className="font-bold text-white truncate">{activeHubName}</span>
               {isSubscribedHub && <VerifiedBadge size={13} className="shrink-0" />}
               <span className="text-slate-600 hidden sm:inline">•</span>
               <span className="text-slate-400 hidden sm:inline">₹{userRateConfig?.defaultBaseRate ?? 13} बेस रेट</span>
             </div>
-            <div className="flex items-center gap-2 text-slate-400 text-[11px] shrink-0 flex-wrap">
+            <div className="flex items-center gap-1.5 sm:gap-2 text-slate-400 text-[11px] flex-wrap min-w-0">
               <span className="hidden sm:inline">{dashboardRiders.length} राइडर्स</span>
               <span className="text-slate-600 hidden sm:inline">•</span>
 
               {/* Quick Operation Actions */}
+              {kabiAdminMe && (
+                <KabiSmsLauncherButton
+                  unreadCount={kabiTotalUnread}
+                  variant="strip-dark"
+                  onClick={() => {
+                    dismissKabiIncomingBanner();
+                    setKabiSmsInitialChatId(null);
+                    setIsKabiSmsOpen(true);
+                  }}
+                />
+              )}
+
               <button
                 type="button"
                 onClick={() => setIsAttendanceOpen(true)}

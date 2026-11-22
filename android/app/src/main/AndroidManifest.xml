@@ -34,9 +34,17 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+        <service
+            android:name=".KabiChatSyncJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->
+
+    <!-- Notifications & Sound Alerts for KabiTech Solution SMS -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- SMS Permissions -->
     <uses-permission android:name="android.permission.SEND_SMS" />

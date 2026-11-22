@@ -97,6 +97,14 @@ import { safeLocalStorageSet } from '../services/appStorageAndFirebaseShield';
 import { liveUpdateService, CURRENT_LOCAL_VERSION } from '../services/liveUpdateService';
 import { getCachedReleaseVersion, fetchLatestReleaseVersion } from '../utils/version';
 import { launchUpiPayment, generateUpiQrCodeDataUrl } from '../services/upiLauncher';
+import { KabiTechSmsApp } from './kabiSms/KabiTechSmsApp';
+import { KabiSmsLauncherButton, KabiSmsIncomingBanner } from './kabiSms/KabiSmsLauncherButton';
+import { useKabiChatNotifications } from '../hooks/useKabiChatNotifications';
+import {
+  ADMIN_PARTICIPANT_ID,
+  KabiParticipant,
+  getRiderChatParticipantId,
+} from '../services/kabiChatService';
 
 interface CodCompanionAppProps {
   onBackToMainApp?: () => void;
@@ -126,6 +134,9 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
   const [resolvedPreviewHub, setResolvedPreviewHub] = useState<string | null>(null);
   const [isResolvingHub, setIsResolvingHub] = useState(false);
   const [recentlySubmittedRiderId, setRecentlySubmittedRiderId] = useState<string | null>(null);
+  const [isKabiSmsOpen, setIsKabiSmsOpen] = useState(false);
+  const [kabiSmsInitialChatId, setKabiSmsInitialChatId] = useState<string | null>(null);
+  const [kabiSmsActiveChatId, setKabiSmsActiveChatId] = useState<string | null>(null);
 
   // Sync initialPhone prop if updated externally
   useEffect(() => {
@@ -1905,6 +1916,56 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
     handleDateChange(`${y}-${m}-${d}`);
   };
 
+  // KabiTech Solution SMS — Rider/Staff Identity, Same-Hub Directory & Always-On Notifications
+  const kabiRiderMe = useMemo<KabiParticipant | null>(() => {
+    if (!authUser || !currentHubId) return null;
+    const isStaffRole = authUser.role && authUser.role !== 'rider';
+    return {
+      id: getRiderChatParticipantId(authUser.phone, authUser.id),
+      name: (authUser.name || 'राइडर').trim(),
+      phone: normalizePhoneNumber(authUser.phone || ''),
+      role: isStaffRole ? 'staff' : 'rider',
+    };
+  }, [authUser, currentHubId]);
+
+  const kabiHubContacts = useMemo<KabiParticipant[]>(() => {
+    const list: KabiParticipant[] = [
+      {
+        id: ADMIN_PARTICIPANT_ID,
+        name: (sheetData?.hubName || 'हब एडमिन').trim(),
+        phone: '',
+        role: 'admin',
+      },
+    ];
+    const seen = new Set<string>([ADMIN_PARTICIPANT_ID]);
+    for (const r of hubRiders || []) {
+      if (!r || r.isDeleted) continue;
+      const pid = getRiderChatParticipantId(r.phone, r.id);
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      list.push({
+        id: pid,
+        name: (r.name || 'राइडर').trim(),
+        phone: normalizePhoneNumber(r.phone || ''),
+        role: 'rider',
+        riderDocId: r.id,
+      });
+    }
+    return list;
+  }, [hubRiders, sheetData?.hubName]);
+
+  const {
+    hubChats: kabiHubChats,
+    totalUnreadCount: kabiTotalUnread,
+    incomingBanner: kabiIncomingBanner,
+    dismissIncomingBanner: dismissKabiIncomingBanner,
+  } = useKabiChatNotifications({
+    hubId: authUser && currentHubId ? currentHubId : '',
+    me: kabiRiderMe,
+    isKabiAppOpen: isKabiSmsOpen,
+    activeChatId: kabiSmsActiveChatId,
+  });
+
   // =========================================================================
   // VIEW 0.5: UNRESOLVED / INVALID HUB ERROR (Strict Hub Isolation)
   // =========================================================================
@@ -2500,6 +2561,36 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
         </div>
       )}
 
+      {/* Full-Screen Standalone KabiTech Solution SMS Sub-App */}
+      {isKabiSmsOpen && authUser && currentHubId && kabiRiderMe && (
+        <KabiTechSmsApp
+          hubId={currentHubId}
+          hubName={sheetData?.hubName || 'कूरियर हब'}
+          me={kabiRiderMe}
+          isHubAdmin={false}
+          hubContacts={kabiHubContacts}
+          hubChats={kabiHubChats}
+          initialChatId={kabiSmsInitialChatId}
+          onActiveChatChange={setKabiSmsActiveChatId}
+          onExit={() => {
+            setIsKabiSmsOpen(false);
+            setKabiSmsInitialChatId(null);
+            setKabiSmsActiveChatId(null);
+          }}
+        />
+      )}
+
+      {/* Real-time Incoming KabiTech Solution SMS Notification Banner */}
+      <KabiSmsIncomingBanner
+        banner={kabiIncomingBanner}
+        onOpenChat={(chatId) => {
+          dismissKabiIncomingBanner();
+          setKabiSmsInitialChatId(chatId);
+          setIsKabiSmsOpen(true);
+        }}
+        onDismiss={dismissKabiIncomingBanner}
+      />
+
       {/* Live Cloud OTA Update Notification Banner */}
       {isLiveUpdateAvailable && (
         <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white px-4 py-2.5 shadow-md flex items-center justify-between gap-3 text-xs sm:text-sm animate-in slide-in-from-top duration-300 z-50 sticky top-0">
@@ -2528,22 +2619,22 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       )}
 
       {/* 1. STICKY TOP APP BAR (Crisp White with Indigo Header Accent) */}
-      <header className="sticky top-0 z-40 bg-white/95 border-b border-slate-200 backdrop-blur-md px-3 sm:px-6 py-3 shadow-sm">
+      <header className="sticky top-0 z-40 bg-white/95 border-b border-slate-200 backdrop-blur-md px-2.5 sm:px-6 py-2.5 sm:py-3 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           {/* Brand & Active User Info */}
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-slate-950 border border-sky-500/40 p-0.5 flex items-center justify-center shrink-0 shadow-sm">
-              <img src="/rider-logo.svg" alt="Rider App Logo" className="w-8 h-8 rounded-lg object-contain" />
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-950 border border-sky-500/40 p-0.5 flex items-center justify-center shrink-0 shadow-sm">
+              <img src="/rider-logo.svg" alt="Rider App Logo" className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg object-contain" />
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <h1 className="text-xs sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-1.5 flex-wrap leading-tight">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap">
+                <h1 className="text-xs sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-1 sm:gap-1.5 flex-wrap leading-tight">
                   <span className="whitespace-nowrap">COD Entry</span>
-                  <HisabKitabLabel variant="badge" className="text-[11px] sm:text-xs" />
+                  <HisabKitabLabel variant="badge" className="text-[10px] sm:text-xs" />
                 </h1>
                 {/* Role Badge */}
                 <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
+                  className={`text-[10px] font-bold px-1.5 sm:px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
                     authUser.role === 'rider'
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : authUser.role === 'team_leader'
@@ -2560,11 +2651,11 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 </span>
               </div>
               <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5 flex-wrap">
-                <span className="font-semibold text-slate-800">{authUser.name}</span>
-                {authUser.phone && <span>• {authUser.phone}</span>}
-                <span className="text-[10px] bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded-full font-mono font-bold border border-emerald-200 flex items-center gap-1">
-                  <Building2 className="w-3 h-3 text-emerald-600" />
-                  <span>हब: {currentHubId.substring(0, 10)}{currentHubId.length > 10 ? '…' : ''}</span>
+                <span className="font-semibold text-slate-800 truncate">{authUser.name}</span>
+                {authUser.phone && <span className="hidden xs:inline sm:inline">• {authUser.phone}</span>}
+                <span className="text-[10px] bg-emerald-50 text-emerald-800 px-1.5 sm:px-2 py-0.5 rounded-full font-mono font-bold border border-emerald-200 flex items-center gap-1">
+                  <Building2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                  <span>हब: {currentHubId.substring(0, 8)}{currentHubId.length > 8 ? '…' : ''}</span>
                   <span className="text-emerald-500">•</span>
                   <span>{hubRiders.length} राइडर्स</span>
                 </span>
@@ -2572,8 +2663,21 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             </div>
           </div>
 
-          {/* Right Controls: Real-time Indicator & Logout */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Right Controls: KabiTech SMS Launcher, Real-time Indicator & Logout */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* 3D KabiTech Solution SMS Standalone Launcher with Unread Badge */}
+            {kabiRiderMe && (
+              <KabiSmsLauncherButton
+                unreadCount={kabiTotalUnread}
+                variant="header-light"
+                onClick={() => {
+                  dismissKabiIncomingBanner();
+                  setKabiSmsInitialChatId(null);
+                  setIsKabiSmsOpen(true);
+                }}
+              />
+            )}
+
             {/* Live Synced Indicator */}
             <div
               className={`hidden sm:flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border ${
@@ -2601,7 +2705,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               type="button"
               onClick={handleManualCloudSync}
               disabled={isSyncingLiveCloud}
-              className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs active:scale-95 ${
+              className={`px-2 sm:px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer shadow-2xs active:scale-95 ${
                 isLiveUpdateAvailable
                   ? 'bg-amber-500 hover:bg-amber-600 border-amber-600 text-white animate-bounce'
                   : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-800'
@@ -2621,11 +2725,12 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
                 type="button"
                 id="header-back-to-admin-btn"
                 onClick={onBackToMainApp}
-                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-700 shadow-sm active:scale-95"
+                className="px-2 sm:px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1 transition cursor-pointer border border-slate-700 shadow-sm active:scale-95"
                 title="वापस एडमिन डैशबोर्ड (Back to Admin)"
               >
-                <ChevronLeft className="w-3.5 h-3.5 text-emerald-400" />
-                <span>← वापस एडमिन डैशबोर्ड</span>
+                <ChevronLeft className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="sm:hidden">एडमिन</span>
+                <span className="hidden sm:inline">← वापस एडमिन डैशबोर्ड</span>
               </button>
             )}
 
@@ -2633,7 +2738,7 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
             <button
               type="button"
               onClick={handleLogout}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+              className="px-2 sm:px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
               title="लॉगआउट"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -2646,25 +2751,25 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
       {/* Main Body */}
       <main className="max-w-6xl mx-auto w-full px-3 sm:px-6 pt-4 space-y-4">
 
-        {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Hisab Kitab Statement */}
+        {/* RIDER SPECIFIC PORTAL SWITCHER: Daily COD & Delivery vs My Hisab Kitab Statement + KabiTech SMS */}
         {isRider && (
-          <div className="bg-white border border-slate-200 rounded-2xl p-1.5 flex items-center gap-1.5 sm:gap-2 shadow-xs">
+          <div className="bg-white border border-slate-200 rounded-2xl p-1.5 grid grid-cols-2 sm:grid-cols-3 gap-1.5 sm:gap-2 shadow-xs">
             <button
               type="button"
               onClick={() => setRiderActiveTab('cod_entry')}
-              className={`flex-1 py-2.5 px-2 sm:px-3 rounded-xl text-[11px] sm:text-sm font-bold flex items-center justify-center gap-1.5 sm:gap-2 transition cursor-pointer ${
+              className={`min-w-0 py-2.5 px-2 sm:px-3 rounded-xl text-[11px] sm:text-sm font-bold flex items-center justify-center gap-1.5 sm:gap-2 transition cursor-pointer ${
                 riderActiveTab === 'cod_entry'
                   ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
               }`}
             >
               <Bike className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-              <span className="leading-tight">📦 दैनिक डिलीवरी व COD</span>
+              <span className="leading-tight truncate">📦 दैनिक डिलीवरी व COD</span>
             </button>
             <button
               type="button"
               onClick={() => setRiderActiveTab('hisab_kitab')}
-              className={`flex-1 py-2.5 px-2 sm:px-3 rounded-xl text-[11px] sm:text-sm font-bold flex items-center justify-center gap-1 sm:gap-2 transition cursor-pointer ${
+              className={`min-w-0 py-2.5 px-2 sm:px-3 rounded-xl text-[11px] sm:text-sm font-bold flex items-center justify-center gap-1 sm:gap-2 transition cursor-pointer ${
                 riderActiveTab === 'hisab_kitab'
                   ? 'bg-slate-900 text-white shadow-sm ring-1 ring-cyan-400/50'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
@@ -2674,6 +2779,18 @@ export function CodCompanionApp({ onBackToMainApp, initialPhone }: CodCompanionA
               <span className="whitespace-nowrap">मेरा</span>
               <HisabKitabLabel variant={riderActiveTab === 'hisab_kitab' ? 'inline' : 'badge'} className="text-[11px] sm:text-sm" />
             </button>
+            {kabiRiderMe && (
+              <KabiSmsLauncherButton
+                unreadCount={kabiTotalUnread}
+                variant="rider-tab"
+                className="col-span-2 sm:col-span-1"
+                onClick={() => {
+                  dismissKabiIncomingBanner();
+                  setKabiSmsInitialChatId(null);
+                  setIsKabiSmsOpen(true);
+                }}
+              />
+            )}
           </div>
         )}
 
